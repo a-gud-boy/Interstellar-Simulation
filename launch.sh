@@ -13,14 +13,15 @@ usage() {
   cat <<'EOF'
 Usage: ./launch.sh [OPTIONS] [-- EXTRA_BROWSER_ARGS...]
 
-Global launcher for the Interstellar Spacetime Simulators (Gargantua Black Hole
-and Morris-Thorne Traversable Wormhole) on NVIDIA GPU with live WebGL2/WebGPU
-switching and cross-simulation navigation.
+Global launcher for the Interstellar Spacetime Simulators (Gargantua Black Hole,
+Morris-Thorne Traversable Wormhole, and Binary Black Hole Inspiral) on NVIDIA
+GPU with live WebGL2/WebGPU switching and cross-simulation navigation.
 
 Simulation Options:
   --blackhole           Open Gargantua Black Hole Simulator (default)
   --wormhole            Open Morris-Thorne Wormhole Simulator
-  --sim <name>          Select simulation: blackhole | wormhole
+  --binary, --binary-bh Open Binary Black Hole Inspiral & GW Lensing Simulator
+  --sim <name>          Select simulation: blackhole | wormhole | binary
 
 Backend Options:
   --webgpu, -w          Start directly in WebGPU backend (?backend=webgpu)
@@ -42,8 +43,11 @@ set_sim_target() {
     wormhole|wormhole-sim|wh)
       SIM_TARGET="wormhole"
       ;;
+    binary|binary-bh|binary-bh-sim|bbh)
+      SIM_TARGET="binary"
+      ;;
     *)
-      echo "Error: unknown simulation '${1}'. Expected 'blackhole' or 'wormhole'." >&2
+      echo "Error: unknown simulation '${1}'. Expected 'blackhole', 'wormhole', or 'binary'." >&2
       exit 1
       ;;
   esac
@@ -59,9 +63,13 @@ while [[ $# -gt 0 ]]; do
       SIM_TARGET="wormhole"
       shift
       ;;
+    --binary|--binary-bh)
+      SIM_TARGET="binary"
+      shift
+      ;;
     --sim)
       if [[ $# -lt 2 ]]; then
-        echo "Error: --sim requires an argument ('blackhole' or 'wormhole')." >&2
+        echo "Error: --sim requires an argument ('blackhole', 'wormhole', or 'binary')." >&2
         exit 1
       fi
       set_sim_target "$2"
@@ -106,6 +114,9 @@ done
 if [[ "${SIM_TARGET}" == "wormhole" ]]; then
   SIM_DIR="wormhole-sim"
   SIM_LABEL="Wormhole Sim"
+elif [[ "${SIM_TARGET}" == "binary" ]]; then
+  SIM_DIR="binary-bh-sim"
+  SIM_LABEL="Binary BH Sim"
 else
   SIM_DIR="blackhole-sim"
   SIM_LABEL="Gargantua Black Hole Sim"

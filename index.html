@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="dark" />
   <meta http-equiv="refresh" content="0; url=./blackhole-sim/" />
-  <title>Interstellar Spacetime Simulators — Gargantua &amp; Morris–Thorne Wormhole</title>
+  <title>Interstellar Spacetime Simulators — Gargantua, Wormhole &amp; Binary BH</title>
   <link
     rel="icon"
     type="image/svg+xml"
@@ -14,8 +14,17 @@
   <script>
     (function () {
       try {
-        var target = './blackhole-sim/' + (window.location.search || '');
-        window.location.replace(target);
+        var params = new URLSearchParams(window.location.search || '');
+        var sim = (params.get('sim') || '').trim().toLowerCase();
+        var dir = './blackhole-sim/';
+        if (sim === 'wormhole' || sim === 'wormhole-sim' || sim === 'wh') {
+          dir = './wormhole-sim/';
+        } else if (sim === 'binary' || sim === 'binary-bh' || sim === 'binary-bh-sim' || sim === 'bbh') {
+          dir = './binary-bh-sim/';
+        }
+        params.delete('sim');
+        var qs = params.toString();
+        window.location.replace(dir + (qs ? '?' + qs : ''));
       } catch (e) {
         // Fallback links below remain available
       }
@@ -29,6 +38,7 @@
       --border: rgba(255, 255, 255, 0.12);
       --accent: #f0b35a;
       --accent-teal: #5eead4;
+      --accent-violet: #a78bfa;
       --text: #eef2f7;
       --muted: #94a3b8;
     }
@@ -89,6 +99,11 @@
       border-color: var(--accent-teal);
       background: rgba(94, 234, 212, 0.08);
     }
+    a.card.binary:hover,
+    a.card.binary:focus-visible {
+      border-color: var(--accent-violet);
+      background: rgba(167, 139, 250, 0.08);
+    }
     .card-title {
       display: block;
       font-weight: 600;
@@ -98,6 +113,9 @@
     }
     .card.wormhole .card-title {
       color: var(--accent-teal);
+    }
+    .card.binary .card-title {
+      color: var(--accent-violet);
     }
     .card-desc {
       display: block;
@@ -119,6 +137,10 @@
       <a class="card wormhole" href="./wormhole-sim/">
         <span class="card-title">Morris–Thorne Traversable Wormhole</span>
         <span class="card-desc">James–Thorne &amp; Ellis spacetime throat linking Universe A (4K Milky Way) and Universe B (Exotic Golden–Teal Nebula).</span>
+      </a>
+      <a class="card binary" href="./binary-bh-sim/">
+        <span class="card-title">Binary Black Hole Inspiral &amp; GW Lensing</span>
+        <span class="card-desc">Two-body Brill–Lindquist + 2.5PN inspiral, retarded gravitational wave shear, fractal eyebrow shadows, and tidal gas bridges.</span>
       </a>
     </nav>
   </main>

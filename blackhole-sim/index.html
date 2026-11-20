@@ -94,19 +94,34 @@
 
       <!-- Top-Right Simulation Switcher & Controls Drawer Toggle -->
       <div class="hud-top-right">
-        <nav aria-label="Simulation switcher">
+        <nav class="sim-switcher glass-surface" aria-label="Simulation switcher">
+          <a
+            id="sim-switch-blackhole"
+            class="sim-switch-item is-current"
+            href="./"
+            data-sim-href="./"
+            aria-current="page"
+          >
+            <span class="current-dot" aria-hidden="true"></span>
+            <span>Black Hole</span>
+          </a>
           <a
             id="sim-switch-link"
-            class="pill-button glass-surface sim-switch-pill"
+            class="sim-switch-item"
             href="../wormhole-sim/"
+            data-sim-href="../wormhole-sim/"
             aria-label="Switch to Traversable Wormhole Simulator"
           >
-            <svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-              <circle cx="10" cy="10" r="7" />
-              <circle cx="10" cy="10" r="3" />
-              <path d="M3 10c2.2-2.2 4.5-2.2 7 0s4.8 2.2 7 0" stroke-linecap="round" opacity="0.85" />
-            </svg>
-            <span>Wormhole Sim</span>
+            <span>Wormhole</span>
+          </a>
+          <a
+            id="sim-switch-binary"
+            class="sim-switch-item"
+            href="../binary-bh-sim/"
+            data-sim-href="../binary-bh-sim/"
+            aria-label="Switch to Binary Black Hole Simulator"
+          >
+            <span>Binary BH</span>
           </a>
         </nav>
         <button

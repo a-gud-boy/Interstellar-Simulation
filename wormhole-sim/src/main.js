@@ -75,12 +75,18 @@ async function bootstrap() {
   }
 
   const canvasFallbackText = canvas.textContent;
-  const simSwitchLink = document.getElementById('sim-switch-link');
+  const switcherLinks = Array.from(
+    document.querySelectorAll('nav[aria-label="Simulation switcher"] a[data-sim-href]')
+  );
 
   function syncSimSwitchLink(backend) {
-    if (!simSwitchLink) return;
     const normalized = normalizeBackend(backend) || 'webgl2';
-    simSwitchLink.setAttribute('href', `../blackhole-sim/?backend=${normalized}`);
+    for (const link of switcherLinks) {
+      const baseHref = link.getAttribute('data-sim-href');
+      if (baseHref) {
+        link.setAttribute('href', `${baseHref}?backend=${normalized}`);
+      }
+    }
   }
 
   const state = createInitialState();
