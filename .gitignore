@@ -1,0 +1,6 @@
+.fuse_hidden*
+.DS_Store
+Thumbs.db
+node_modules/
+*/tests/screenshots/
+*.log
