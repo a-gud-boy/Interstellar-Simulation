@@ -602,8 +602,8 @@ export class WebGLRenderer {
     // Wormhole metric, throat matter, dual-universe skies & quality (exact 21-uniform contract)
     set1i('uMetricType', state.metricType | 0);
     set1f('uThroatRadius', state.throatRadius ?? 2.0);
-    set1f('uThroatLength', state.throatLength ?? 0.6);
-    set1f('uLensingWidth', state.lensingWidth ?? 1.35);
+    set1f('uThroatLength', state.throatLength ?? 0.25);
+    set1f('uLensingWidth', state.lensingWidth ?? 0.32);
     set1f('uThroatGlow', state.throatGlow ?? 0.22);
     set1f('uDustDensity', state.dustDensity ?? 0.35);
     set1f('uSwirlSpeed', state.swirlSpeed ?? 0.85);

@@ -9,8 +9,8 @@ export const DEFAULT_STATE = Object.freeze({
   // Wormhole metric & throat geometry
   metricType: 0,
   throatRadius: 2.0,
-  throatLength: 0.6,
-  lensingWidth: 1.35,
+  throatLength: 0.25,
+  lensingWidth: 0.32,
 
   // Throat caustic & swirling volumetric dust
   throatGlow: 0.22,
@@ -45,8 +45,8 @@ export const PRESETS = Object.freeze([
     params: Object.freeze({
       metricType: 0,
       throatRadius: 2.0,
-      throatLength: 0.6,
-      lensingWidth: 1.35,
+      throatLength: 0.25,
+      lensingWidth: 0.32,
       throatGlow: 0.22,
       dustDensity: 0.35,
       swirlSpeed: 0.85,
@@ -114,7 +114,7 @@ export const PRESETS = Object.freeze([
       metricType: 0,
       throatRadius: 1.8,
       throatLength: 4.5,
-      lensingWidth: 0.9,
+      lensingWidth: 0.65,
       throatGlow: 0.55,
       dustDensity: 0.75,
       swirlSpeed: 1.1,
@@ -148,7 +148,7 @@ export const PRESETS = Object.freeze([
       metricType: 0,
       throatRadius: 2.2,
       throatLength: 1.2,
-      lensingWidth: 1.1,
+      lensingWidth: 0.55,
       throatGlow: 0.45,
       dustDensity: 0.55,
       swirlSpeed: 1.0,
@@ -181,8 +181,8 @@ export const PRESETS = Object.freeze([
     params: Object.freeze({
       metricType: 0,
       throatRadius: 2.0,
-      throatLength: 0.6,
-      lensingWidth: 1.35,
+      throatLength: 0.25,
+      lensingWidth: 0.32,
       throatGlow: 0.22,
       dustDensity: 0.35,
       swirlSpeed: 0.85,

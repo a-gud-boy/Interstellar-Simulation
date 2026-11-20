@@ -256,7 +256,7 @@ vec3 evalUniverseALandmarks(vec3 dir, float dirFw, inout float skyOcc) {
 
   float distUnits = 31.0; // Angular radius ~1/31 = 0.032 rad (~3.7 deg diameter)
   vec3 C = saturnDir * distUnits;
-  float aaUnit = max(dirFw * distUnits, 0.014);
+  float aaUnit = clamp(min(dirFw, 0.012) * distUnits, 0.014, 0.25);
 
   // 1. Ray-sphere test for Saturn globe
   float tCa = dot(C, dir);
@@ -355,20 +355,14 @@ vec3 evalUniverseALandmarks(vec3 dir, float dirFw, inout float skyOcc) {
     saturnOcc = clamp(globeAlpha + ringAlpha * (1.0 - globeAlpha), 0.0, 1.0);
   }
 
-  // 3. Distant Sun + warm solar glare & 6-point diffraction flare
+  // 3. Distant Sun photosphere disc + tight physical solar corona
   float sunCos = dot(dir, sunDir);
-  float sunAng = acos(clamp(sunCos, -1.0, 1.0));
-  float sunDisc = 1.0 - smoothstep(0.0085, 0.0115 + dirFw, sunAng);
-  float corona  = exp(-sunAng * 32.0) * 0.85 + exp(-sunAng * 8.0) * 0.055;
-
-  // Tangent basis around sunDir for crisp 6-point optical diffraction spikes
-  vec3 sunU = normalize(cross(vec3(0.0, 1.0, 0.0), sunDir));
-  vec3 sunV = cross(sunDir, sunU);
-  vec2 sunPlane = vec2(dot(dir, sunU), dot(dir, sunV));
-  float spAng = atan(sunPlane.y, sunPlane.x);
-  float spike6 = pow(abs(cos(spAng * 3.0)), 26.0) * exp(-sunAng * 18.0) * 0.65;
-
-  vec3 sunCol = vec3(1.00, 0.94, 0.82) * (sunDisc * 9.5 + corona + spike6);
+  float sunAng = atan(length(cross(dir, sunDir)), sunCos);
+  float sunFw = min(dirFw, 0.009);
+  float sunEnergy = min(1.0, 0.012 / max(dirFw * 1.5, 1e-4));
+  float sunDisc = (1.0 - smoothstep(0.0085, 0.0115 + sunFw, sunAng)) * sunEnergy;
+  float corona  = (exp(-sunAng * 56.0) * 0.72 + exp(-sunAng * 18.0) * 0.032) * (0.20 + 0.80 * sunEnergy);
+  vec3 sunCol = vec3(1.00, 0.95, 0.84) * (sunDisc * 10.5 + corona);
 
   skyOcc = 1.0 - saturnOcc;
   return saturnTotal + sunCol;
@@ -388,28 +382,31 @@ vec3 evalUniverseBLandmark(vec3 dir, float dirFw) {
   float angDist = length(rel);
   if (angDist > 0.30) return vec3(0.0);
 
+  float bFw = min(dirFw, 0.008);
+  float bEnergy = min(1.0, 0.012 / max(dirFw * 1.5, 1e-4));
+
   // Tilted luminous golden-teal accretion disk around primary beacon
   vec2 diskCoord = vec2(rel.x * 0.92 + rel.y * 0.39, (-rel.x * 0.39 + rel.y * 0.92) * 3.1);
   float rDisk = length(diskCoord);
-  float diskRing = exp(-pow((rDisk - 0.022) / max(0.0085, dirFw * 1.4), 2.0))
-                 + 0.45 * exp(-pow((rDisk - 0.036) / max(0.011, dirFw * 1.6), 2.0));
+  float diskRing = exp(-pow((rDisk - 0.022) / max(0.0085, bFw * 1.4), 2.0))
+                 + 0.45 * exp(-pow((rDisk - 0.036) / max(0.011, bFw * 1.6), 2.0));
   vec3 diskTint = mix(vec3(1.00, 0.72, 0.24), vec3(0.18, 0.88, 0.96), smoothstep(0.014, 0.042, rDisk));
 
   // Primary radiant champagne-gold star core
-  float primCore = exp(-(angDist * angDist) / max(0.000045 + dirFw * dirFw, 1e-6)) * 5.2;
+  float primCore = exp(-(angDist * angDist) / max(0.000045 + bFw * bFw, 1e-6)) * 5.2;
   float primHalo = exp(-angDist * 26.0) * 0.55;
 
   // Companion hot cyan-teal star orbiting nearby
   vec2 compOffset = vec2(0.032, 0.014);
   float compDist = length(rel - compOffset);
-  float compCore = exp(-(compDist * compDist) / max(0.000028 + dirFw * dirFw, 1e-6)) * 3.6;
+  float compCore = exp(-(compDist * compDist) / max(0.000028 + bFw * bFw, 1e-6)) * 3.6;
   float compHalo = exp(-compDist * 34.0) * 0.38;
 
   // Delicate ionized plasma bridge & anamorphic glint
   vec3 col = diskTint * (diskRing * 1.45)
            + vec3(1.00, 0.86, 0.54) * (primCore + primHalo)
            + vec3(0.32, 0.94, 1.00) * (compCore + compHalo);
-  return col * front;
+  return col * (front * bEnergy);
 }
 
 vec2 evalEquirectUv(vec3 dir, out vec2 uvShift) {
@@ -459,7 +456,7 @@ void main() {
     qualScale = 0.68;
   }
 
-  float escapeL = max(abs(uCamL) * 1.55 + 12.0, a + 2.8 * max(M, 0.35) + 22.0);
+  float escapeL = max(abs(uCamL) * 3.0 + 40.0, a + 4.0 * max(M, 0.35) + 80.0);
   float matterBound = a + 2.8 * max(M, 0.35);
   bool hasMatter = (uThroatGlow > 0.001 || uDustDensity > 0.001);
 
@@ -474,13 +471,13 @@ void main() {
 
     GeodesicDeriv k1 = evalGeodesicRHS(l, pl, b, b2, uMetricType, rho, a, M);
     float r = k1.r;
+    float absL = abs(l);
 
-    if (abs(l) > escapeL && (l * pl) > 0.0) {
+    if (absL >= escapeL - 1e-3 && (l * pl) > 0.0) {
       escaped = true;
       break;
     }
 
-    float absL = abs(l);
     float distEdge = absL - a;
     float curvScale = (uMetricType == 0) ? max(M, 0.35) : rho;
     float h;
@@ -499,7 +496,13 @@ void main() {
       if ((l * pl) > 0.0 && r > 2.5 * rho && distEdge > 2.5 * curvScale) {
         h = max(h, 0.30 * r * qualScale);
       }
-      h = clamp(h, 0.03 * qualScale, 6.0);
+      h = clamp(h, 0.03 * qualScale, 18.0);
+      if ((l * pl) > 0.0 && abs(pl) > 1e-4) {
+        float remL = escapeL - absL;
+        if (remL > 0.0 && abs(pl) * h > remL) {
+          h = remL / abs(pl);
+        }
+      }
     }
 
     if (step == 0 && hasMatter && absL < matterBound) {
@@ -558,16 +561,25 @@ void main() {
     if (transmittance < 0.004) break;
   }
 
+  if (!escaped && abs(l) >= escapeL - 1e-2 && (l * pl) > 0.0) {
+    escaped = true;
+  }
+
   // Determine final universe side (if step cap hit inside flat throat, use propagation sign)
   float finalSideSign = (abs(l) <= a && abs(pl) > 1e-4)
     ? (pl >= 0.0 ? 1.0 : -1.0)
     : (l >= 0.0 ? 1.0 : -1.0);
   bool onSideA = (finalSideSign > 0.0);
 
-  // Orientation-preserving sky direction:
-  // nPsi = cos(psi)*n0 + sin(psi)*tHat; radial component flips via sign(l) across throat while
+  // Orientation-preserving sky direction with asymptotic flat-space escape angle:
+  // nPsi = cos(psiFinal)*n0 + sin(psiFinal)*tHat; radial component flips via sign(l) across throat while
   // tangential orientation preserves 3D handedness so Universe B views & camera controls stay natural.
-  vec3 nPsi = cos(psi) * n0 + sin(psi) * tHat;
+  float psiFinal = psi;
+  if ((l * pl) > 0.0) {
+    float rEnd = evalMetricR(l, uMetricType, rho, a, M);
+    psiFinal += atan(b / max(rEnd, 1e-5), abs(pl));
+  }
+  vec3 nPsi = cos(psiFinal) * n0 + sin(psiFinal) * tHat;
   vec3 dSky = onSideA ? nPsi : (nPsi - 2.0 * dot(nPsi, n0) * n0);
   dSky = normalize(dSky);
 
@@ -595,12 +607,12 @@ void main() {
   float dirFwB = length(fwidth(dirB));
 
   if (edgeMask > 0.01) {
-    dUVdxA = vec2(1.0 / 4096.0, 0.0);
-    dUVdyA = vec2(0.0, 1.0 / 2048.0);
-    dUVdxB = vec2(1.0 / 2048.0, 0.0);
-    dUVdyB = vec2(0.0, 1.0 / 1024.0);
-    dirFwA = 0.0012;
-    dirFwB = 0.0012;
+    dUVdxA = vec2(0.004, 0.0);
+    dUVdyA = vec2(0.0, 0.004);
+    dUVdxB = vec2(0.004, 0.0);
+    dUVdyB = vec2(0.0, 0.004);
+    dirFwA = 0.025;
+    dirFwB = 0.025;
   } else {
     dUVdxA = clamp(dUVdxA, vec2(-0.045), vec2(0.045));
     dUVdyA = clamp(dUVdyA, vec2(-0.045), vec2(0.045));
@@ -643,13 +655,6 @@ void main() {
       skyLinB += evalUniverseBLandmark(dirB, dirFwB);
     }
     skyColor = skyLinB;
-  }
-
-  // Graceful subtle photon-ring glow when step limit is hit near critical b ~ rho (zero black ring)
-  if (!escaped && transmittance > 0.004) {
-    float critProximity = exp(-pow((b - rho) / max(0.08 * rho, 0.04), 2.0));
-    vec3 ringTint = onSideA ? vec3(0.74, 0.88, 1.00) : vec3(1.00, 0.78, 0.42);
-    skyColor += ringTint * (0.24 + 0.35 * critProximity);
   }
 
   radiance += transmittance * skyColor;

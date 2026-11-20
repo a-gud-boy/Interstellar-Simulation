@@ -529,6 +529,21 @@ async function main() {
     shots.universe_b = await capturePreset('universe_b', '08_universe_b_webgpu.png', 20);
     shots.einstein = await capturePreset('einstein', '09_einstein_webgpu.png', 20);
 
+    // Zoomed-out l=30.04 M verification shot on WebGPU (matches user screenshot angle)
+    await evalJS(`
+      window.__WORMHOLE__.selectPreset('interstellar', true);
+      window.__WORMHOLE__.setState({
+        paused: true,
+        autoOrbit: false,
+        camera: { l: 30.04, elevationDeg: 6.0, azimuthDeg: 0.0, lookYawDeg: 0.0, lookPitchDeg: 0.0, rollDeg: -4.0, fovDeg: 48.0 }
+      });
+    `);
+    await waitFrames(6);
+    await waitForSamples(20, '__WORMHOLE__', 4500);
+    await waitFrames(4);
+    await captureShot('14_zoomed_out_30M_webgpu.png');
+    console.log('Captured 14_zoomed_out_30M_webgpu.png');
+
     // =========================================================================
     // 4. Test Traverse (T) flies across l=0 from Universe A (l>0) -> Universe B (l<0)
     // =========================================================================
@@ -605,6 +620,21 @@ async function main() {
     })()`, true);
     const s11 = await captureShot('11_wormhole_webgl2_after_switch.png');
     const statsWebGLAfterSwitch = await analyzePortalPng(s11.base64);
+
+    // Zoomed-out l=30.04 M verification shot on WebGL2 (matches user screenshot angle)
+    await evalJS(`
+      window.__WORMHOLE__.selectPreset('interstellar', true);
+      window.__WORMHOLE__.setState({
+        paused: true,
+        autoOrbit: false,
+        camera: { l: 30.04, elevationDeg: 6.0, azimuthDeg: 0.0, lookYawDeg: 0.0, lookPitchDeg: 0.0, rollDeg: -4.0, fovDeg: 48.0 }
+      });
+    `);
+    await waitFrames(6);
+    await waitForSamples(20, '__WORMHOLE__', 4500);
+    await waitFrames(4);
+    await captureShot('15_zoomed_out_30M_webgl2.png');
+    console.log('Captured 15_zoomed_out_30M_webgl2.png');
 
     // =========================================================================
     // 6. E2E Cross-Sim Switcher: /blackhole-sim/?backend=webgpu <-> /wormhole-sim/?backend=webgpu

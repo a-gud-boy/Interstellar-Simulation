@@ -277,7 +277,7 @@ fn evalUniverseALandmarks(dir: vec3f, dirFw: f32) -> LandmarkResult {
 
   let distUnits : f32 = 31.0;
   let C = saturnDir * distUnits;
-  let aaUnit = max(dirFw * distUnits, 0.014);
+  let aaUnit = clamp(min(dirFw, 0.012) * distUnits, 0.014, 0.25);
 
   let tCa = dot(C, dir);
   var tGlobe : f32 = 1e6;
@@ -370,16 +370,12 @@ fn evalUniverseALandmarks(dir: vec3f, dirFw: f32) -> LandmarkResult {
   }
 
   let sunCos = dot(dir, sunDir);
-  let sunAng = acos(clamp(sunCos, -1.0, 1.0));
-  let sunDisc = 1.0 - smoothstep(0.0085, 0.0115 + dirFw, sunAng);
-  let corona  = exp(-sunAng * 32.0) * 0.85 + exp(-sunAng * 8.0) * 0.055;
-
-  let sunU = normalize(cross(vec3f(0.0, 1.0, 0.0), sunDir));
-  let sunV = cross(sunDir, sunU);
-  let sunPlane = vec2f(dot(dir, sunU), dot(dir, sunV));
-  let spAng = atan2(sunPlane.y, sunPlane.x);
-  let spike6 = pow(abs(cos(spAng * 3.0)), 26.0) * exp(-sunAng * 18.0) * 0.65;
-  let sunCol = vec3f(1.00, 0.94, 0.82) * (sunDisc * 9.5 + corona + spike6);
+  let sunAng = atan2(length(cross(dir, sunDir)), sunCos);
+  let sunFw = min(dirFw, 0.009);
+  let sunEnergy = min(1.0, 0.012 / max(dirFw * 1.5, 1e-4));
+  let sunDisc = (1.0 - smoothstep(0.0085, 0.0115 + sunFw, sunAng)) * sunEnergy;
+  let corona  = (exp(-sunAng * 56.0) * 0.72 + exp(-sunAng * 18.0) * 0.032) * (0.20 + 0.80 * sunEnergy);
+  let sunCol = vec3f(1.00, 0.95, 0.84) * (sunDisc * 10.5 + corona);
 
   var resOut: LandmarkResult;
   resOut.color = saturnTotal + sunCol;
@@ -404,25 +400,28 @@ fn evalUniverseBLandmark(dir: vec3f, dirFw: f32) -> vec3f {
     return vec3f(0.0);
   }
 
+  let bFw = min(dirFw, 0.008);
+  let bEnergy = min(1.0, 0.012 / max(dirFw * 1.5, 1e-4));
+
   let diskCoord = vec2f(rel.x * 0.92 + rel.y * 0.39, (-rel.x * 0.39 + rel.y * 0.92) * 3.1);
   let rDisk = length(diskCoord);
-  let d1 = (rDisk - 0.022) / max(0.0085, dirFw * 1.4);
-  let d2 = (rDisk - 0.036) / max(0.011, dirFw * 1.6);
+  let d1 = (rDisk - 0.022) / max(0.0085, bFw * 1.4);
+  let d2 = (rDisk - 0.036) / max(0.011, bFw * 1.6);
   let diskRing = exp(-(d1 * d1)) + 0.45 * exp(-(d2 * d2));
   let diskTint = mix(vec3f(1.00, 0.72, 0.24), vec3f(0.18, 0.88, 0.96), smoothstep(0.014, 0.042, rDisk));
 
-  let primCore = exp(-(angDist * angDist) / max(0.000045 + dirFw * dirFw, 1e-6)) * 5.2;
+  let primCore = exp(-(angDist * angDist) / max(0.000045 + bFw * bFw, 1e-6)) * 5.2;
   let primHalo = exp(-angDist * 26.0) * 0.55;
 
   let compOffset = vec2f(0.032, 0.014);
   let compDist = length(rel - compOffset);
-  let compCore = exp(-(compDist * compDist) / max(0.000028 + dirFw * dirFw, 1e-6)) * 3.6;
+  let compCore = exp(-(compDist * compDist) / max(0.000028 + bFw * bFw, 1e-6)) * 3.6;
   let compHalo = exp(-compDist * 34.0) * 0.38;
 
   let col = diskTint * (diskRing * 1.45)
           + vec3f(1.00, 0.86, 0.54) * (primCore + primHalo)
           + vec3f(0.32, 0.94, 1.00) * (compCore + compHalo);
-  return col * front;
+  return col * (front * bEnergy);
 }
 
 @fragment
@@ -486,7 +485,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
 
   let escapeL = max(
     u.rotBy_camR_escapeL_pad.z,
-    max(abs(camL) * 1.55 + 12.0, a + 2.8 * max(M, 0.35) + 22.0)
+    max(abs(camL) * 3.0 + 40.0, a + 4.0 * max(M, 0.35) + 80.0)
   );
   let matterBound = a + 2.8 * max(M, 0.35);
   let hasMatter = (u.matter_skyParams.x > 0.001 || u.matter_skyParams.y > 0.001);
@@ -502,13 +501,13 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
 
     let k1 = evalGeodesicRHS(l, pl, b, b2, metricType, rho, a, M);
     let r = k1.r;
+    let absL = abs(l);
 
-    if (abs(l) > escapeL && (l * pl) > 0.0) {
+    if (absL >= escapeL - 1e-3 && (l * pl) > 0.0) {
       escaped = true;
       break;
     }
 
-    let absL = abs(l);
     let distEdge = absL - a;
     let curvScale = select(rho, max(M, 0.35), metricType == 0);
     var h: f32;
@@ -527,7 +526,13 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
       if ((l * pl) > 0.0 && r > 2.5 * rho && distEdge > 2.5 * curvScale) {
         h = max(h, 0.30 * r * qualScale);
       }
-      h = clamp(h, 0.03 * qualScale, 6.0);
+      h = clamp(h, 0.03 * qualScale, 18.0);
+      if ((l * pl) > 0.0 && abs(pl) > 1e-4) {
+        let remL = escapeL - absL;
+        if (remL > 0.0 && abs(pl) * h > remL) {
+          h = remL / abs(pl);
+        }
+      }
     }
 
     if (step == 0 && hasMatter && absL < matterBound) {
@@ -585,6 +590,10 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
     }
   }
 
+  if (!escaped && abs(l) >= escapeL - 1e-2 && (l * pl) > 0.0) {
+    escaped = true;
+  }
+
   let usePropSign = abs(l) <= a && abs(pl) > 1e-4;
   let finalSideSign = select(
     select(-1.0, 1.0, l >= 0.0),
@@ -593,7 +602,12 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   );
   let onSideA = (finalSideSign > 0.0);
 
-  let nPsi = cos(psi) * n0 + sin(psi) * tHat;
+  var psiFinal = psi;
+  if ((l * pl) > 0.0) {
+    let rEnd = evalMetricR(l, metricType, rho, a, M);
+    psiFinal += atan2(b / max(rEnd, 1e-5), abs(pl));
+  }
+  let nPsi = cos(psiFinal) * n0 + sin(psiFinal) * tHat;
   let dSkyRaw = select(nPsi - 2.0 * dot(nPsi, n0) * n0, nPsi, onSideA);
   let dSky = normalize(dSkyRaw);
 
@@ -642,12 +656,12 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   var dirFwB = length(fwidth(dirB));
 
   if (edgeMask > 0.01) {
-    dUVdxA = vec2f(1.0 / 4096.0, 0.0);
-    dUVdyA = vec2f(0.0, 1.0 / 2048.0);
-    dUVdxB = vec2f(1.0 / 2048.0, 0.0);
-    dUVdyB = vec2f(0.0, 1.0 / 1024.0);
-    dirFwA = 0.0012;
-    dirFwB = 0.0012;
+    dUVdxA = vec2f(0.004, 0.0);
+    dUVdyA = vec2f(0.0, 0.004);
+    dUVdxB = vec2f(0.004, 0.0);
+    dUVdyB = vec2f(0.0, 0.004);
+    dirFwA = 0.025;
+    dirFwB = 0.025;
   } else {
     dUVdxA = clamp(dUVdxA, vec2f(-0.045), vec2f(0.045));
     dUVdyA = clamp(dUVdyA, vec2f(-0.045), vec2f(0.045));
@@ -691,13 +705,6 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
       skyLinB += evalUniverseBLandmark(dirB, dirFwB);
     }
     skyColor = skyLinB;
-  }
-
-  if (!escaped && transmittance > 0.004) {
-    let critW = (b - rho) / max(0.08 * rho, 0.04);
-    let critProximity = exp(-(critW * critW));
-    let ringTint = select(vec3f(1.00, 0.78, 0.42), vec3f(0.74, 0.88, 1.00), onSideA);
-    skyColor += ringTint * (0.24 + 0.35 * critProximity);
   }
 
   radiance += transmittance * skyColor;

@@ -90,10 +90,10 @@ export function computeWormholeTelemetry(state = {}, lVal = 0.0) {
   const throatRadius = Math.max(0.25, Number.isFinite(rawRho) ? rawRho : 2.0);
 
   const rawLen = Number(state?.throatLength);
-  const a = Math.max(0.0, Number.isFinite(rawLen) ? rawLen : 0.6);
+  const a = Math.max(0.0, Number.isFinite(rawLen) ? rawLen : 0.25);
 
   const rawWidth = Number(state?.lensingWidth);
-  const M = Math.max(0.05, Number.isFinite(rawWidth) ? rawWidth : 1.35);
+  const M = Math.max(0.05, Number.isFinite(rawWidth) ? rawWidth : 0.32);
 
   let rOfL;
   let drdl;

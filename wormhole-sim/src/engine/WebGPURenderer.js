@@ -914,11 +914,11 @@ export class WebGPURenderer {
     );
     const throatLen = Math.max(
       0.0,
-      Number.isFinite(Number(state.throatLength)) ? Number(state.throatLength) : 0.6
+      Number.isFinite(Number(state.throatLength)) ? Number(state.throatLength) : 0.25
     );
     const lensingW = Math.max(
       0.05,
-      Number.isFinite(Number(state.lensingWidth)) ? Number(state.lensingWidth) : 1.35
+      Number.isFinite(Number(state.lensingWidth)) ? Number(state.lensingWidth) : 0.32
     );
 
     const rotA = state.skyRotationA || [0.4, 0.2];
@@ -930,8 +930,7 @@ export class WebGPURenderer {
 
     const tanHalfFov = Math.tan(clamp(camData.fovY, 0.1, 2.8) * 0.5);
     const camR = evalWormholeR(camL, metricType, rho, throatLen, lensingW);
-    const matterReach = throatLen + 2.8 * Math.max(lensingW, 0.35);
-    const escapeL = Math.max(Math.abs(camL) * 1.45, matterReach + 14.0 * lensingW, 48.0);
+    const escapeL = Math.max(Math.abs(camL) * 3.0 + 40.0, throatLen + 4.0 * Math.max(lensingW, 0.35) + 80.0);
 
     // 1. resolution_time_frame
     f[0] = this.width;

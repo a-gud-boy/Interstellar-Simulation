@@ -319,6 +319,98 @@ console.log('\n=== 2. Null Hamiltonian Conservation, Critical b_c & Orientation 
     'Orientation-preserving sign(l)*n(psi): radial photon lands at +n0 on opposite side with continuous dSky',
     `dot(nPsi,n0)=${nPsiDotN0.toFixed(6)}, dot(dSky,dIn)=${dSkyDotInward.toFixed(6)}, offAxisPsi=${offRes.psi.toFixed(4)}rad`
   );
+
+  // Shader-matching adaptive RK4 with exact escapeL boundary crossing & asymptotic flat-space tail
+  function traceShaderAdaptive(camL, alphaDeg, metricType, rho, a, M, quality = 1) {
+    const profileFn = metricType === 1
+      ? (lv) => ellisProfile(lv, rho)
+      : (lv) => jamesThorneProfile(lv, rho, a, M);
+    const { r: r0 } = profileFn(camL);
+    const alpha = (alphaDeg * Math.PI) / 180.0;
+    let pl = Math.cos(alpha);
+    const sinA = Math.sin(alpha);
+    const b = r0 * sinA;
+    const maxSteps = quality <= 0 ? 140 : quality >= 2 ? 320 : 220;
+    const qualScale = quality <= 0 ? 1.25 : quality >= 2 ? 0.68 : 0.92;
+    const escapeL = Math.max(Math.abs(camL) * 3.0 + 40.0, a + 4.0 * Math.max(M, 0.35) + 80.0);
+    let l = camL;
+    let psi = 0.0;
+    for (let step = 0; step < maxSteps; step++) {
+      const k1 = geodesicRHS(l, pl, b, profileFn);
+      const { r } = profileFn(l);
+      const absL = Math.abs(l);
+      if (absL >= escapeL - 1e-3 && l * pl > 0.0) break;
+      const distEdge = absL - a;
+      const curvScale = metricType === 0 ? Math.max(M, 0.35) : rho;
+      let h;
+      if (metricType === 0 && absL <= a) {
+        const wallDist = pl > 0.0 ? a - l : l + a;
+        h = Math.max(0.08, Math.min(0.50 * rho * qualScale, wallDist + 0.05));
+        if (Math.abs(pl) < 0.08) h = Math.min(h, 0.42 * rho);
+      } else {
+        h = (0.14 * r + 0.08 * curvScale) * qualScale;
+        if (distEdge < 2.5 * curvScale) {
+          h = Math.min(h, (0.06 * rho + 0.09 * Math.max(distEdge, 0.0) + 0.04 * curvScale) * qualScale);
+        }
+        if (l * pl > 0.0 && r > 2.5 * rho && distEdge > 2.5 * curvScale) {
+          h = Math.max(h, 0.30 * r * qualScale);
+        }
+        h = Math.min(Math.max(h, 0.03 * qualScale), 18.0);
+        if (l * pl > 0.0 && Math.abs(pl) > 1e-4) {
+          const remL = escapeL - absL;
+          if (remL > 0.0 && Math.abs(pl) * h > remL) {
+            h = remL / Math.abs(pl);
+          }
+        }
+      }
+      const next = stepRK4(l, pl, psi, b, h, profileFn);
+      l = next.l;
+      pl = next.pl;
+      psi = next.psi;
+    }
+    const rEnd = profileFn(l).r;
+    const psiFinal = l * pl > 0.0 ? psi + Math.atan2(b / Math.max(rEnd, 1e-5), Math.abs(pl)) : psi;
+    return { l, pl, psiFinal, psiFinalDeg: (psiFinal * 180.0) / Math.PI };
+  }
+
+  let minFlatDot = 1.0;
+  for (const camLVal of [30.0, -30.0]) {
+    for (const ang of [20, 60, 120, 150, 170]) {
+      const tr = traceShaderAdaptive(camLVal, ang, 1, 1e-5, 0.0, 1.0, 1);
+      const rad = (ang * Math.PI) / 180.0;
+      const nPsiF = [Math.sin(tr.psiFinal), 0, Math.cos(tr.psiFinal)];
+      const dSkyF = tr.l >= 0 ? nPsiF : [nPsiF[0], 0, -nPsiF[2]];
+      const dOrigF = [Math.sin(rad), 0, Math.cos(rad)];
+      minFlatDot = Math.min(minFlatDot, dot3(dSkyF, dOrigF));
+    }
+  }
+  assert(
+    minFlatDot > 0.999999,
+    'Asymptotic escape tail recovers exact flat-space rays at camL=±30 across 20°..170° (dot > 0.999999)',
+    `minDot=${minFlatDot.toFixed(8)}`
+  );
+
+  let maxStepRingD2 = 0.0;
+  for (const [mt, rhoV, aV, mV] of [
+    [0, 2.0, 0.25, 0.32],
+    [0, 2.0, 0.60, 1.35],
+    [1, 2.0, 0.00, 1.00],
+  ]) {
+    const vals = [];
+    for (let th = 12.0; th <= 42.0; th += 0.05) {
+      // Camera looks at -n0: local ray angle theta from -n0 => alpha from +n0 is 180 - theta
+      vals.push(traceShaderAdaptive(30.04, 180.0 - th, mt, rhoV, aV, mV, 1).psiFinalDeg);
+    }
+    for (let i = 1; i < vals.length - 1; i++) {
+      const d2 = Math.abs((vals[i + 1] - vals[i]) - (vals[i] - vals[i - 1]));
+      if (d2 > maxStepRingD2) maxStepRingD2 = d2;
+    }
+  }
+  assert(
+    maxStepRingD2 < 0.02,
+    'Perimeter sky smoothness at camL=30.04 (0.05° grid): zero step-count discontinuity rings (max|Δ²ψ| < 0.02°)',
+    `max|Δ²ψ|=${maxStepRingD2.toFixed(5)}°`
+  );
 }
 
 // ============================================================================
@@ -494,6 +586,16 @@ if (missingFiles.length === 0) {
     unboundPostGl.length === 0,
     'post.glsl.js <-> WebGLRenderer.js uniform parity',
     `${postGlUniforms.size} post uniforms bound`
+  );
+
+  assert(
+    whWgsl.WORMHOLE_WGSL.includes('psiFinal') &&
+      whWgsl.WORMHOLE_WGSL.includes('atan2(b / max(rEnd') &&
+      !whWgsl.WORMHOLE_WGSL.includes('spike6') &&
+      whGlsl.WORMHOLE_FRAG.includes('psiFinal') &&
+      whGlsl.WORMHOLE_FRAG.includes('atan(b / max(rEnd') &&
+      !whGlsl.WORMHOLE_FRAG.includes('spike6'),
+    'WGSL & GLSL both include asymptotic escape tail correction (psiFinal) and omit sky-space spike6 arcs'
   );
 
   // Presets, WormholeCamera telemetry, ControlsHUD & backend toggle placement checks

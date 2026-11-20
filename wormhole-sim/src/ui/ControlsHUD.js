@@ -40,7 +40,7 @@ const CONTROL_SECTIONS = [
         type: 'range',
         key: 'lensingWidth',
         label: 'Lensing Width (M)',
-        min: 0.15,
+        min: 0.05,
         max: 3.0,
         step: 0.05,
         format: (v) => `${v.toFixed(2)} M`,
