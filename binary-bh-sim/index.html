@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="color-scheme" content="dark" />
   <title>Binary Black Hole Inspiral &amp; Gravitational Wave Lensing Simulator</title>
   <link
@@ -139,6 +139,19 @@
             <circle cx="8" cy="15" r="1.8" fill="currentColor" />
           </svg>
           <span>Controls</span>
+        </button>
+        <button
+          id="btn-hide-ui"
+          type="button"
+          class="pill-button glass-surface"
+          aria-label="Hide UI (H)"
+        >
+          <svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+            <path d="M2.5 10s2.8-4.8 7.5-4.8S17.5 10 17.5 10s-2.8 4.8-7.5 4.8S2.5 10 2.5 10z" />
+            <circle cx="10" cy="10" r="2" />
+            <path d="M4 16L16 4" stroke-linecap="round" />
+          </svg>
+          <span>Hide UI</span>
         </button>
       </div>
 
@@ -284,10 +297,14 @@
       id="btn-restore-hud"
       type="button"
       class="restore-hud-pill glass-surface"
-      aria-label="Show HUD (H)"
+      aria-label="Show UI (H)"
       hidden
     >
-      <span>Show HUD</span>
+      <svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <path d="M2.5 10s2.8-4.8 7.5-4.8S17.5 10 17.5 10s-2.8 4.8-7.5 4.8S2.5 10 2.5 10z" />
+        <circle cx="10" cy="10" r="2" />
+      </svg>
+      <span>Show UI</span>
       <kbd class="keycap">H</kbd>
     </button>
   </main>

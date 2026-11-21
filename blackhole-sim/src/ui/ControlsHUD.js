@@ -261,6 +261,7 @@ export function createHUD({
   const btnResetCamera = document.getElementById('btn-reset-camera');
   const btnScreenshot = document.getElementById('btn-screenshot');
   const btnHideHud = document.getElementById('btn-hide-hud');
+  const btnHideUi = document.getElementById('btn-hide-ui');
   const btnRestoreHud = document.getElementById('btn-restore-hud');
 
   const loadingIndicator = document.getElementById('loading-indicator');
@@ -275,6 +276,7 @@ export function createHUD({
 
   let drawerOpen = false;
   let hudVisible = true;
+  let lastHideTrigger = btnHideUi || btnHideHud;
 
   function setDrawerOpen(open, { returnFocus = false } = {}) {
     drawerOpen = Boolean(open);
@@ -663,7 +665,7 @@ export function createHUD({
     if (!hudVisible && focusWasInsideChrome) {
       btnRestoreHud.focus({ preventScroll: true });
     } else if (hudVisible && focusWasOnRestore) {
-      btnHideHud.focus({ preventScroll: true });
+      (lastHideTrigger || btnHideUi || btnHideHud)?.focus({ preventScroll: true });
     }
 
     return hudVisible;
@@ -707,7 +709,16 @@ export function createHUD({
   btnAutoOrbit.addEventListener('click', () => onAction('toggleAutoOrbit'));
   btnResetCamera.addEventListener('click', () => onAction('resetCamera'));
   btnScreenshot.addEventListener('click', () => onAction('screenshot'));
-  btnHideHud.addEventListener('click', () => onAction('toggleHud'));
+  btnHideHud.addEventListener('click', () => {
+    lastHideTrigger = btnHideHud;
+    onAction('toggleHud');
+  });
+  if (btnHideUi) {
+    btnHideUi.addEventListener('click', () => {
+      lastHideTrigger = btnHideUi;
+      onAction('toggleHud');
+    });
+  }
   btnRestoreHud.addEventListener('click', () => onAction('toggleHud'));
 
   function setBackendState({ backend, busy = false, statusNote = '' } = {}) {
