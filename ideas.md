@@ -2,15 +2,17 @@
 
 ## Current Project Foundation
 
-Right now, the repository pairs five zero-dependency, dual-backend (**WebGL2 + WebGPU**) GPU ray-tracers under a shared cinema-grade HDR pipeline:
+Right now, the repository pairs seven zero-dependency, dual-backend (**WebGL2 + WebGPU**) GPU ray-tracers under a shared cinema-grade HDR pipeline:
 
 - **`blackhole-sim/` (Gargantua) — ✅ Implemented:** Exact 3D Outgoing Kerr–Schild null geodesics, ZAMO observer tetrad, Bardeen–Press–Teukolsky ISCO, 128³ volumetric MHD accretion plasma with Doppler beaming + Planck blackbody LUT, and Blandford–Znajek polar jets.
 - **`wormhole-sim/` (Morris–Thorne / Ellis) — ✅ Implemented:** Adaptive RK4 curved-space geodesics across $l \in (-\infty, +\infty)$, James–Thorne $D_{\text{neg}}$ and Ellis drainhole metrics, dual-universe equirectangular skies, and smooth $l = 0$ throat traversal.
 - **`binary-bh-sim/` (Binary Black Hole Inspiral) — ✅ Implemented:** Two-body Brill–Lindquist Fermat optical metric + 1PN gravitomagnetic frame-dragging + pole-free Cartesian TT retarded quadrupole gravitational wave shear + ISW sky modulation, 2.5PN Peters–Mathews orbital inspiral, 256×256 co-rotating GPU tidal hydrodynamics resolving circumbinary disk cavities, spiral shocks, S-shaped tidal gas bridges, twin mini-disks, and fractal eyebrow shadows.
 - **`warp-drive-sim/` (Alcubierre / Natário / Lentz Warp Drive) — ✅ Implemented:** Backward ADM null geodesic RK4 integration across Alcubierre, Natário Zero-Expansion ($\theta \equiv 0$), and Lentz Soliton ($L_p$ rhomboidal positive/negative $T_{00}$) warp bubbles up to $5.0c$, Cherenkov cyan 128³ volumetric exotic wall shimmer, relativistic Doppler bow-shock caustics, superluminal aft Causal Horizon, and live External Chase ↔ Inside Bridge view toggling (`T`).
 - **`supernova-sim/` (Supernova Remnant & Nebula) — ✅ Implemented:** Volumetric multi-scattering radiative transfer across Sedov–Taylor / free-expansion shock shells, 4-octave Wrenninge multiple scattering + normalized dual-lobe Henyey–Greenstein phase function, pole-free 3D Rayleigh–Taylor filaments, dark Bok globules, `Hubble SHO` vs `True Color Broadband` narrowband palettes, and origin-safe `W`/`S` deep interior fly-through.
+- **`pulsar-sim/` (Magnetar / Millisecond Pulsar) — ✅ Implemented:** 3D Outgoing Kerr–Schild light bending exposing $>50\%$ of the neutron star crust (`GR Curved` vs `Flat Space`), co-rotating Planck blackbody polar caps + molten magnetar tectonic cracks with relativistic Doppler/redshift beaming, twisted oblique dipole pair-plasma flux tubes up to the light cylinder $R_{\text{LC}}$, sweeping lighthouse beams with Deutsch retardation, and equatorial PWN torus & helical polar jets.
+- **`starflight-sim/` (Relativistic Starflight) — ✅ Implemented:** Cancellation-free Special Relativistic Lorentz null-ray aberration up to $0.9999996c$ ($\gamma \approx 1050$), exact Doppler shift $D$ + CIE-1931 Planck blackbody temperature shift across the 4K Milky Way, UV/IR star bands, and Planck-mottled CMB shell ($T_{\text{fwd}} = 2.7255\,D_{\text{fwd}}$), Penrose–Terrell rotated 3D periodic navigation rings & beacon stations, 128³ volumetric hydrogen dust streaks, $1g$ brachistochrone cruise, and Forward ↔ Aft window flipping (`T`).
 
-All five share a powerful reusable architecture:
+All seven share a powerful reusable architecture:
 - Live **WebGL2 / WebGPU** backend switching (`?backend=`) with RAM-cached assets
 - **128-sample progressive accumulation** on pause (`Space`) + HDR YCoCg variance-clipped **TAA**
 - 6-mip Karis/Jimenez **HDR bloom**, 70mm **anamorphic flare**, and **AgX** filmic tone mapping
@@ -63,7 +65,9 @@ A first-person and external-observer relativistic ray-tracer of an **Alcubierre 
 
 ---
 
-## 3. Magnetar / Millisecond Pulsar Magnetosphere (`pulsar-sim/`)
+## 3. [IMPLEMENTED] Magnetar / Millisecond Pulsar Magnetosphere (`pulsar-sim/`)
+
+> **Status:** ✅ **Implemented** in [`pulsar-sim/`](./pulsar-sim/)
 
 A rapidly spinning, ultra-magnetized neutron star combining **Schwarzschild/Hartle–Thorne spacetime curvature** with curved dipole/twisted magnetic fields and rotating synchrotron beams.
 
@@ -81,7 +85,9 @@ A rapidly spinning, ultra-magnetized neutron star combining **Schwarzschild/Hart
 
 ---
 
-## 4. Relativistic Starflight — Aberration & Doppler Sky (`starflight-sim/`)
+## 4. [IMPLEMENTED] Relativistic Starflight — Aberration & Doppler Sky (`starflight-sim/`)
+
+> **Status:** ✅ **Implemented** in [`starflight-sim/`](./starflight-sim/)
 
 An interactive *Tau Zero* / *Project Hail Mary* / relativistic-rocket simulator exploring how the universe visually transforms when accelerating from $0c$ to $0.9999c$.
 
@@ -182,7 +188,7 @@ A pure volumetric multi-scattering & emission-line astrophysical nebula simulato
 ### Top 3 Highest-Impact Additions
 1. ~~**`warp-drive-sim/` (Alcubierre Warp Bubble):**~~ ✅ **Implemented** — Best visual contrast to Black Hole & Wormhole, completes the *Interstellar / Sci-Fi Spacetime* trilogy, reuses the exact 4K Milky Way sky + RK4 geodesic integrator + Planck spectral shift, and supports an awesome `T` key toggle between **External Chase** and **Inside Bridge** views.
 2. ~~**`binary-bh-sim/` (Binary Black Hole Merger):**~~ ✅ **Implemented** — Highest physics "wow factor" — fractal eyebrow lensing shadows and tidal accretion bridges directly build on `blackhole-sim`'s Kerr–Schild + volumetric disk math while showcasing WebGPU's performance advantage.
-3. **`pulsar-sim/` (Magnetar / Millisecond Pulsar):** Directly complements `blackhole-sim` (compact object comparison: horizon vs solid relativistic surface showing >50% of the crust due to light bending) and reuses volumetric plasma + polar jets.
+3. ~~**`pulsar-sim/` (Magnetar / Millisecond Pulsar):**~~ ✅ **Implemented** — Directly complements `blackhole-sim` (compact object comparison: horizon vs solid relativistic surface showing >50% of the crust due to light bending) and reuses volumetric plasma + polar jets.
 
 ### Architectural Upgrades Across All Simulators
 - **Shared Core Library (`shared/`):** Extract the duplicated `post.glsl.js` / `post.wgsl.js`, `physicalLuts.js`, `skyLoader.js`, `CameraController` math, and `ControlsHUD.js` shell into a shared ES module directory so every new `<name>-sim/` only needs to author its physics metric, shader, presets, and HUD schema.

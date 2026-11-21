@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="dark" />
   <meta http-equiv="refresh" content="0; url=./blackhole-sim/" />
-  <title>Interstellar Spacetime Simulators — Gargantua, Wormhole, Binary BH, Warp Drive &amp; Supernova Remnant</title>
+  <title>Interstellar Spacetime Simulators — Gargantua, Wormhole, Binary BH, Warp Drive, Supernova, Pulsar &amp; Starflight</title>
   <link
     rel="icon"
     type="image/svg+xml"
@@ -25,6 +25,10 @@
           dir = './warp-drive-sim/';
         } else if (sim === 'supernova' || sim === 'supernova-sim' || sim === 'snr' || sim === 'nebula') {
           dir = './supernova-sim/';
+        } else if (sim === 'pulsar' || sim === 'pulsar-sim' || sim === 'magnetar' || sim === 'ns') {
+          dir = './pulsar-sim/';
+        } else if (sim === 'starflight' || sim === 'starflight-sim' || sim === 'sf' || sim === 'relativistic') {
+          dir = './starflight-sim/';
         }
         params.delete('sim');
         var qs = params.toString();
@@ -45,6 +49,8 @@
       --accent-violet: #a78bfa;
       --accent-cyan: #38bdf8;
       --accent-nebula: #fb923c;
+      --accent-pulsar: #67e8f9;
+      --accent-starflight: #60a5fa;
       --text: #eef2f7;
       --muted: #94a3b8;
     }
@@ -60,7 +66,7 @@
       padding: 24px;
     }
     .hub {
-      width: min(720px, 100%);
+      width: min(820px, 100%);
       padding: 28px;
       border-radius: 16px;
       background: var(--surface);
@@ -120,6 +126,16 @@
       border-color: var(--accent-nebula);
       background: rgba(251, 146, 60, 0.08);
     }
+    a.card.pulsar:hover,
+    a.card.pulsar:focus-visible {
+      border-color: var(--accent-pulsar);
+      background: rgba(103, 232, 249, 0.08);
+    }
+    a.card.starflight:hover,
+    a.card.starflight:focus-visible {
+      border-color: var(--accent-starflight);
+      background: rgba(96, 165, 250, 0.08);
+    }
     .card-title {
       display: block;
       font-weight: 600;
@@ -138,6 +154,12 @@
     }
     .card.supernova .card-title {
       color: var(--accent-nebula);
+    }
+    .card.pulsar .card-title {
+      color: var(--accent-pulsar);
+    }
+    .card.starflight .card-title {
+      color: var(--accent-starflight);
     }
     .card-desc {
       display: block;
@@ -171,6 +193,14 @@
       <a class="card supernova" href="./supernova-sim/">
         <span class="card-title">Supernova Remnant — Volumetric Nebula</span>
         <span class="card-desc">Multi-scattering radiative transfer across Sedov–Taylor shock shells, Rayleigh–Taylor filaments, Bok globules, Hubble SHO / True Color palettes, and deep interior fly-through.</span>
+      </a>
+      <a class="card pulsar" href="./pulsar-sim/">
+        <span class="card-title">Magnetar &amp; Millisecond Pulsar</span>
+        <span class="card-desc">Outgoing Kerr–Schild light bending exposing &gt;50% of the neutron star crust, twisted pair-plasma dipole loops, sweeping lighthouse beams, and PWN torus &amp; jets.</span>
+      </a>
+      <a class="card starflight" href="./starflight-sim/">
+        <span class="card-title">Relativistic Starflight — Aberration &amp; Doppler Sky</span>
+        <span class="card-desc">Exact Special Relativistic Lorentz null-ray aberration up to 0.9999996c, Planck blackbody UV/IR &amp; CMB blue-shift, Penrose–Terrell rotation on 3D foreground beacons, and 1g brachistochrone cruise.</span>
       </a>
     </nav>
   </main>

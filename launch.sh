@@ -15,8 +15,9 @@ Usage: ./launch.sh [OPTIONS] [-- EXTRA_BROWSER_ARGS...]
 
 Global launcher for the Interstellar Spacetime Simulators (Gargantua Black Hole,
 Morris-Thorne Traversable Wormhole, Binary Black Hole Inspiral, Alcubierre
-Warp Drive, and Supernova Remnant & Nebula) on NVIDIA GPU with live WebGL2/WebGPU
-switching and cross-simulation navigation.
+Warp Drive, Supernova Remnant & Nebula, Magnetar & Millisecond Pulsar, and
+Relativistic Starflight) on NVIDIA GPU with live WebGL2/WebGPU switching and
+cross-simulation navigation.
 
 Simulation Options:
   --blackhole           Open Gargantua Black Hole Simulator (default)
@@ -24,7 +25,9 @@ Simulation Options:
   --binary, --binary-bh Open Binary Black Hole Inspiral & GW Lensing Simulator
   --warp, --warp-drive  Open Alcubierre Warp Drive Simulator
   --supernova, --snr    Open Supernova Remnant & Nebula Simulator
-  --sim <name>          Select simulation: blackhole | wormhole | binary | warp | supernova
+  --pulsar, --magnetar  Open Magnetar & Millisecond Pulsar Simulator
+  --starflight, --sf    Open Relativistic Starflight Simulator
+  --sim <name>          Select simulation: blackhole | wormhole | binary | warp | supernova | pulsar | starflight
 
 Backend Options:
   --webgpu, -w          Start directly in WebGPU backend (?backend=webgpu)
@@ -55,8 +58,14 @@ set_sim_target() {
     supernova|supernova-sim|snr|nebula)
       SIM_TARGET="supernova"
       ;;
+    pulsar|pulsar-sim|magnetar|ns)
+      SIM_TARGET="pulsar"
+      ;;
+    starflight|starflight-sim|sf|relativistic)
+      SIM_TARGET="starflight"
+      ;;
     *)
-      echo "Error: unknown simulation '${1}'. Expected 'blackhole', 'wormhole', 'binary', 'warp', or 'supernova'." >&2
+      echo "Error: unknown simulation '${1}'. Expected 'blackhole', 'wormhole', 'binary', 'warp', 'supernova', 'pulsar', or 'starflight'." >&2
       exit 1
       ;;
   esac
@@ -84,9 +93,17 @@ while [[ $# -gt 0 ]]; do
       SIM_TARGET="supernova"
       shift
       ;;
+    --pulsar|--magnetar)
+      SIM_TARGET="pulsar"
+      shift
+      ;;
+    --starflight|--sf)
+      SIM_TARGET="starflight"
+      shift
+      ;;
     --sim)
       if [[ $# -lt 2 ]]; then
-        echo "Error: --sim requires an argument ('blackhole', 'wormhole', 'binary', 'warp', or 'supernova')." >&2
+        echo "Error: --sim requires an argument ('blackhole', 'wormhole', 'binary', 'warp', 'supernova', 'pulsar', or 'starflight')." >&2
         exit 1
       fi
       set_sim_target "$2"
@@ -140,6 +157,12 @@ elif [[ "${SIM_TARGET}" == "warp" ]]; then
 elif [[ "${SIM_TARGET}" == "supernova" ]]; then
   SIM_DIR="supernova-sim"
   SIM_LABEL="Supernova Remnant Sim"
+elif [[ "${SIM_TARGET}" == "pulsar" ]]; then
+  SIM_DIR="pulsar-sim"
+  SIM_LABEL="Magnetar & Pulsar Sim"
+elif [[ "${SIM_TARGET}" == "starflight" ]]; then
+  SIM_DIR="starflight-sim"
+  SIM_LABEL="Relativistic Starflight Sim"
 else
   SIM_DIR="blackhole-sim"
   SIM_LABEL="Gargantua Black Hole Sim"

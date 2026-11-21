@@ -11,8 +11,10 @@ Static, zero-dependency, dual-backend (**WebGL2 + WebGPU**) relativistic GPU ray
 | `binary-bh-sim/` | Binary Black Hole Inspiral & GW Lensing | `window.__BINARY_BH__` |
 | `warp-drive-sim/` | Alcubierre / Natário / Lentz FTL Warp Drive | `window.__WARP_DRIVE__` |
 | `supernova-sim/` | Volumetric Multi-Scattering Supernova Remnant & Nebula | `window.__SUPERNOVA__` |
+| `pulsar-sim/` | Magnetar / Millisecond Pulsar Magnetosphere & GR Lensing | `window.__PULSAR__` |
+| `starflight-sim/` | Relativistic Starflight (SR Aberration, Doppler & Terrell Sky) | `window.__STARFLIGHT__` |
 
-- Root `index.html` redirects to `./blackhole-sim/` by default or to `./wormhole-sim/`, `./binary-bh-sim/`, `./warp-drive-sim/`, `./supernova-sim/` via `?sim=<alias>` (`wormhole|wh`, `binary|binary-bh|bbh`, `warp|warp-drive|alcubierre`, `supernova|supernova-sim|snr|nebula`), forwarding query params such as `?backend=webgpu`.
+- Root `index.html` redirects to `./blackhole-sim/` by default or to `./wormhole-sim/`, `./binary-bh-sim/`, `./warp-drive-sim/`, `./supernova-sim/`, `./pulsar-sim/`, `./starflight-sim/` via `?sim=<alias>` (`wormhole|wh`, `binary|binary-bh|bbh`, `warp|warp-drive|alcubierre`, `supernova|supernova-sim|snr|nebula`, `pulsar|pulsar-sim|magnetar|ns`, `starflight|starflight-sim|sf|relativistic`), forwarding query params such as `?backend=webgpu`.
 - Cross-sim navigation (`nav[aria-label="Simulation switcher"]`) uses relative `../<sim>/` links; local HTTP servers **must serve the repository root**, not an individual simulator folder.
 
 ## Local Launch (`./launch.sh`)
@@ -23,11 +25,13 @@ Serves the repo root via `python3 -m http.server` on the first free port in `127
 # Default: blackhole-sim, WebGL2, headed X11 Google Chrome (dark mode)
 ./launch.sh
 
-# Select simulator (--blackhole | --wormhole | --binary | --warp | --supernova | --sim <name>)
+# Select simulator (--blackhole | --wormhole | --binary | --warp | --supernova | --pulsar | --starflight | --sim <name>)
 ./launch.sh --wormhole
 ./launch.sh --binary
 ./launch.sh --warp
 ./launch.sh --supernova
+./launch.sh --pulsar
+./launch.sh --starflight
 
 # Start directly in WebGPU (?backend=webgpu) or WebGL2 (?backend=webgl2)
 ./launch.sh --webgpu
@@ -41,7 +45,7 @@ Pass extra browser arguments after `--`. Prerequisites: `python3`, plus `google-
 
 ## Verification Suites
 
-Each `<sim>/tests/` contains 3 zero-flag scripts run from the repository root (`<sim>` ∈ `blackhole-sim`, `wormhole-sim`, `binary-bh-sim`, `warp-drive-sim`, `supernova-sim`):
+Each `<sim>/tests/` contains 3 zero-flag scripts run from the repository root (`<sim>` ∈ `blackhole-sim`, `wormhole-sim`, `binary-bh-sim`, `warp-drive-sim`, `supernova-sim`, `pulsar-sim`, `starflight-sim`):
 
 ```bash
 # 1. Physics math, syntax (--check), GLSL/WGSL contracts & LUT/sky checks (Node.js only, no browser/GPU)
@@ -74,6 +78,6 @@ node <sim>/tests/firefox_qa.mjs
 3. **Ignore `ideas.md`**: Do **not** treat `ideas.md` as an active specification, roadmap, or requirements doc, and do **not** read it unless the user explicitly asks.
 4. **Duplicated Files & Intentional `wormhole-sim/` Divergences**: `src/assets/physicalLuts.js`, `src/assets/skyLoader.js`, `src/shaders/common.*`, `src/shaders/post.*`, `src/ui/ControlsHUD.js`, and `styles.css` are duplicated per simulation rather than shared—**do not blindly copy-paste** between sims:
    - `ControlsHUD.js` and `styles.css` are unique to each simulator's controls, presets, and theme.
-   - `physicalLuts.js` and `skyLoader.js` are identical across `blackhole-sim/`, `binary-bh-sim/`, `warp-drive-sim/`, and `supernova-sim/`, but **`wormhole-sim/` intentionally diverges**: its `physicalLuts.js` omits the CIE-1931 Planck blackbody LUT (exports blue noise only), and its `skyLoader.js` exposes dual-universe Universe A (`milkyway_4k.jpg` + procedural fallback) and Universe B (procedural golden-amber/teal nebula) loader APIs.
+   - `physicalLuts.js` and `skyLoader.js` are identical across `blackhole-sim/`, `binary-bh-sim/`, `warp-drive-sim/`, `supernova-sim/`, `pulsar-sim/`, and `starflight-sim/`, but **`wormhole-sim/` intentionally diverges**: its `physicalLuts.js` omits the CIE-1931 Planck blackbody LUT (exports blue noise only), and its `skyLoader.js` exposes dual-universe Universe A (`milkyway_4k.jpg` + procedural fallback) and Universe B (procedural golden-amber/teal nebula) loader APIs.
    - `common.{glsl,wgsl}.js` and `post.{glsl,wgsl}.js` also differ slightly in `wormhole-sim/` (and carry sim-specific headers elsewhere).
    - `assets/milkyway_4k.jpg` is duplicated per sim so each directory remains self-contained for static hosting.
