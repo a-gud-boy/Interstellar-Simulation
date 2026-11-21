@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="dark" />
   <meta http-equiv="refresh" content="0; url=./blackhole-sim/" />
-  <title>Interstellar Spacetime Simulators — Gargantua, Wormhole &amp; Binary BH</title>
+  <title>Interstellar Spacetime Simulators — Gargantua, Wormhole, Binary BH &amp; Warp Drive</title>
   <link
     rel="icon"
     type="image/svg+xml"
@@ -21,6 +21,8 @@
           dir = './wormhole-sim/';
         } else if (sim === 'binary' || sim === 'binary-bh' || sim === 'binary-bh-sim' || sim === 'bbh') {
           dir = './binary-bh-sim/';
+        } else if (sim === 'warp' || sim === 'warp-drive' || sim === 'warp-drive-sim' || sim === 'alcubierre') {
+          dir = './warp-drive-sim/';
         }
         params.delete('sim');
         var qs = params.toString();
@@ -39,6 +41,7 @@
       --accent: #f0b35a;
       --accent-teal: #5eead4;
       --accent-violet: #a78bfa;
+      --accent-cyan: #38bdf8;
       --text: #eef2f7;
       --muted: #94a3b8;
     }
@@ -104,6 +107,11 @@
       border-color: var(--accent-violet);
       background: rgba(167, 139, 250, 0.08);
     }
+    a.card.warp:hover,
+    a.card.warp:focus-visible {
+      border-color: var(--accent-cyan);
+      background: rgba(56, 189, 248, 0.08);
+    }
     .card-title {
       display: block;
       font-weight: 600;
@@ -116,6 +124,9 @@
     }
     .card.binary .card-title {
       color: var(--accent-violet);
+    }
+    .card.warp .card-title {
+      color: var(--accent-cyan);
     }
     .card-desc {
       display: block;
@@ -141,6 +152,10 @@
       <a class="card binary" href="./binary-bh-sim/">
         <span class="card-title">Binary Black Hole Inspiral &amp; GW Lensing</span>
         <span class="card-desc">Two-body Brill–Lindquist + 2.5PN inspiral, retarded gravitational wave shear, fractal eyebrow shadows, and tidal gas bridges.</span>
+      </a>
+      <a class="card warp" href="./warp-drive-sim/">
+        <span class="card-title">Alcubierre Warp Drive — FTL Spacetime</span>
+        <span class="card-desc">Alcubierre, Natário zero-expansion, and Lentz soliton warp metrics with ADM null geodesic ray-tracing, relativistic Doppler bow caustics, and Inside Bridge causal horizon.</span>
       </a>
     </nav>
   </main>
