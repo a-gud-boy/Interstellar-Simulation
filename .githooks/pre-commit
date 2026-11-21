@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+declare -A CHANGED_SIMS=()
+
+while IFS= read -r file; do
+  case "$file" in
+    blackhole-sim/src/engine/*|blackhole-sim/src/shaders/*)
+      CHANGED_SIMS["blackhole-sim"]=1
+      ;;
+    wormhole-sim/src/engine/*|wormhole-sim/src/shaders/*)
+      CHANGED_SIMS["wormhole-sim"]=1
+      ;;
+    binary-bh-sim/src/engine/*|binary-bh-sim/src/shaders/*)
+      CHANGED_SIMS["binary-bh-sim"]=1
+      ;;
+    warp-drive-sim/src/engine/*|warp-drive-sim/src/shaders/*)
+      CHANGED_SIMS["warp-drive-sim"]=1
+      ;;
+  esac
+done < <(git diff --cached --name-only --diff-filter=ACMR)
+
+if [[ "${#CHANGED_SIMS[@]}" -eq 0 ]]; then
+  exit 0
+fi
+
+failed=0
+for sim in "${!CHANGED_SIMS[@]}"; do
+  echo "[pre-commit] Running node ${sim}/tests/physics_check.mjs ..."
+  if ! node "${sim}/tests/physics_check.mjs"; then
+    echo "[pre-commit] FAILED: ${sim}/tests/physics_check.mjs" >&2
+    failed=1
+  fi
+done
+
+exit "$failed"

@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+ZERO_SHA="0000000000000000000000000000000000000000"
+declare -A CHANGED_SIMS=()
+
+record_file() {
+  local file="$1"
+  case "$file" in
+    blackhole-sim/*)  CHANGED_SIMS["blackhole-sim"]=1 ;;
+    wormhole-sim/*)   CHANGED_SIMS["wormhole-sim"]=1 ;;
+    binary-bh-sim/*)  CHANGED_SIMS["binary-bh-sim"]=1 ;;
+    warp-drive-sim/*) CHANGED_SIMS["warp-drive-sim"]=1 ;;
+  esac
+}
+
+saw_stdin=0
+if [[ ! -t 0 ]]; then
+  while read -r local_ref local_sha remote_ref remote_sha; do
+    [[ -z "${local_ref:-}" ]] && continue
+    saw_stdin=1
+
+    # Skip branch deletions
+    if [[ "$local_sha" == "$ZERO_SHA" ]]; then
+      continue
+    fi
+
+    if [[ "$remote_sha" == "$ZERO_SHA" ]]; then
+      # Newly pushed branch: extract actual changed file paths from commits not on any remote
+      while IFS= read -r file; do
+        [[ -n "$file" ]] && record_file "$file"
+      done < <(git log --name-only --pretty=format: "$local_sha" --not --remotes)
+    else
+      while IFS= read -r file; do
+        [[ -n "$file" ]] && record_file "$file"
+      done < <(git diff --name-only "${remote_sha}..${local_sha}")
+    fi
+  done
+fi
+
+# Safe fallback for manual direct invocation without ref lines on stdin
+if [[ "$saw_stdin" -eq 0 ]]; then
+  if git rev-parse --verify --quiet HEAD~1 >/dev/null 2>&1; then
+    while IFS= read -r file; do
+      [[ -n "$file" ]] && record_file "$file"
+    done < <(git diff --name-only HEAD~1..HEAD)
+  elif git rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
+    while IFS= read -r file; do
+      [[ -n "$file" ]] && record_file "$file"
+    done < <(git diff-tree --no-commit-id --name-only -r --root HEAD)
+  fi
+fi
+
+if [[ "${#CHANGED_SIMS[@]}" -eq 0 ]]; then
+  exit 0
+fi
+
+failed=0
+for sim in "${!CHANGED_SIMS[@]}"; do
+  echo "[pre-push] Running node ${sim}/tests/physics_check.mjs ..."
+  if ! node "${sim}/tests/physics_check.mjs"; then
+    echo "[pre-push] FAILED: ${sim}/tests/physics_check.mjs" >&2
+    failed=1
+    continue
+  fi
+
+  if [[ "${RUN_BROWSER_QA:-0}" == "1" ]]; then
+    echo "[pre-push] RUN_BROWSER_QA=1 enabled — running browser & Firefox QA for ${sim} ..."
+
+    if [[ -z "${DISPLAY:-}" ]] || [[ ! -x /usr/bin/google-chrome ]] || ! command -v nvidia-smi >/dev/null 2>&1; then
+      echo "[pre-push] ERROR: Missing prerequisites for ${sim}/tests/browser_qa.mjs (need DISPLAY, /usr/bin/google-chrome, nvidia-smi)" >&2
+      failed=1
+    elif ! node "${sim}/tests/browser_qa.mjs"; then
+      echo "[pre-push] FAILED: ${sim}/tests/browser_qa.mjs" >&2
+      failed=1
+    fi
+
+    if [[ -z "${WAYLAND_DISPLAY:-}" ]] || ! command -v firefox >/dev/null 2>&1 || ! command -v nvidia-smi >/dev/null 2>&1; then
+      echo "[pre-push] ERROR: Missing prerequisites for ${sim}/tests/firefox_qa.mjs (need WAYLAND_DISPLAY, firefox, nvidia-smi)" >&2
+      failed=1
+    elif ! node "${sim}/tests/firefox_qa.mjs"; then
+      echo "[pre-push] FAILED: ${sim}/tests/firefox_qa.mjs" >&2
+      failed=1
+    fi
+  fi
+done
+
+exit "$failed"
