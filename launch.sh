@@ -14,16 +14,17 @@ usage() {
 Usage: ./launch.sh [OPTIONS] [-- EXTRA_BROWSER_ARGS...]
 
 Global launcher for the Interstellar Spacetime Simulators (Gargantua Black Hole,
-Morris-Thorne Traversable Wormhole, Binary Black Hole Inspiral, and Alcubierre
-Warp Drive) on NVIDIA GPU with live WebGL2/WebGPU switching and cross-simulation
-navigation.
+Morris-Thorne Traversable Wormhole, Binary Black Hole Inspiral, Alcubierre
+Warp Drive, and Supernova Remnant & Nebula) on NVIDIA GPU with live WebGL2/WebGPU
+switching and cross-simulation navigation.
 
 Simulation Options:
   --blackhole           Open Gargantua Black Hole Simulator (default)
   --wormhole            Open Morris-Thorne Wormhole Simulator
   --binary, --binary-bh Open Binary Black Hole Inspiral & GW Lensing Simulator
   --warp, --warp-drive  Open Alcubierre Warp Drive Simulator
-  --sim <name>          Select simulation: blackhole | wormhole | binary | warp
+  --supernova, --snr    Open Supernova Remnant & Nebula Simulator
+  --sim <name>          Select simulation: blackhole | wormhole | binary | warp | supernova
 
 Backend Options:
   --webgpu, -w          Start directly in WebGPU backend (?backend=webgpu)
@@ -51,8 +52,11 @@ set_sim_target() {
     warp|warp-drive|warp-drive-sim|alcubierre)
       SIM_TARGET="warp"
       ;;
+    supernova|supernova-sim|snr|nebula)
+      SIM_TARGET="supernova"
+      ;;
     *)
-      echo "Error: unknown simulation '${1}'. Expected 'blackhole', 'wormhole', 'binary', or 'warp'." >&2
+      echo "Error: unknown simulation '${1}'. Expected 'blackhole', 'wormhole', 'binary', 'warp', or 'supernova'." >&2
       exit 1
       ;;
   esac
@@ -76,9 +80,13 @@ while [[ $# -gt 0 ]]; do
       SIM_TARGET="warp"
       shift
       ;;
+    --supernova|--snr)
+      SIM_TARGET="supernova"
+      shift
+      ;;
     --sim)
       if [[ $# -lt 2 ]]; then
-        echo "Error: --sim requires an argument ('blackhole', 'wormhole', 'binary', or 'warp')." >&2
+        echo "Error: --sim requires an argument ('blackhole', 'wormhole', 'binary', 'warp', or 'supernova')." >&2
         exit 1
       fi
       set_sim_target "$2"
@@ -129,6 +137,9 @@ elif [[ "${SIM_TARGET}" == "binary" ]]; then
 elif [[ "${SIM_TARGET}" == "warp" ]]; then
   SIM_DIR="warp-drive-sim"
   SIM_LABEL="Alcubierre Warp Drive Sim"
+elif [[ "${SIM_TARGET}" == "supernova" ]]; then
+  SIM_DIR="supernova-sim"
+  SIM_LABEL="Supernova Remnant Sim"
 else
   SIM_DIR="blackhole-sim"
   SIM_LABEL="Gargantua Black Hole Sim"

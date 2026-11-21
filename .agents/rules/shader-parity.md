@@ -5,7 +5,7 @@ globs: "**/src/shaders/**, **/src/engine/Web*Renderer.js"
 
 # Dual-Backend Shader & Renderer Parity
 
-All four simulators maintain 1:1 visual and physical parity between **WebGL2** (`WebGLRenderer.js`, `*.frag.js`, `*.glsl.js`) and **WebGPU** (`WebGPURenderer.js`, `*.wgsl.js`).
+All simulators maintain 1:1 visual and physical parity between **WebGL2** (`WebGLRenderer.js`, `*.frag.js`, `*.glsl.js`) and **WebGPU** (`WebGPURenderer.js`, `*.wgsl.js`).
 
 ## Mandatory Rules
 

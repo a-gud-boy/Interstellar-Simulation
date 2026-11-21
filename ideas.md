@@ -2,12 +2,15 @@
 
 ## Current Project Foundation
 
-Right now, the repository pairs two zero-dependency, dual-backend (**WebGL2 + WebGPU**) GPU ray-tracers under a shared cinema-grade HDR pipeline:
+Right now, the repository pairs five zero-dependency, dual-backend (**WebGL2 + WebGPU**) GPU ray-tracers under a shared cinema-grade HDR pipeline:
 
-- **`blackhole-sim/` (Gargantua):** Exact 3D Outgoing Kerr–Schild null geodesics, ZAMO observer tetrad, Bardeen–Press–Teukolsky ISCO, 128³ volumetric MHD accretion plasma with Doppler beaming + Planck blackbody LUT, and Blandford–Znajek polar jets.
-- **`wormhole-sim/` (Morris–Thorne / Ellis):** Adaptive RK4 curved-space geodesics across $l \in (-\infty, +\infty)$, James–Thorne $D_{\text{neg}}$ and Ellis drainhole metrics, dual-universe equirectangular skies, and smooth $l = 0$ throat traversal.
+- **`blackhole-sim/` (Gargantua) — ✅ Implemented:** Exact 3D Outgoing Kerr–Schild null geodesics, ZAMO observer tetrad, Bardeen–Press–Teukolsky ISCO, 128³ volumetric MHD accretion plasma with Doppler beaming + Planck blackbody LUT, and Blandford–Znajek polar jets.
+- **`wormhole-sim/` (Morris–Thorne / Ellis) — ✅ Implemented:** Adaptive RK4 curved-space geodesics across $l \in (-\infty, +\infty)$, James–Thorne $D_{\text{neg}}$ and Ellis drainhole metrics, dual-universe equirectangular skies, and smooth $l = 0$ throat traversal.
+- **`binary-bh-sim/` (Binary Black Hole Inspiral) — ✅ Implemented:** Two-body Brill–Lindquist Fermat optical metric + 1PN gravitomagnetic frame-dragging + pole-free Cartesian TT retarded quadrupole gravitational wave shear + ISW sky modulation, 2.5PN Peters–Mathews orbital inspiral, 256×256 co-rotating GPU tidal hydrodynamics resolving circumbinary disk cavities, spiral shocks, S-shaped tidal gas bridges, twin mini-disks, and fractal eyebrow shadows.
+- **`warp-drive-sim/` (Alcubierre / Natário / Lentz Warp Drive) — ✅ Implemented:** Backward ADM null geodesic RK4 integration across Alcubierre, Natário Zero-Expansion ($\theta \equiv 0$), and Lentz Soliton ($L_p$ rhomboidal positive/negative $T_{00}$) warp bubbles up to $5.0c$, Cherenkov cyan 128³ volumetric exotic wall shimmer, relativistic Doppler bow-shock caustics, superluminal aft Causal Horizon, and live External Chase ↔ Inside Bridge view toggling (`T`).
+- **`supernova-sim/` (Supernova Remnant & Nebula) — ✅ Implemented:** Volumetric multi-scattering radiative transfer across Sedov–Taylor / free-expansion shock shells, 4-octave Wrenninge multiple scattering + normalized dual-lobe Henyey–Greenstein phase function, pole-free 3D Rayleigh–Taylor filaments, dark Bok globules, `Hubble SHO` vs `True Color Broadband` narrowband palettes, and origin-safe `W`/`S` deep interior fly-through.
 
-Both share a powerful reusable architecture:
+All five share a powerful reusable architecture:
 - Live **WebGL2 / WebGPU** backend switching (`?backend=`) with RAM-cached assets
 - **128-sample progressive accumulation** on pause (`Space`) + HDR YCoCg variance-clipped **TAA**
 - 6-mip Karis/Jimenez **HDR bloom**, 70mm **anamorphic flare**, and **AgX** filmic tone mapping
@@ -18,7 +21,9 @@ Below are new standalone simulators (`<name>-sim/`) that fit naturally into this
 
 ---
 
-## 1. Binary Black Hole Inspiral & Gravitational Wave Lensing (`binary-bh-sim/`)
+## 1. [IMPLEMENTED] Binary Black Hole Inspiral & Gravitational Wave Lensing (`binary-bh-sim/`)
+
+> **Status:** ✅ **Implemented** in [`binary-bh-sim/`](./binary-bh-sim/)
 
 Two orbiting Kerr/Schwarzschild black holes spiraling toward merger, bending starlight and tidal accretion streams in real time.
 
@@ -37,7 +42,9 @@ Two orbiting Kerr/Schwarzschild black holes spiraling toward merger, bending sta
 
 ---
 
-## 2. Alcubierre / Lentz Warp Bubble Transit (`warp-drive-sim/`)
+## 2. [IMPLEMENTED] Alcubierre / Lentz Warp Bubble Transit (`warp-drive-sim/`)
+
+> **Status:** ✅ **Implemented** in [`warp-drive-sim/`](./warp-drive-sim/)
 
 A first-person and external-observer relativistic ray-tracer of an **Alcubierre warp metric** (and smooth Natário zero-expansion variant) cruising through the Milky Way at subluminal and superluminal apparent speeds.
 
@@ -151,7 +158,9 @@ A time-evolving relativistic hydrodynamics + radiative transfer simulation of a 
 
 ---
 
-## 8. Cosmic Ray-Traced Nebula & Supernova Remnant (`supernova-sim/`)
+## 8. [IMPLEMENTED] Cosmic Ray-Traced Nebula & Supernova Remnant (`supernova-sim/`)
+
+> **Status:** ✅ **Implemented** in [`supernova-sim/`](./supernova-sim/)
 
 A pure volumetric multi-scattering & emission-line astrophysical nebula simulator (Crab / Veil / Pillars-style) built on the project's 128³ 3D noise and HDR pipeline.
 
@@ -171,8 +180,8 @@ A pure volumetric multi-scattering & emission-line astrophysical nebula simulato
 ## Recommended Next Builds & Platform Evolution
 
 ### Top 3 Highest-Impact Additions
-1. **`warp-drive-sim/` (Alcubierre Warp Bubble):** Best visual contrast to Black Hole & Wormhole, completes the *Interstellar / Sci-Fi Spacetime* trilogy, reuses the exact 4K Milky Way sky + RK4 geodesic integrator + Planck spectral shift, and supports an awesome `T` key toggle between **External Chase** and **Inside Bridge** views.
-2. **`binary-bh-sim/` (Binary Black Hole Merger):** Highest physics "wow factor" — fractal eyebrow lensing shadows and tidal accretion bridges directly build on `blackhole-sim`'s Kerr–Schild + volumetric disk math while showcasing WebGPU's performance advantage.
+1. ~~**`warp-drive-sim/` (Alcubierre Warp Bubble):**~~ ✅ **Implemented** — Best visual contrast to Black Hole & Wormhole, completes the *Interstellar / Sci-Fi Spacetime* trilogy, reuses the exact 4K Milky Way sky + RK4 geodesic integrator + Planck spectral shift, and supports an awesome `T` key toggle between **External Chase** and **Inside Bridge** views.
+2. ~~**`binary-bh-sim/` (Binary Black Hole Merger):**~~ ✅ **Implemented** — Highest physics "wow factor" — fractal eyebrow lensing shadows and tidal accretion bridges directly build on `blackhole-sim`'s Kerr–Schild + volumetric disk math while showcasing WebGPU's performance advantage.
 3. **`pulsar-sim/` (Magnetar / Millisecond Pulsar):** Directly complements `blackhole-sim` (compact object comparison: horizon vs solid relativistic surface showing >50% of the crust due to light bending) and reuses volumetric plasma + polar jets.
 
 ### Architectural Upgrades Across All Simulators

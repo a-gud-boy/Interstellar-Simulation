@@ -3,8 +3,9 @@
  * Antigravity PostToolUse + PostInvocation hook for Interstellar Simulation.
  *
  * - PostToolUse: Inspects the edited file path. If it lies under
- *   `<sim>/src/engine/` or `<sim>/src/shaders/` for one of the four simulators,
- *   runs `node <sim>/tests/physics_check.mjs` (zero-dependency contract check).
+ *   `<sim>/src/engine/` or `<sim>/src/shaders/` for any `*-sim/` simulator
+ *   containing `tests/physics_check.mjs`, runs `node <sim>/tests/physics_check.mjs`
+ *   (zero-dependency contract check).
  *   Always emits `{}` on stdout per Antigravity's PostToolUse contract.
  *   On failure, writes concise `[FAIL]` diagnostics to stderr, caches the
  *   failure per `conversationId` in os.tmpdir(), and exits 1. On pass, clears
@@ -23,8 +24,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const SIM_EDIT_RE =
-  /^(blackhole-sim|wormhole-sim|binary-bh-sim|warp-drive-sim)\/src\/(engine|shaders)\//;
+const SIM_EDIT_RE = /^([a-z0-9-]+-sim)\/src\/(engine|shaders)\//;
 
 function readStdinUtf8() {
   try {

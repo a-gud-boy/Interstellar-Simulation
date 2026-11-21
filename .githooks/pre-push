@@ -9,12 +9,12 @@ declare -A CHANGED_SIMS=()
 
 record_file() {
   local file="$1"
-  case "$file" in
-    blackhole-sim/*)  CHANGED_SIMS["blackhole-sim"]=1 ;;
-    wormhole-sim/*)   CHANGED_SIMS["wormhole-sim"]=1 ;;
-    binary-bh-sim/*)  CHANGED_SIMS["binary-bh-sim"]=1 ;;
-    warp-drive-sim/*) CHANGED_SIMS["warp-drive-sim"]=1 ;;
-  esac
+  if [[ "$file" =~ ^([a-z0-9-]+-sim)/ ]]; then
+    local sim="${BASH_REMATCH[1]}"
+    if [[ -f "${sim}/tests/physics_check.mjs" ]]; then
+      CHANGED_SIMS["$sim"]=1
+    fi
+  fi
 }
 
 saw_stdin=0

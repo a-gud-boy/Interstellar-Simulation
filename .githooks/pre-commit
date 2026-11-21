@@ -7,20 +7,12 @@ cd "$ROOT"
 declare -A CHANGED_SIMS=()
 
 while IFS= read -r file; do
-  case "$file" in
-    blackhole-sim/src/engine/*|blackhole-sim/src/shaders/*)
-      CHANGED_SIMS["blackhole-sim"]=1
-      ;;
-    wormhole-sim/src/engine/*|wormhole-sim/src/shaders/*)
-      CHANGED_SIMS["wormhole-sim"]=1
-      ;;
-    binary-bh-sim/src/engine/*|binary-bh-sim/src/shaders/*)
-      CHANGED_SIMS["binary-bh-sim"]=1
-      ;;
-    warp-drive-sim/src/engine/*|warp-drive-sim/src/shaders/*)
-      CHANGED_SIMS["warp-drive-sim"]=1
-      ;;
-  esac
+  if [[ "$file" =~ ^([a-z0-9-]+-sim)/src/(engine|shaders)/ ]]; then
+    sim="${BASH_REMATCH[1]}"
+    if [[ -f "${sim}/tests/physics_check.mjs" ]]; then
+      CHANGED_SIMS["$sim"]=1
+    fi
+  fi
 done < <(git diff --cached --name-only --diff-filter=ACMR)
 
 if [[ "${#CHANGED_SIMS[@]}" -eq 0 ]]; then
