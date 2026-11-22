@@ -333,7 +333,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
             + 0.25 * isolateHighlights(s2, threshold);
 
       let w = exp(-af * 3.1) + 0.22 / (1.0 + af * af * 9.0);
-      let tint = mix(vec3f(1.04, 0.96, 0.87), vec3f(0.76, 0.90, 1.16), smoothstep(0.18, 1.0, af) * 0.42);
+      let tint = mix(vec3f(1.02, 0.99, 0.96), vec3f(0.84, 0.92, 1.08), smoothstep(0.18, 1.0, af) * 0.35);
       sum += s * tint * w;
       weightSum += w;
     }
@@ -464,8 +464,8 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   let exposure = u.res_exposure_bloom.z;
 
   var hdr = scene
-          + bloom * (bloomIntensity * 0.085)
-          + anamorphic * (anamorphicIntensity * 0.22);
+          + bloom * (bloomIntensity * 0.105)
+          + anamorphic * (anamorphicIntensity * 0.14);
 
   hdr *= max(exposure, 0.01);
 

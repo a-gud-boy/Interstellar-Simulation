@@ -329,8 +329,8 @@ void main() {
       // Lorentzian + Gaussian hybrid optical falloff for authentic 70mm glass streak
       float w = exp(-af * 3.1) + 0.22 / (1.0 + af * af * 9.0);
 
-      // Subtle chromatic glass coating: warm incandescent core, tasteful faint cool outer optical fringe
-      vec3 tint = mix(vec3(1.04, 0.96, 0.87), vec3(0.76, 0.90, 1.16), smoothstep(0.18, 1.0, af) * 0.42);
+      // Subtle chromatic glass coating: neutral platinum core, tasteful pale-sapphire outer optical fringe
+      vec3 tint = mix(vec3(1.02, 0.99, 0.96), vec3(0.84, 0.92, 1.08), smoothstep(0.18, 1.0, af) * 0.35);
       sum += s * tint * w;
       weightSum += w;
     }
@@ -467,8 +467,8 @@ void main() {
   // Energy-balanced optical bloom & horizontal 70mm anamorphic streak
   // Kept tight & controlled so deep space shadow stays abyssal #000 right up to bright stellar cones
   vec3 hdr = scene
-    + bloom * (uBloomIntensity * 0.085)
-    + anamorphic * (uAnamorphicIntensity * 0.22);
+    + bloom * (uBloomIntensity * 0.105)
+    + anamorphic * (uAnamorphicIntensity * 0.14);
 
   // Camera exposure
   hdr *= max(uExposure, 0.01);

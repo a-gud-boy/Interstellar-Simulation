@@ -329,8 +329,8 @@ void main() {
       // Lorentzian + Gaussian hybrid optical falloff for authentic 70mm glass streak
       float w = exp(-af * 3.1) + 0.22 / (1.0 + af * af * 9.0);
 
-      // Subtle chromatic glass coating: warm incandescent core, tasteful faint cool outer optical fringe
-      vec3 tint = mix(vec3(1.04, 0.96, 0.87), vec3(0.76, 0.90, 1.16), smoothstep(0.18, 1.0, af) * 0.42);
+      // Subtle chromatic glass coating: crisp crystal blue-white core, sapphire outer optical fringe
+      vec3 tint = mix(vec3(0.96, 0.99, 1.05), vec3(0.60, 0.86, 1.24), smoothstep(0.16, 1.0, af) * 0.48);
       sum += s * tint * w;
       weightSum += w;
     }
@@ -465,10 +465,9 @@ void main() {
   vec3 anamorphic = max(texture(uAnamorphicTex, vUv).rgb, vec3(0.0));
 
   // Energy-balanced optical bloom & horizontal 70mm anamorphic streak
-  // Kept tight & controlled so the event horizon silhouette stays abyssal #000 right up to the photon ring
   vec3 hdr = scene
-    + bloom * (uBloomIntensity * 0.085)
-    + anamorphic * (uAnamorphicIntensity * 0.22);
+    + bloom * (uBloomIntensity * 0.095)
+    + anamorphic * (uAnamorphicIntensity * 0.28);
 
   // Camera exposure
   hdr *= max(uExposure, 0.01);

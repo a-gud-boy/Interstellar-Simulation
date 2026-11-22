@@ -840,9 +840,9 @@ export class WebGPURenderer {
     const pf = this._bloomPreF32;
     pf[0] = 1.0 / this.width;
     pf[1] = 1.0 / this.height;
-    pf[2] = 1.30;
+    pf[2] = 1.15;
     pf[3] = 0.45;
-    pf[4] = 11.0;
+    pf[4] = 16.0;
     pf[5] = 0.0;
     pf[6] = 0.0;
     pf[7] = 0.0;
@@ -872,7 +872,7 @@ export class WebGPURenderer {
     const f0 = this._anaF32_0;
     f0[0] = 1.0 / src0.width;
     f0[1] = 1.0 / src0.height;
-    f0[2] = 1.85;
+    f0[2] = 2.45;
     f0[3] = 1.05;
     f0[4] = 0.0;
     device.queue.writeBuffer(this.anaUniformBuf0, 0, f0);

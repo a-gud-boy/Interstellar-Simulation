@@ -141,35 +141,96 @@ struct GeodesicDeriv {
 };
 
 fn evalGeodesicRHS(pos: vec3f, p: vec3f, pt: f32, M: f32, a: f32, a2: f32, lensing: f32) -> GeodesicDeriv {
-  let f = evalKSFields(pos, M, a, a2, lensing);
-  let L = pt + dot(f.l, p);
-  let twoHL = 2.0 * f.H * L;
-
   var outD: GeodesicDeriv;
-  outD.dpos = p - twoHL * f.l;
-  outD.r = f.r;
+  let y2 = pos.y * pos.y;
+
+  if (a2 < 1e-6) {
+    let r2 = max(dot(pos, pos), 1e-8);
+    let invR = inverseSqrt(r2);
+    let r = r2 * invR;
+    let l = pos * invR;
+    let H = lensing * M * invR;
+    let lp = dot(l, p);
+    let L = pt + lp;
+    let twoHL = 2.0 * H * L;
+
+    outD.dpos = p - twoHL * l;
+    outD.r = r;
+    outD.dp = select(
+      invR * (twoHL * p - (H * L * L + twoHL * lp) * l),
+      vec3f(0.0),
+      lensing <= 1e-6
+    );
+    return outD;
+  }
+
+  if (a2 < 1e-4) {
+    let r2 = max(dot(pos, pos), 1e-8);
+    let invR = inverseSqrt(r2);
+    let r = r2 * invR;
+    let invR2 = invR * invR;
+    let rHat = pos * invR;
+    let aInvR2 = a * invR2;
+    let l = rHat + aInvR2 * vec3f(pos.z, 0.0, -pos.x);
+    let H = lensing * M * invR;
+    let L = pt + dot(l, p);
+    let twoHL = 2.0 * H * L;
+
+    outD.dpos = p - twoHL * l;
+    outD.r = r;
+
+    if (lensing <= 1e-6) {
+      outD.dp = vec3f(0.0);
+      return outD;
+    }
+
+    let S = -(dot(p, pos) + 2.0 * a * invR * (p.x * pos.z - p.z * pos.x)) * invR2;
+    let w = p * invR + aInvR2 * vec3f(-p.z, 0.0, p.x) + S * rHat;
+    outD.dp = (-H * invR * L * L) * rHat + twoHL * w;
+    return outD;
+  }
+
+  let uVal = dot(pos, pos) - a2;
+  let disc = sqrt(max(uVal * uVal + 4.0 * a2 * y2, 1e-12));
+  let r2 = max(0.5 * (uVal + disc), 1e-8);
+  let invR = inverseSqrt(r2);
+  let r = r2 * invR;
+  let r4 = r2 * r2;
+  let a2y2 = a2 * y2;
+  let invD = 1.0 / max(r4 + a2y2, 1e-10);
+  let H = lensing * M * (r * r2) * invD;
+  let R2 = r2 + a2;
+  let invR2 = 1.0 / max(R2, 1e-8);
+  let l = vec3f(
+    (r * pos.x + a * pos.z) * invR2,
+    pos.y * invR,
+    (r * pos.z - a * pos.x) * invR2
+  );
+  let L = pt + dot(l, p);
+  let twoHL = 2.0 * H * L;
+
+  outD.dpos = p - twoHL * l;
+  outD.r = r;
 
   if (lensing <= 1e-6) {
     outD.dp = vec3f(0.0);
     return outD;
   }
 
-  let invD = 1.0 / max(f.D, 1e-10);
-  let hFac = lensing * M * f.r2 * invD * invD;
-  let cR = 3.0 * a2 * pos.y * pos.y - f.r2 * f.r2;
-  var gradH = (hFac * cR) * f.gradR;
-  gradH.y -= hFac * (2.0 * f.r * a2 * pos.y);
+  let gradR = vec3f(r * r2 * pos.x, r * R2 * pos.y, r * r2 * pos.z) * invD;
+  let hFac = H * invR * invD;
+  let cR = 3.0 * a2y2 - r4;
+  var gradH = (hFac * cR) * gradR;
+  gradH.y -= hFac * (2.0 * r * a2 * pos.y);
 
-  let invR2 = 1.0 / max(f.R2, 1e-8);
-  let invR = 1.0 / max(f.r, 1e-5);
-  let S = (p.x * (pos.x - 2.0 * f.r * f.l.x) + p.z * (pos.z - 2.0 * f.r * f.l.z)) * invR2
-        - p.y * f.l.y * invR;
+  let S = (p.x * (pos.x - 2.0 * r * l.x) + p.z * (pos.z - 2.0 * r * l.z)) * invR2
+        - p.y * l.y * invR;
 
   let w = vec3f(
-    (f.r * p.x - a * p.z) * invR2,
+    (r * p.x - a * p.z) * invR2,
     p.y * invR,
-    (a * p.x + f.r * p.z) * invR2
-  ) + S * f.gradR;
+    (a * p.x + r * p.z) * invR2
+  ) + S * gradR;
 
   outD.dp = (L * L) * gradH + twoHL * w;
   return outD;
@@ -246,8 +307,8 @@ fn sampleBlackbody(tempK: f32) -> vec3f {
 }
 
 fn mapPulsarTempToLut(physTempK: f32) -> f32 {
-  let scaled = 2800.0 * pow(max(physTempK, 1.0e5) * 1.0e-6, 1.15);
-  return clamp(scaled, T_MIN, T_MAX);
+  let normT = clamp(max(physTempK, 1.0e5) / 6.0e6, 0.02, 2.2);
+  return clamp(11500.0 + 28500.0 * pow(normT, 0.55), 11500.0, T_MAX);
 }
 
 fn rotateY(v: vec3f, angle: f32) -> vec3f {
@@ -286,9 +347,9 @@ fn evalMicroStarLayer(dir: vec3f, scale: f32, densityThresh: f32, boost: f32, pi
   let mag2 = magU * magU;
   let mag = mag2 * mag2 * sqrt(magU);
 
-  let fw = clamp(pixelFw * scale, 0.018, 0.18);
-  let starRad = mix(0.028, 0.088, mag) + fw * 0.40;
-  let core = exp(-min((dist * dist) / max(starRad * starRad * 0.34, 1e-5), 40.0));
+  let fw = clamp(pixelFw * scale, 0.024, 0.20);
+  let starRad = mix(0.032, 0.096, mag) + fw * 0.48;
+  let core = exp(-min((dist * dist) / max(starRad * starRad * 0.36, 1e-5), 40.0));
   if (core < 0.004) {
     return vec3f(0.0);
   }
@@ -405,10 +466,10 @@ fn shadeNeutronStarSurface(
   a2: f32,
   lensing: f32,
   betaEq: f32,
+  simTime: f32,
   spinPhase: f32,
-  mu0: vec3f,
-  em1_0: vec3f,
-  em2_0: vec3f,
+  sinObl: f32,
+  cosObl: f32,
   twistShear: f32,
   rLightCylVis: f32,
   polarCapTempK: f32,
@@ -421,72 +482,111 @@ fn shadeNeutronStarSurface(
   let pBody = rotateY(posHit, -spinPhase);
   let rHatBody = normalize(pBody);
 
-  let cosM = dot(rHatBody, mu0);
-  let absCosM = abs(cosM);
+  let cosM = rHatBody.x * sinObl + rHatBody.y * cosObl;
   let sinM = sqrt(max(1.0 - cosM * cosM, 0.0));
-  let xM = dot(rHatBody, em1_0);
-  let yM = dot(rHatBody, em2_0);
+  let xM = rHatBody.x * cosObl - rHatBody.y * sinObl;
+  let yM = -rHatBody.z;
   let phiM = select(0.0, atan2(yM, xM), abs(xM) + abs(yM) > 1e-6);
   let signCosM = select(-1.0, 1.0, cosM >= 0.0);
 
-  let shearCoord = pBody * 0.48 + vec3f(0.17, 0.31, 0.53);
+  // Exact Greenstein & Hartke (1983) dipolar anisotropic electron thermal conduction
+  let cos2M = cosM * cosM;
+  let cos2B = (4.0 * cos2M) / (1.0 + 3.0 * cos2M);
+  let anisoTemp = pow(max(cos2B + 0.26 * (1.0 - cos2B), 1e-4), 0.25);
+
+  // Silky magnetized atmospheric plasma shimmer, meridian thermal striations & loop footpoint glow
+  let shearCoord = pBody * 0.36 + vec3f(0.17, 0.31, 0.53);
   let nCrust = textureSampleLevel(uVolumeNoise, sVolume, shearCoord, 0.0);
-  let fineCoord = pBody * 1.12 + (nCrust.rgb - vec3f(0.5)) * 0.42
-                + vec3f(0.16 * twistShear * signCosM * pBody.z, 0.0, -0.16 * twistShear * signCosM * pBody.x);
+  let fineCoord = pBody * 0.85 + (nCrust.rgb - vec3f(0.5)) * 0.26
+                + vec3f(0.18 * twistShear * signCosM * pBody.z, 0.0, -0.18 * twistShear * signCosM * pBody.x);
   let nFine = textureSampleLevel(uVolumeNoise, sVolume, fineCoord, 0.0);
+  let microCoord = pBody * 2.4 + vec3f(0.0, simTime * 0.08, 0.0);
+  let nMicro = textureSampleLevel(uVolumeNoise, sVolume, microCoord, 0.0);
+  let meridianWave = 0.5 + 0.5 * sin(phiM * 7.0 + twistShear * 2.2 * cosM + nCrust.g * 3.4);
+  let meridianFine = 0.5 + 0.5 * cos(phiM * 15.0 - twistShear * 3.1 * cosM + nFine.r * 4.2);
+  let meridianStreak = mix(1.0, 0.84 + 0.24 * meridianWave * (0.55 + 0.45 * meridianFine), sinM);
+  let plasmaShimmer = (0.82 + 0.16 * nCrust.r + 0.14 * nFine.g + 0.12 * nMicro.a) * meridianStreak;
+  let footGlow = smoothstep(0.56, 0.90, nFine.g * (0.50 + 0.50 * nMicro.r)) * sinM * (0.35 + 0.65 * meridianWave);
 
   let sinThetaPc = clamp(inverseSqrt(max(rLightCylVis, 1.5)), 0.16, 0.62);
-  let sinPerturb = sinM + (nFine.r - 0.5) * 0.042 * sinM;
+  let sinPerturb = sinM + (nFine.r - 0.5) * 0.028 * sinM;
 
-  let capCore = 1.0 - smoothstep(sinThetaPc * 0.28, sinThetaPc * 0.96, sinPerturb);
-  let capIn = sinPerturb / max(sinThetaPc * 0.48, 0.06);
+  let crownNorm = sinPerturb / max(sinThetaPc * 1.75, 0.12);
+  let capCrown = exp(-min(crownNorm * crownNorm, 40.0));
+  let capCore = 1.0 - smoothstep(sinThetaPc * 0.12, sinThetaPc * 0.96, sinPerturb);
+  let capIn = sinPerturb / max(sinThetaPc * 0.50, 0.06);
   let capInner = exp(-min(capIn * capIn, 40.0));
-  let capRimDist = (sinPerturb - sinThetaPc * 0.96) / max(sinThetaPc * 0.20, 0.045);
+  let capRimDist = (sinPerturb - sinThetaPc * 0.96) / max(sinThetaPc * 0.13, 0.028);
   let capRim = exp(-min(capRimDist * capRimDist, 40.0));
-  let auroralMod = 0.58 + 0.42 * sin(2.0 * phiM + twistShear * 1.45 * signCosM + nCrust.g * 3.4);
 
-  let latThermal = 0.22 + 0.78 * pow(max(absCosM, 1e-5), 1.45);
-  let crustGran = 0.54 + 0.68 * nCrust.r * (0.55 + 0.45 * nFine.b);
+  let driftPhi = phiM - simTime * 0.65 * signCosM;
+  let sparkWave = 0.5 + 0.5 * sin(5.0 * driftPhi + twistShear * 1.8 * signCosM + nCrust.g * 3.8);
+  let sparkFine = 0.5 + 0.5 * cos(11.0 * driftPhi - 2.4 * twistShear * signCosM + nFine.a * 4.5);
+  let auroralSparks = 0.35 + 0.65 * (sparkWave * sparkWave) * (0.45 + 0.55 * sparkFine);
 
-  let lineA = 1.0 - abs(nCrust.r * 2.0 - 1.0);
-  let lineB = 1.0 - abs(nFine.r * 2.0 - 1.0);
-  let pA = clamp(lineA, 1e-5, 1.0);
-  let pB = clamp(lineB, 1e-5, 1.0);
-  let faultNet = max(pow(pA, 8.0), 0.78 * pow(pB, 10.0) * smoothstep(0.28, 0.78, nCrust.g));
-  let faultMod = 0.55 + 0.45 * nFine.g;
-  let faultHalo = smoothstep(0.14, 0.68, faultNet) * faultMod;
-  let faultCore = smoothstep(0.48, 0.92, faultNet) * faultMod;
-  let crackDrive = pow(max(magnetarCrackGlow, 1e-5), 1.35) * (0.65 + 0.35 * clamp(twistShear, 0.0, 2.5));
+  // Azimuthally-sheared branching magnetar plasma fault ribbons
+  var faultHalo : f32 = 0.0;
+  var faultCore : f32 = 0.0;
+  var crackDrive : f32 = 0.0;
+  if (magnetarCrackGlow > 0.001) {
+    let arcCoordA = vec3f(
+      cos(phiM * 2.0 + twistShear * 1.4 * cosM) * 0.42 + pBody.x * 0.35,
+      sin(phiM * 2.0 + twistShear * 1.4 * cosM) * 0.42 + pBody.z * 0.35,
+      cosM * 1.65 + 0.25 * nCrust.r
+    );
+    let nArcA = textureSampleLevel(uVolumeNoise, sVolume, arcCoordA, 0.0);
+    let arcCoordB = pBody * 1.65 + (nArcA.rgb - vec3f(0.5)) * 0.55
+                  + vec3f(0.35 * twistShear * signCosM * pBody.z, 0.0, -0.35 * twistShear * signCosM * pBody.x);
+    let nArcB = textureSampleLevel(uVolumeNoise, sVolume, arcCoordB, 0.0);
+
+    let shearBelt = 0.22 + 0.78 * (4.0 * cos2M * (1.0 - cos2M));
+    let rA = clamp(nArcA.g, 1e-5, 1.0);
+    let rB = clamp(nArcB.g * 0.72 + nArcB.a * 0.42, 1e-5, 1.0);
+    let arcRibbon = pow(rA, 2.8) * pow(rB, 2.2) * (0.45 + 0.55 * nArcA.a);
+    let faultNet = arcRibbon * shearBelt * 2.2;
+
+    faultHalo = smoothstep(0.06, 0.36, faultNet);
+    faultCore = smoothstep(0.24, 0.62, faultNet);
+    crackDrive = pow(magnetarCrackGlow, 1.25) * (0.65 + 0.35 * clamp(twistShear, 0.0, 2.5));
+  }
 
   let g = computeCrustFrequencyShift(posHit, f, pHit, pt, a, a2, betaEq);
 
   let vRayDir = select(surfNormal, normalize(velHit), dot(velHit, velHit) > 1e-10);
   let muLimb = clamp(dot(surfNormal, -vRayDir), 0.0, 1.0);
-  let limbDark = mix(0.30, 1.0, pow(max(muLimb, 1e-5), 0.58));
-  let atmoRim = pow(max(1.0 - muLimb, 1e-5), 4.2) * 0.12;
+  let limbDark = mix(0.32, 1.0, pow(max(muLimb, 1e-5), 0.45));
+  let atmoRim = pow(max(1.0 - muLimb, 1e-5), 2.8) * 1.35;
 
-  let T_crust = crustTempK * (0.52 + 0.56 * latThermal) * crustGran;
+  let T_crust = crustTempK * anisoTemp * plasmaShimmer;
   let crustCol = sampleBlackbody(mapPulsarTempToLut(T_crust * g));
-  let crustLum = 0.38 * pow(clamp(T_crust / 1.4e6, 0.30, 3.2), 1.35);
-  let ironTint = vec3f(0.055, 0.070, 0.115);
-  let crustEmit = mix(ironTint, crustCol * crustLum, clamp(0.35 + 0.65 * latThermal, 0.0, 1.0));
+  let crustLum = 1.42 * pow(clamp(T_crust / 1.4e6, 0.35, 3.0), 1.22);
+  let eqSapphire = vec3f(0.24, 0.56, 1.00);
+  let hiIceCyan = crustCol * vec3f(0.72, 0.92, 1.20);
+  let latBlend = smoothstep(0.70, 0.99, anisoTemp);
+  let crustTint = mix(eqSapphire, hiIceCyan, latBlend);
+  let latGain = mix(0.92, 1.95, latBlend);
+  let crustEmit = crustTint * (crustLum * latGain) + hiIceCyan * (footGlow * crustLum * 0.72);
 
-  let haloCol = vec3f(1.00, 0.24, 0.03);
-  let coreCrackCol = mix(sampleBlackbody(mapPulsarTempToLut(max(crustTempK * 2.1, 3.2e6) * g)), vec3f(1.00, 0.72, 0.20), 0.55);
-  let crackEmit = (haloCol * (faultHalo * 2.6) + coreCrackCol * (faultCore * 8.5)) * crackDrive;
+  let haloCol = vec3f(0.46, 0.22, 1.00);
+  let coreCrackCol = mix(sampleBlackbody(mapPulsarTempToLut(max(crustTempK * 2.8, 6.0e6) * g)), vec3f(0.90, 0.97, 1.00), 0.65);
+  let crackEmit = (haloCol * (faultHalo * 5.2) + coreCrackCol * (faultCore * 18.0)) * crackDrive;
 
-  let T_cap = polarCapTempK * (0.78 + 0.42 * capInner + 0.18 * nFine.g);
+  let sparkCore = 0.65 + 0.55 * nMicro.g * (0.55 + 0.45 * auroralSparks);
+  let T_cap = polarCapTempK * (0.85 + 0.45 * capInner + 0.16 * nFine.g);
   let capCol = sampleBlackbody(mapPulsarTempToLut(T_cap * g));
-  let capStr = (capCore * 0.85 + capInner * 1.25) * (0.80 + 0.35 * nFine.g);
-  let pairRimCol = mix(vec3f(0.16, 0.60, 1.00), vec3f(0.58, 0.90, 1.00), auroralMod);
-  let capEmit = capCol * (capStr * 16.5) + pairRimCol * (capRim * auroralMod * 9.5);
+  let crownTint = mix(vec3f(0.22, 0.72, 1.00), capCol, 0.55);
+  let capStr = (capCore * 1.05 + capInner * 2.10) * sparkCore;
+  let pairRimCol = mix(vec3f(0.28, 0.82, 1.00), vec3f(0.92, 0.98, 1.00), auroralSparks);
+  let capEmit = crownTint * (capCrown * 3.2)
+              + capCol * (capStr * 15.5)
+              + pairRimCol * (capRim * auroralSparks * 10.5);
 
   let g2 = g * g;
   let g4 = g2 * g2;
-  let relFlux = g4 / (1.0 + 0.08 * g4);
+  let relFlux = g4 / (1.0 + 0.05 * g4);
 
   let totalSurf = (crustEmit + crackEmit + capEmit) * limbDark * relFlux
-                + vec3f(0.30, 0.70, 1.00) * (atmoRim * g * (0.7 + 0.5 * crackDrive));
+                + vec3f(0.42, 0.84, 1.00) * (atmoRim * g * (0.95 + 0.45 * crackDrive));
   return max(totalSurf, vec3f(0.0));
 }
 
@@ -494,104 +594,211 @@ fn shadeNeutronStarSurface(
 // 4. VOLUMETRIC MAGNETOSPHERE, LIGHTHOUSE BEAMS, PWN TORUS & POLAR JETS
 // ============================================================================
 
-struct VolAccum {
-  emission   : vec3f,
-  extinction : f32,
-};
-
 fn evalPulsarVolume(
   pos: vec3f,
-  vel: vec3f,
+  toCamDir: vec3f,
   r: f32,
+  invR: f32,
   simTime: f32,
-  betaEq: f32,
   spinPhase: f32,
-  mu0: vec3f,
-  em1_0: vec3f,
-  em2_0: vec3f,
+  sinObl: f32,
+  cosObl: f32,
   twistShear: f32,
+  twistFactor: f32,
   rLightCylVis: f32,
+  invSepW: f32,
+  retardFactor: f32,
+  rMagLoopMax: f32,
+  rSheetMin: f32,
+  rSheetMax: f32,
+  rMagOuter: f32,
   plasmaDensity: f32,
   beamIntensity: f32,
   beamConeHalfAngle: f32,
   cosMaxCone: f32,
   pwnVisibility: f32,
-  pwnJetPower: f32,
+  jetAmp: f32,
   spinVisualSpeed: f32,
-  camDistFade: f32
-) -> VolAccum {
-  var va: VolAccum;
-  va.emission = vec3f(0.0);
-  va.extinction = 0.0;
+  camDistFade: f32,
+  segCorotBeam: f32,
+  segNeedsMag: bool,
+  segNeedsBeam: bool,
+  segNeedsPwn: bool,
+  segNeedsJet: bool
+) -> vec4f {
+  var emission = vec3f(0.0);
+  var nearMagFlag : f32 = 0.0;
 
-  if (r <= 1.025) {
-    return va;
+  let needMag  = segNeedsMag && (r < rMagOuter);
+  let needBeam = segNeedsBeam && (r < 18.0);
+  var checkMagOrBeam = needMag;
+  if (!checkMagOrBeam && needBeam) {
+    let absCosSpin = abs(pos.y) * invR;
+    let sinSpin = sqrt(max(1.0 - absCosSpin * absCosSpin, 0.0));
+    let maxPossibleCosM = absCosSpin * abs(cosObl) + sinSpin * abs(sinObl);
+    checkMagOrBeam = (maxPossibleCosM > cosMaxCone);
   }
 
-  let needMag  = (plasmaDensity > 0.001 && r < rLightCylVis * 1.18);
-  let needBeam = (beamIntensity > 0.001 && r < 18.0);
-
-  if (needMag || needBeam) {
-    let deltaPhi = -(max(r - 1.0, 0.0) / max(rLightCylVis, 1.5)) * (0.85 + 0.55 * betaEq);
+  if (checkMagOrBeam) {
+    let deltaPhi = -max(r - 1.0, 0.0) * retardFactor;
     let phaseRet = spinPhase + deltaPhi;
-    let pRot = rotateY(pos, -phaseRet);
+    let cRet = cos(phaseRet);
+    let sRet = sin(phaseRet);
+    let pRot = vec3f(cRet * pos.x - sRet * pos.z, pos.y, sRet * pos.x + cRet * pos.z);
 
-    let zM = dot(pRot, mu0);
-    let xM = dot(pRot, em1_0);
-    let yM = dot(pRot, em2_0);
+    let zM = pRot.x * sinObl + pRot.y * cosObl;
+    let xM = pRot.x * cosObl - pRot.y * sinObl;
+    let yM = -pRot.z;
     let rhoM2 = xM * xM + yM * yM;
-    let r2M = max(dot(pRot, pRot), 1e-6);
-    let rM = sqrt(r2M);
-    let sin2Theta = max(rhoM2 / r2M, 1e-5);
-    let cosThetaM = zM / max(rM, 1e-5);
-    let L = rM / sin2Theta;
+    let sin2Theta = max(rhoM2 * invR * invR, 1e-5);
+    let cosThetaM = zM * invR;
+    let L = r / sin2Theta;
+    nearMagFlag = select(0.0, 1.0, L < rMagLoopMax * 1.18);
 
-    // 4A. Closed Twisted Dipole Magnetosphere
-    if (needMag && L > 1.04 && L < rLightCylVis * 1.14) {
-      let phiM = select(0.0, atan2(yM, xM), rhoM2 > 1e-10);
-      let phiTwist = phiM - twistShear * cosThetaM * (1.0 - 1.0 / max(L, 1.0)) * 2.2;
-      let logL = log(max(L, 1.01));
+    let inCorona = segNeedsMag && (r < 2.05);
+    let inLoops  = needMag && (L > 1.04 && L < rMagLoopMax);
+    let inSheet  = segNeedsMag && (r > rSheetMin && r < rSheetMax && abs(cosThetaM) < 0.097);
 
-      let flowMag = simTime * (0.35 + 0.45 * spinVisualSpeed);
-      let qMag = vec3f(
-        cos(phiTwist) * (0.42 + 0.14 * logL),
-        sin(phiTwist) * (0.42 + 0.14 * logL),
-        cosThetaM * 1.35 - flowMag
-      );
-      let nMag = textureSampleLevel(uVolumeNoise, sVolume, qMag, 0.0);
-
-      let tA0 = clamp(0.5 + 0.5 * cos(7.0 * phiTwist + 1.6 * nMag.r), 0.0, 1.0);
-      let tA2 = tA0 * tA0;
-      let tubeA = tA2 * tA2 * tA2;
-      let tB0 = clamp(0.5 + 0.5 * cos(13.0 * phiTwist - 2.2 * logL + 2.0 * nMag.b), 0.0, 1.0);
-      let tB2 = tB0 * tB0;
-      let tubeB = tB2 * tB2 * tB0;
-      let sB0 = max(0.5 + 0.5 * sin(logL * 10.5 + 1.8 * nMag.r), 1e-5);
-      let shellBands = sB0 * sB0 * sB0 * sqrt(sB0);
-      let sepDist = (L - rLightCylVis * 0.88) / max(rLightCylVis * 0.14, 0.40);
-      let sepEnv = exp(-min(sepDist * sepDist * 2.2, 40.0));
-
-      let lEnv = smoothstep(1.04, 1.25, L) * (1.0 - smoothstep(rLightCylVis * 0.86, rLightCylVis * 1.12, L));
-      let rFade = smoothstep(1.03, 1.16, rM) / (1.0 + 0.42 * pow(max(rM - 1.0, 1e-5), 1.65));
-      let tubeStruct = (1.55 * tubeA * shellBands + 0.65 * tubeB * shellBands + 0.85 * sepEnv * (0.35 + 0.65 * tubeA))
-                     * (0.28 + 1.10 * nMag.g * nMag.g + 0.40 * nMag.a);
-      let magDens = lEnv * rFade * tubeStruct * plasmaDensity * camDistFade;
-
-      let cCyan   = vec3f(0.10, 0.58, 1.00);
-      let cViolet = vec3f(0.42, 0.16, 1.00);
-      let cIce    = vec3f(0.66, 0.92, 1.00);
-      var magCol = mix(cViolet, cCyan, smoothstep(rLightCylVis, 1.4, L));
-      magCol = mix(magCol, cIce, clamp(tubeA * shellBands * 0.72 + sepEnv * 0.35, 0.0, 1.0));
-
-      let twistFactor = smoothstep(0.55, 1.85, twistShear);
-      if (twistFactor > 0.001) {
-        let twistCore = pow(clamp(tubeA * (0.5 + 0.5 * nMag.g) + sepEnv * 0.35, 1e-5, 1.0), 1.35);
-        let twistGold = mix(vec3f(1.00, 0.52, 0.08), vec3f(1.00, 0.86, 0.42), twistCore);
-        magCol = mix(magCol, twistGold, twistFactor * clamp(0.40 + 0.60 * twistCore, 0.0, 1.0));
+    if (inCorona || inLoops || inSheet) {
+      // 4A-0. Optically-Thin Relativistic Magnetized Inner Corona (1.01 < r < 2.05)
+      if (inCorona) {
+        let coronaRad = smoothstep(1.01, 1.035, r) * exp(-min((r - 1.0) * 5.4, 40.0));
+        let poleBoost = 0.75 + 0.55 * abs(cosThetaM);
+        let coronaDens = coronaRad * poleBoost * (0.18 + 0.12 * plasmaDensity) * segCorotBeam * camDistFade;
+        let coronaCol = mix(vec3f(0.18, 0.64, 1.00), vec3f(0.84, 0.96, 1.00), exp(-min((r - 1.0) * 9.0, 40.0)));
+        emission += coronaCol * (coronaDens * 0.48);
       }
 
-      va.emission += magCol * (magDens * 0.12);
-      va.extinction += magDens * 0.025;
+      // 4A. Crisp Field-Aligned Dipole / Twisted-Dipole Flux Loops
+      if (inLoops) {
+        let logL = log(L);
+        let sepDist = (L - rLightCylVis * 0.90) * invSepW;
+        let sepSq = sepDist * sepDist * 2.5;
+        let sBApprox = sin(logL * 9.5 + 0.225);
+        let lEnv = smoothstep(1.04, 1.24, L) * (1.0 - smoothstep(rLightCylVis * 0.88, rMagLoopMax, L));
+        let rFade = smoothstep(1.02, 1.15, r) / (1.0 + 0.36 * pow(max(r - 1.0, 1e-5), 1.55));
+
+        let cIce    = vec3f(0.68, 0.94, 1.00);
+        let cCyan   = vec3f(0.06, 0.44, 1.00);
+        let cViolet = vec3f(0.32, 0.10, 0.98);
+        var magCol = mix(cViolet, cCyan, smoothstep(rLightCylVis, 1.35, L));
+
+        if (sBApprox < -0.525 && sepSq >= 12.0) {
+          let magDens = lEnv * rFade * 0.00555 * plasmaDensity * segCorotBeam * camDistFade;
+          if (twistFactor > 0.001) {
+            magCol = mix(magCol, vec3f(0.48, 0.14, 1.00), twistFactor * 0.45);
+          }
+          emission += magCol * (magDens * 0.125);
+        } else {
+          let invL = sin2Theta * invR;
+          let dTwist = twistShear * cosThetaM * (1.0 - invL) * 2.2;
+          let hasAz = rhoM2 > 1e-10;
+          let invRhoM = select(1.0, inverseSqrt(max(rhoM2, 1e-10)), hasAz);
+          let cPhi = select(1.0, xM * invRhoM, hasAz);
+          let sPhi = select(0.0, yM * invRhoM, hasAz);
+          let cTw = cos(dTwist);
+          let sTw = sin(dTwist);
+          let cTwist = cPhi * cTw + sPhi * sTw;
+          let sTwist = sPhi * cTw - cPhi * sTw;
+
+          let qRad = 0.55 + 0.22 * logL;
+          let flowMag = simTime * (0.35 + 0.45 * spinVisualSpeed);
+          let qMag = vec3f(
+            cTwist * qRad,
+            sTwist * qRad,
+            cosThetaM * 1.85 - flowMag
+          );
+          let nMag = textureSampleLevel(uVolumeNoise, sVolume, qMag, 0.0);
+
+          let sB0 = clamp(0.5 + 0.5 * sin(logL * 9.5 + 0.45 * nMag.r), 0.0, 1.0);
+          let sepEnv = select(0.0, exp(-sepSq), sepSq < 12.0);
+
+          var filamentCore : f32 = 0.0;
+          if (sB0 > 0.35 || sepEnv > 1e-4) {
+            let c2 = cTwist * cTwist - sTwist * sTwist;
+            let s2 = 2.0 * cTwist * sTwist;
+            let c4 = c2 * c2 - s2 * s2;
+            let s4 = 2.0 * c2 * s2;
+            let c8 = c4 * c4 - s4 * s4;
+            let s8 = 2.0 * c4 * s4;
+            let c10 = c8 * c2 - s8 * s2;
+            let s10 = s8 * c2 + c8 * s2;
+            let c18 = c10 * c8 - s10 * s8;
+            let s18 = s10 * c8 + c10 * s8;
+
+            let angB = 0.65 * nMag.b - 1.4 * logL;
+            let fB = clamp(0.5 + 0.5 * (c18 * cos(angB) - s18 * sin(angB)), 0.0, 1.0);
+            let fB2 = fB * fB;
+            let fB4 = fB2 * fB2;
+            let tubeB = fB4 * fB4 * fB4;
+
+            var shellBands : f32 = 0.0;
+            var tubeA : f32 = 0.0;
+            if (sB0 > 0.35) {
+              let sB2 = sB0 * sB0;
+              shellBands = sB2 * sB2 * sB2 * sB2 * sB2;
+              let A = 0.55 * nMag.r;
+              let A2 = A * A;
+              let cosA = 1.0 - A2 * (0.5 - A2 * 0.0416667);
+              let sinA = A * (1.0 - A2 * (0.1666667 - A2 * 0.0083333));
+              let fA = clamp(0.5 + 0.5 * (c10 * cosA - s10 * sinA), 0.0, 1.0);
+              let fA2 = fA * fA;
+              let fA4 = fA2 * fA2;
+              tubeA = fA4 * fA4 * fA4 * fA2;
+            }
+
+            filamentCore = min(
+              1.85 * tubeA * shellBands + 0.85 * tubeB * shellBands + 1.10 * sepEnv * (0.25 + 0.95 * tubeB),
+              2.5
+            );
+          }
+
+          let tubeStruct = (0.006 + filamentCore * (0.45 + 0.75 * nMag.a)) * (0.65 + 0.55 * nMag.g);
+          let magDens = lEnv * rFade * tubeStruct * plasmaDensity * segCorotBeam * camDistFade;
+
+          magCol = mix(magCol, cIce, min(filamentCore * 0.55, 1.0));
+
+          if (twistFactor > 0.001) {
+            let twistCore = select(0.0, pow(min(filamentCore * 0.60, 1.0), 1.25), filamentCore > 1e-4);
+            let jViolet = vec3f(0.48, 0.14, 1.00);
+            let jWhiteViolet = vec3f(0.86, 0.82, 1.00);
+            let twistCol = mix(jViolet, jWhiteViolet, twistCore);
+            magCol = mix(magCol, twistCol, twistFactor * (0.45 + 0.55 * twistCore));
+          }
+
+          emission += magCol * (magDens * 0.125);
+        }
+      }
+
+      // 4A-2. Delicate Retarded Equatorial Current Sheet & Y-Point Reconnection
+      if (inSheet) {
+        let sheetRatio = cosThetaM * (1.0 / 0.042);
+        let sheetProf = exp(-sheetRatio * sheetRatio);
+        if (sheetProf > 0.005) {
+          let yPtDist = (r - 0.96 * rLightCylVis) / max(0.14 * rLightCylVis, 0.35);
+          let yPoint = exp(-min(yPtDist * yPtDist, 40.0)) * 1.45;
+          let sheetEnv = smoothstep(rSheetMin, 0.94 * rLightCylVis, r)
+                       * (1.0 - smoothstep(rSheetMax * 0.72, rSheetMax, r))
+                       / (1.0 + 0.18 * max(r - rSheetMin, 0.0));
+
+          let hasAzS = rhoM2 > 1e-10;
+          let invRhoS = select(1.0, inverseSqrt(max(rhoM2, 1e-10)), hasAzS);
+          let cPhiS = select(1.0, xM * invRhoS, hasAzS);
+          let sPhiS = select(0.0, yM * invRhoS, hasAzS);
+          let flowSheet = r * 0.32 - simTime * (0.75 + 0.95 * spinVisualSpeed);
+          let nSheet = textureSampleLevel(uVolumeNoise, sVolume, vec3f(cPhiS * 0.65, sPhiS * 0.65, flowSheet), 0.0);
+          let plasmoids = 0.35 + 1.15 * pow(max(nSheet.g, 1e-5), 2.2) * (0.5 + 0.5 * nSheet.a);
+
+          let sheetDens = sheetEnv * sheetProf * (plasmoids + yPoint * (0.65 + 0.55 * nSheet.g))
+                        * plasmaDensity * segCorotBeam * camDistFade;
+          let sheetCol = mix(
+            vec3f(0.20, 0.30, 0.98),
+            vec3f(0.68, 0.92, 1.00),
+            clamp(sheetProf * 0.75 + yPoint * 0.45, 0.0, 1.0)
+          );
+          emission += sheetCol * (sheetDens * 0.045);
+        }
+      }
     }
 
     // 4B. Sweeping Lighthouse Synchrotron / Curvature Beams around +-muHat
@@ -600,138 +807,168 @@ fn evalPulsarVolume(
       if (absCosB > cosMaxCone) {
         let sinB = sqrt(max(1.0 - absCosB * absCosB, 0.0));
         let thetaB = atan2(sinB, absCosB);
-        let thetaCone = beamConeHalfAngle * mix(0.58, 1.04, smoothstep(1.0, 4.2, rM));
-        let coneW = max(thetaCone * 0.24, 0.038);
-        let coreW = max(thetaCone * 0.26, 0.042);
+        let thetaCone = beamConeHalfAngle * mix(0.56, 1.04, smoothstep(1.0, 4.2, r));
+        let coneW = max(thetaCone * 0.18, 0.030);
+        let coreW = max(thetaCone * 0.22, 0.036);
 
-        if (thetaB < thetaCone + 3.2 * coneW) {
+        if (thetaB < thetaCone + 3.4 * coneW) {
           let cd = (thetaB - thetaCone) / coneW;
           let hollowCone = exp(-min(cd * cd, 40.0));
           let kd = thetaB / coreW;
-          let coreBeam = exp(-min(kd * kd, 40.0)) * 0.90;
+          let coreBeam = exp(-min(kd * kd, 40.0)) * 0.92;
 
-          let radialOnset = smoothstep(1.04, 1.38, rM)
-                          * (1.0 - smoothstep(10.0, 18.0, rM))
-                          / (1.0 + 0.25 * rM * rM);
+          let radialOnset = smoothstep(1.01, 1.18, r)
+                          * (1.0 - smoothstep(10.5, 18.0, r))
+                          / (1.0 + 0.22 * r * r);
 
-          let phiB = select(0.0, atan2(yM, xM), rhoM2 > 1e-10);
-          let flowOut = rM * 0.24 - simTime * (0.85 + 1.15 * spinVisualSpeed);
-          let qBeam = vec3f(cos(phiB) * 0.55, sin(phiB) * 0.55, flowOut);
+          let hasAzB = rhoM2 > 1e-10;
+          let invRhoB = select(1.0, inverseSqrt(max(rhoM2, 1e-10)), hasAzB);
+          let cPhiB = select(1.0, xM * invRhoB, hasAzB);
+          let sPhiB = select(0.0, yM * invRhoB, hasAzB);
+          let phiB = select(0.0, atan2(yM, xM), hasAzB);
+          let flowOut = r * 0.28 - simTime * (0.95 + 1.25 * spinVisualSpeed);
+          let qBeam = vec3f(cPhiB * 0.68, sPhiB * 0.68, flowOut);
           let nBeam = textureSampleLevel(uVolumeNoise, sVolume, qBeam, 0.0);
-          let streakCos = clamp(0.5 + 0.5 * cos(6.0 * phiB + rM * 0.45 - simTime * 2.4), 0.0, 1.0);
-          let subPulses = (0.28 + 0.92 * nBeam.g * nBeam.g) * (0.45 + 0.55 * streakCos * streakCos);
+          let streakCos = clamp(0.5 + 0.5 * cos(8.0 * phiB + 0.6 * nBeam.r + r * 0.35 - simTime * 2.2), 0.0, 1.0);
+          let sc2 = streakCos * streakCos;
+          let subPulses = (0.30 + 0.90 * nBeam.g * nBeam.g) * (0.40 + 0.60 * sc2 * sc2) * (0.65 + 0.35 * nBeam.a);
 
           let signMu = select(-1.0, 1.0, cosThetaM >= 0.0);
-          let muRetLab = rotateY(signMu * mu0, phaseRet);
-          let rHatLab = pos / max(r, 1e-5);
+          let muRetLab = signMu * vec3f(cRet * sinObl, cosObl, -sRet * sinObl);
+          let rHatLab = pos * invR;
           let beamDir = normalize(mix(muRetLab, rHatLab, 0.42));
-          let toCamDir = select(-rHatLab, -normalize(vel), dot(vel, vel) > 1e-10);
           let cosForward = dot(beamDir, toCamDir);
-          let dopplerBeam = 1.0 / max(1.0 - 0.54 * cosForward, 0.34);
-          let beaming = pow(clamp(dopplerBeam, 0.45, 3.0), 1.55);
+          let dopplerBeam = 1.0 / max(1.0 - 0.62 * cosForward, 0.26);
+          let beaming = pow(clamp(dopplerBeam, 0.35, 3.8), 1.75);
 
-          var beamCol = mix(vec3f(0.42, 0.22, 1.00), vec3f(0.16, 0.68, 1.00), clamp(hollowCone + coreBeam, 0.0, 1.0));
-          beamCol = mix(beamCol, vec3f(0.86, 0.95, 1.00), smoothstep(1.5, 3.6, beaming) * 0.80);
+          var beamCol = mix(vec3f(0.32, 0.16, 1.00), vec3f(0.12, 0.68, 1.00), clamp(hollowCone + coreBeam, 0.0, 1.0));
+          beamCol = mix(beamCol, vec3f(0.92, 0.98, 1.00), smoothstep(1.15, 3.0, beaming) * 0.88);
 
-          let beamVal = beamIntensity * radialOnset * (hollowCone * 1.05 + coreBeam * 0.95)
+          let beamVal = beamIntensity * radialOnset * (hollowCone * 1.10 + coreBeam * 0.95)
                       * subPulses * beaming * camDistFade;
-          va.emission += beamCol * (beamVal * 0.20);
-          va.extinction += beamVal * 0.005;
+          emission += beamCol * (beamVal * 0.34);
         }
       }
     }
   }
 
-  // 4C. Pulsar Wind Nebula (PWN) Equatorial Synchrotron Torus & Outward Shock Wisps
-  if (pwnVisibility > 0.001 && r > 2.15 && r < 11.8) {
-    let hTorus = 0.15 + 0.068 * r;
+  // 4C. Chandra/Hubble-Faithful PWN Equatorial Termination Shock Ring & Outward Synchrotron Wisps
+  if (segNeedsPwn && r > 2.55 && r < 8.8 && abs(pos.y) < 1.32) {
+    let hRing = 0.12 + 0.03 * r;
     let absY = abs(pos.y);
-    if (absY < hTorus * 2.8) {
-      let yT = absY / max(hTorus, 1e-4);
-      let vertTorus = exp(-min(yT * yT * 1.75, 40.0));
-      let dr = (yT - 0.56) / 0.32;
-      let doubleRing = 0.68 + 0.55 * exp(-min(dr * dr, 40.0));
-      let radEnv = smoothstep(2.40, 3.30, r)
-                 * (1.0 - smoothstep(7.8, 11.5, r))
-                 / (1.0 + 0.065 * r * r);
-      let ts = (r - 3.15) / 0.48;
-      let termShock = exp(-min(ts * ts * 1.4, 40.0)) * 1.15;
+    if (absY < hRing * 3.4) {
+      let yT = absY / max(hRing, 1e-4);
+      let vertTorus = exp(-min(yT * yT * 1.85, 40.0));
+      let dr = (yT - 0.62) / 0.30;
+      let doubleRing = 0.62 + 0.58 * exp(-min(dr * dr, 40.0));
 
-      let rotAngle = 0.14 * simTime * (0.4 + spinVisualSpeed) - 0.22 * r;
+      let radEnv = smoothstep(2.55, 3.15, r)
+                 * (1.0 - smoothstep(6.0, 8.8, r))
+                 / (1.0 + 0.055 * r * r);
+      let tsDist = (r - 3.25) / 0.20;
+      let termShock = exp(-min(tsDist * tsDist, 40.0)) * 2.4;
+
+      let rhoXZ2 = pos.x * pos.x + pos.z * pos.z;
+      let invRhoXZ = inverseSqrt(max(rhoXZ2, 1e-12));
+      let cAz = pos.x * invRhoXZ;
+      let sAz = pos.z * invRhoXZ;
+      let rotAngle = 0.18 * simTime * (0.4 + spinVisualSpeed) - 0.28 * r;
       let cr = cos(rotAngle);
       let sr = sin(rotAngle);
-      let rotXZ = vec2f(cr * pos.x - sr * pos.z, sr * pos.x + cr * pos.z);
-      let nPwn  = textureSampleLevel(uVolumeNoise, sVolume, vec3f(rotXZ * 0.19, pos.y * 0.32), 0.0);
+      let cp = cAz * cr - sAz * sr;
+      let sp = sAz * cr + cAz * sr;
 
-      let wispPhase = r * 2.35 - simTime * (0.55 + 0.75 * spinVisualSpeed) + (nPwn.r - 0.5) * 2.6;
-      let wisps = pow(max(0.5 + 0.5 * sin(wispPhase), 1e-5), 4.5);
-      let filaments = (0.18 + 1.35 * pow(max(nPwn.g, 1e-5), 1.8)) * (0.45 + 0.75 * nPwn.a);
+      let pwnCoordA = vec3f(cp * 0.32 + r * 0.09, sp * 0.32 + r * 0.09, pos.y * 0.65);
+      let pwnCoordB = vec3f(cp * 0.72 - r * 0.16, sp * 0.72 + r * 0.16, pos.y * 1.15);
+      let nPwnA = textureSampleLevel(uVolumeNoise, sVolume, pwnCoordA, 0.0);
+      let nPwnB = textureSampleLevel(uVolumeNoise, sVolume, pwnCoordB, 0.0);
+
+      let wispPhase = r * 2.55 - simTime * (0.55 + 0.75 * spinVisualSpeed) + (nPwnA.r - 0.5) * 1.45;
+      let w0 = max(0.5 + 0.5 * sin(wispPhase), 0.0);
+      let w2 = w0 * w0;
+      let w4 = w2 * w2;
+      let wisps = w4 * w2 * w0 * sqrt(max(w0, 1e-5));
+      let filaments = (0.28 + 1.25 * nPwnA.g * nPwnA.g) * (0.45 + 0.75 * nPwnB.a);
+      let tsKnots = 0.55 + 0.95 * pow(max(nPwnB.g, 1e-5), 1.6);
+
+      // Authentic post-shock relativistic outflow Doppler asymmetry (beta_PWN = 0.42, capped cleanly)
+      let radEqDir = vec3f(cAz, 0.0, sAz);
+      let cosOut = dot(radEqDir, toCamDir);
+      let dopPwn = 1.0 / max(1.0 - 0.42 * cosOut, 0.45);
+      let pwnBeam = pow(clamp(dopPwn, 0.45, 1.85), 1.75);
+
       let torusDens = pwnVisibility * radEnv * vertTorus * doubleRing
-                    * (0.14 * filaments + 1.25 * wisps * filaments + termShock * (0.45 + 0.85 * nPwn.g))
-                    * camDistFade;
+                    * (0.01 * filaments + 1.55 * wisps * filaments + termShock * tsKnots)
+                    * pwnBeam * camDistFade;
 
-      var torusCol = mix(vec3f(0.36, 0.20, 0.92), vec3f(0.12, 0.56, 1.00), smoothstep(10.2, 3.2, r));
-      torusCol = mix(torusCol, vec3f(0.60, 0.88, 1.00), clamp(wisps * 0.68 + termShock * 0.42, 0.0, 1.0));
+      var torusCol = mix(vec3f(0.24, 0.12, 0.95), vec3f(0.06, 0.56, 1.00), smoothstep(8.2, 3.1, r));
+      torusCol = mix(
+        torusCol,
+        vec3f(0.82, 0.96, 1.00),
+        clamp(wisps * 0.65 + termShock * 0.45 + smoothstep(1.25, 1.85, pwnBeam) * 0.35, 0.0, 1.0)
+      );
 
-      va.emission += torusCol * (torusDens * 0.09);
-      va.extinction += torusDens * 0.018;
+      emission += torusCol * (torusDens * 0.062);
     }
   }
 
-  // 4D. Helical Spin-Axis Polar Jets (+-Y)
-  let jetAmp = pwnVisibility * pwnJetPower;
-  if (jetAmp > 0.001) {
+  // 4D. Sleek Kink-Braided Relativistic Polar Jets (+-Y)
+  if (segNeedsJet) {
     let absY = abs(pos.y);
-    if (absY >= 1.55 && absY <= 18.5) {
-      let rho = length(pos.xz);
-      let jetRadius = 0.18 + 0.082 * pow(absY, 0.72);
-      if (rho < jetRadius * 2.3) {
+    let rhoXZ2 = dot(pos.xz, pos.xz);
+    if (rhoXZ2 < 3.6 && absY >= 1.25 && absY <= 18.0) {
+      let signY = select(-1.0, 1.0, pos.y >= 0.0);
+      let kinkAmp = smoothstep(2.2, 11.5, absY) * 0.28;
+      let kinkAng = signY * (absY * 0.42 - simTime * (0.45 + 0.75 * spinVisualSpeed));
+      let jetCenter = vec2f(cos(kinkAng), sin(kinkAng)) * kinkAmp;
+      let relXZ = pos.xz - jetCenter;
+      let rho = length(relXZ);
+      let jetRadius = 0.11 + 0.052 * pow(max(absY - 1.15, 0.0), 0.76);
+      if (rho < jetRadius * 2.8) {
         let uRad = rho / max(jetRadius, 1e-4);
-        let spine = exp(-min(uRad * uRad * 5.2, 40.0));
-        let sd = uRad - 0.75;
-        let sheath = exp(-min(sd * sd * 10.5, 40.0)) * 0.85;
-        let outerHalo = exp(-min(uRad * uRad * 1.4, 40.0)) * 0.14;
-        let radProf = spine * 0.55 + sheath + outerHalo;
+        let spine = exp(-min(uRad * uRad * 7.0, 40.0));
+        let braidEnv = exp(-min(uRad * uRad * 2.4, 40.0));
+        let halo = exp(-min(uRad * uRad * 0.85, 40.0)) * 0.16;
 
-        let yEnv = smoothstep(1.55, 3.2, absY)
-                 * (1.0 - smoothstep(10.0, 18.0, absY))
-                 / (1.0 + 0.14 * absY);
+        let yEnv = smoothstep(1.25, 2.6, absY)
+                 * (1.0 - smoothstep(10.5, 18.0, absY))
+                 / (1.0 + 0.12 * absY);
 
-        let signY = select(-1.0, 1.0, pos.y >= 0.0);
-        let helixAngle = signY * (absY * 0.82 - simTime * (0.65 + 1.35 * spinVisualSpeed));
+        let helixAngle = signY * (absY * 0.92 - simTime * (0.75 + 1.45 * spinVisualSpeed));
         let ch = cos(helixAngle);
         let sh = sin(helixAngle);
-        let rotXZ = vec2f(ch * pos.x - sh * pos.z, sh * pos.x + ch * pos.z);
+        let rotXZ = vec2f(ch * relXZ.x - sh * relXZ.y, sh * relXZ.x + ch * relXZ.y);
 
-        let flowY = absY * 0.19 - simTime * (0.35 + 0.65 * spinVisualSpeed);
-        let jn = textureSampleLevel(uVolumeNoise, sVolume, vec3f(rotXZ * 0.48, flowY), 0.0);
+        let flowY = absY * 0.22 - simTime * (0.42 + 0.75 * spinVisualSpeed);
+        let jn = textureSampleLevel(uVolumeNoise, sVolume, vec3f(rotXZ * 0.62, flowY), 0.0);
 
-        let rawFil = clamp(jn.y * 0.62 + jn.w * 0.52, 0.0, 1.0);
+        let rawFil = clamp(jn.y * 0.64 + jn.w * 0.54, 0.0, 1.0);
         let filaments = rawFil * rawFil * rawFil;
-        let knots = 0.40 + 0.90 * pow(max(jn.z, 1e-5), 1.3);
+        let knotWave = max(0.5 + 0.5 * sin(absY * 1.45 - simTime * (0.85 + 1.25 * spinVisualSpeed) + jn.r * 2.2), 0.0);
+        let kw2 = knotWave * knotWave;
+        let knots = 0.35 + 1.25 * (kw2 * kw2);
 
-        let jetDir = vec3f(0.0, signY, 0.0);
-        let toCamDirJet = select(-jetDir, -normalize(vel), dot(vel, vel) > 1e-10);
-        let cosTheta = dot(jetDir, toCamDirJet);
-        let dopplerJet = 1.0 / max(1.0 - 0.52 * cosTheta, 0.28);
-        let jetBeam = pow(clamp(dopplerJet, 0.40, 2.4), 1.45);
+        let radProf = spine * 0.85 + braidEnv * (0.35 + 0.95 * filaments) + halo;
+
+        let cosTheta = signY * toCamDir.y;
+        let dopplerJet = 1.0 / max(1.0 - 0.55 * cosTheta, 0.28);
+        let jetBeam = pow(clamp(dopplerJet, 0.38, 2.6), 1.55);
         let viewColAtten = mix(1.0, 0.28, pow(max(abs(cosTheta), 1e-5), 1.55));
 
-        let coreCol   = vec3f(0.60, 0.86, 1.00);
-        let sheathCol = vec3f(0.18, 0.46, 1.00);
-        let outerCol  = vec3f(0.44, 0.20, 1.00);
-        var jetCol = mix(sheathCol, coreCol, clamp(spine * 0.85 + filaments * 0.55, 0.0, 1.0));
-        jetCol = mix(jetCol, outerCol, smoothstep(0.75, 1.85, uRad) * 0.68);
+        let coreCol   = vec3f(0.86, 0.97, 1.00);
+        let sheathCol = vec3f(0.08, 0.54, 1.00);
+        let outerCol  = vec3f(0.36, 0.12, 0.96);
+        var jetCol = mix(sheathCol, coreCol, clamp(spine * 0.90 + filaments * 0.45, 0.0, 1.0));
+        jetCol = mix(jetCol, outerCol, smoothstep(0.55, 1.80, uRad) * 0.72);
 
-        let rawInt = jetAmp * radProf * yEnv * (0.16 + 1.55 * filaments) * knots
-                   * jetBeam * viewColAtten * camDistFade;
-        let intensity = rawInt / (1.0 + rawInt * 0.45);
-        va.emission += jetCol * (intensity * 0.095);
+        let rawInt = jetAmp * radProf * yEnv * knots * jetBeam * viewColAtten * camDistFade;
+        let intensity = rawInt / (1.0 + rawInt * 0.38);
+        emission += jetCol * (intensity * 0.28);
       }
     }
   }
 
-  return va;
+  return vec4f(emission, nearMagFlag);
 }
 
 // ============================================================================
@@ -790,20 +1027,32 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   // Frame-constant magnetic basis, cone early-out bound, and volume outer bound
   let cosObl = cos(obliquityRad);
   let sinObl = sin(obliquityRad);
-  let mu0   = vec3f(sinObl, cosObl, 0.0);
-  let em1_0 = vec3f(cosObl, -sinObl, 0.0);
-  let em2_0 = vec3f(0.0, 0.0, -1.0);
 
   let maxThetaCone = beamConeHalfAngle * 1.04;
   let maxConeW = max(maxThetaCone * 0.24, 0.038);
   let maxBeamAngle = maxThetaCone + 3.2 * maxConeW;
   let cosMaxCone = select(-0.01, cos(maxBeamAngle), maxBeamAngle < 1.56);
 
-  var volBoundR : f32 = 1.025;
-  if (plasmaDensity > 0.001) { volBoundR = max(volBoundR, rLightCylVis * 1.18); }
-  if (pwnVisibility > 0.001) { volBoundR = max(volBoundR, 11.8); }
-  if (beamIntensity > 0.001) { volBoundR = max(volBoundR, 18.0); }
-  if (pwnVisibility * pwnJetPower > 0.001) { volBoundR = max(volBoundR, 19.2); }
+  let twistFactor = smoothstep(0.60, 1.85, twistShear);
+  let invSepW = 1.0 / max(rLightCylVis * 0.11, 0.34);
+  let invRLc = 1.0 / rLightCylVis;
+  let retardFactor = (0.85 + 0.55 * betaEq) * invRLc;
+  let rMagLoopMax = rLightCylVis * 1.14;
+  let rSheetMin = 0.80 * rLightCylVis;
+  let rSheetMax = min(rLightCylVis * 1.45, 10.5);
+  let rMagOuter = max(rMagLoopMax, rSheetMax);
+  let jetAmp = pwnVisibility * pwnJetPower;
+
+  let hasMag  = (plasmaDensity > 0.001);
+  let hasBeam = (beamIntensity > 0.001);
+  let hasPwn  = (pwnVisibility > 0.001);
+  let hasJet  = (jetAmp > 0.001);
+
+  var volBoundR : f32 = 1.01;
+  if (hasMag)  { volBoundR = max(volBoundR, rMagOuter); }
+  if (hasPwn)  { volBoundR = max(volBoundR, 8.8); }
+  if (hasBeam) { volBoundR = max(volBoundR, 18.0); }
+  if (hasJet)  { volBoundR = max(volBoundR, 18.1); }
 
   let ray0 = initCameraRay(camPos, camRight, camUp, camFwd, localRay, M, a, a2, lensing);
   var pos = camPos;
@@ -815,40 +1064,50 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   let fIdx = f32(frameIndex & 1023);
   let bn = fract(bnRaw + fIdx * vec4f(0.75487766, 0.56984029, 0.43015971, 0.61803399));
 
-  var maxSteps : i32 = select(128, 170, isProgressive);
-  var qualScale : f32 = select(1.02, 0.88, isProgressive);
+  var maxSteps : i32 = select(120, 160, isProgressive);
+  var qualScale : f32 = select(0.92, 0.78, isProgressive);
   if (quality <= 0) {
-    maxSteps = select(88, 120, isProgressive);
-    qualScale = select(1.32, 1.18, isProgressive);
+    maxSteps = select(88, 115, isProgressive);
+    qualScale = select(1.18, 1.05, isProgressive);
   } else if (quality >= 2) {
-    maxSteps = select(190, 250, isProgressive);
-    qualScale = select(0.78, 0.68, isProgressive);
+    maxSteps = select(176, 225, isProgressive);
+    qualScale = select(0.70, 0.60, isProgressive);
   }
 
   let camR = length(camPos);
   let escapeR = max(20.0, camR * 1.35);
 
   var radiance = vec3f(0.0);
-  var transmittance : f32 = 1.0;
   var rayDist : f32 = 0.0;
   var hitStar = false;
+  var shadeStar = false;
   var escaped = false;
+  var nearMagShell = true;
+  var hitPos = camPos;
+  var hitP = p;
+  var hitVel = localRay;
   var finalVel = localRay;
 
-  for (var step: i32 = 0; step < 250; step++) {
+  for (var step: i32 = 0; step < 225; step++) {
     if (step >= maxSteps) { break; }
 
-    let k1 = evalGeodesicRHS(pos, p, pt, M, a, a2, lensing);
+    var k1: GeodesicDeriv;
+    if (lensing <= 1e-6) {
+      k1.dpos = p;
+      k1.dp = vec3f(0.0);
+      k1.r = evalKerrR(pos, a2);
+    } else {
+      k1 = evalGeodesicRHS(pos, p, pt, M, a, a2, lensing);
+    }
     let r = k1.r;
     finalVel = k1.dpos;
 
     if (r <= 1.0) {
-      let surfRad = shadeNeutronStarSurface(
-        pos, p, pt, k1.dpos, M, a, a2, lensing, betaEq, spinPhase,
-        mu0, em1_0, em2_0, twistShear, rLightCylVis, polarCapTempK, crustTempK, magnetarCrackGlow
-      );
-      radiance += transmittance * surfRad;
+      hitPos = pos;
+      hitP = p;
+      hitVel = k1.dpos;
       hitStar = true;
+      shadeStar = true;
       break;
     }
 
@@ -858,15 +1117,15 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
       break;
     }
 
-    let outsideVol = outbound && r > max(volBoundR, 12.5);
-    var h = select(
-      clamp(0.135 * (r - 0.55) * qualScale, 0.042 * qualScale, 0.78 * qualScale),
-      clamp(0.32 * r * qualScale, 0.9, 4.8),
-      outsideVol
-    );
-
-    if (r < 2.25) {
-      h = min(h, (0.030 + 0.064 * max(r - 1.0, 0.0)) * qualScale);
+    var h : f32;
+    if (outbound && r > volBoundR) {
+      h = clamp(0.50 * r * qualScale, 1.2, 6.0);
+    } else if (r > volBoundR) {
+      h = clamp(0.35 * r * qualScale, 0.50 * qualScale, max(r - volBoundR + 0.25, 0.50 * qualScale));
+    } else if (r < 2.4) {
+      h = (0.042 + 0.078 * max(r - 1.0, 0.0)) * qualScale;
+    } else {
+      h = clamp(0.13 * (r - 0.55) * qualScale, 0.08 * qualScale, 2.2 * qualScale);
     }
 
     if (step == 0) {
@@ -880,7 +1139,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
       posNext = pos + h * k1.dpos;
       pNext   = p;
       velEnd  = k1.dpos;
-    } else if (r >= 4.2) {
+    } else if (r >= 2.8) {
       let posMid = pos + (0.5 * h) * k1.dpos;
       let pMid   = p   + (0.5 * h) * k1.dp;
       let k2 = evalGeodesicRHS(posMid, pMid, pt, M, a, a2, lensing);
@@ -905,16 +1164,22 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
       velEnd  = k4.dpos;
     }
 
-    let rNext = evalKerrR(posNext, a2);
-    let v0 = h * k1.dpos;
-    let v1 = h * velEnd;
+    let r2NextEuclid = dot(posNext, posNext);
+    let maybeHit = (r2NextEuclid <= 1.0 + a2 + 1e-5);
+    let rNext = select(2.0, evalKerrR(posNext, a2), maybeHit);
 
     var hitThisStep = false;
     var alphaHi : f32 = 1.0;
+    var v0 = vec3f(0.0);
+    var v1 = vec3f(0.0);
     if (rNext <= 1.0) {
       hitThisStep = true;
       alphaHi = 1.0;
+      v0 = h * k1.dpos;
+      v1 = h * velEnd;
     } else if (r < 1.18 && dot(pos, k1.dpos) < 0.0) {
+      v0 = h * k1.dpos;
+      v1 = h * velEnd;
       let midH = evalHermite(pos, v0, posNext, v1, 0.5);
       if (evalKerrR(midH, a2) <= 1.0) {
         hitThisStep = true;
@@ -922,6 +1187,8 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
       }
     }
 
+    var segEnd = posNext;
+    var segVelEnd = velEnd;
     if (hitThisStep) {
       var aLo : f32 = 0.0;
       var aHi : f32 = alphaHi;
@@ -944,81 +1211,131 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
       let denomR = rLo - rHi;
       let secFrac = select(0.5, clamp((rLo - 1.0) / denomR, 0.0, 1.0), abs(denomR) > 1e-6);
       let alphaHit = mix(aLo, aHi, secFrac);
-      let posHit = evalHermite(pos, v0, posNext, v1, alphaHit);
-      let pHit   = mix(p, pNext, alphaHit);
-      let velHit = mix(k1.dpos, velEnd, alphaHit);
-
-      let segHit = length(posHit - pos);
-      if (segHit > 1e-5) {
-        let jF = fract(bn.y + f32(step) * 0.61803399);
-        let samplePos = mix(pos, posHit, jF);
-        let rSamp = evalKerrR(samplePos, a2);
-        if (rSamp > 1.025 && rSamp < volBoundR) {
-          let camDistFade = smoothstep(0.25, 1.75, rayDist + jF * segHit);
-
-          let va = evalPulsarVolume(
-            samplePos, velHit, rSamp, simTime, betaEq, spinPhase, mu0, em1_0, em2_0,
-            twistShear, rLightCylVis, plasmaDensity, beamIntensity, beamConeHalfAngle,
-            cosMaxCone, pwnVisibility, pwnJetPower, spinVisualSpeed, camDistFade
-          );
-
-          let tau = max(va.extinction, 0.0) * segHit;
-          if (tau > 1e-5 || dot(va.emission, va.emission) > 1e-10) {
-            let stepT = exp(-min(tau, 40.0));
-            let stepRad = select(
-              va.emission * segHit,
-              va.emission * ((1.0 - stepT) / max(va.extinction, 1e-5)),
-              tau > 1e-4
-            );
-            radiance += transmittance * stepRad;
-            transmittance *= stepT;
-          }
-        }
-      }
-
-      let surfRad = shadeNeutronStarSurface(
-        posHit, pHit, pt, velHit, M, a, a2, lensing, betaEq, spinPhase,
-        mu0, em1_0, em2_0, twistShear, rLightCylVis, polarCapTempK, crustTempK, magnetarCrackGlow
-      );
-      radiance += transmittance * surfRad;
-      hitStar = true;
-      break;
+      hitPos = evalHermite(pos, v0, posNext, v1, alphaHit);
+      hitP   = mix(p, pNext, alphaHit);
+      hitVel = mix(k1.dpos, velEnd, alphaHit);
+      segEnd = hitPos;
+      segVelEnd = hitVel;
     }
 
-    let segLen = length(posNext - pos);
-    let jFrac = fract(bn.y + f32(step) * 0.61803399);
-    let samplePos = mix(pos, posNext, jFrac);
-    let rSamp = evalKerrR(samplePos, a2);
-    if (rSamp > 1.025 && rSamp < volBoundR) {
-      let sampleVel = mix(k1.dpos, velEnd, jFrac);
-      let camDistFade = smoothstep(0.25, 1.75, rayDist + jFrac * segLen);
+    let segVec = segEnd - pos;
+    let segLen2 = dot(segVec, segVec);
+    let segLen = sqrt(segLen2);
+    if (segLen > 1e-5) {
+      let tMin = clamp(-dot(pos, segVec) / segLen2, 0.0, 1.0);
+      let closestP = pos + tMin * segVec;
+      let minR2 = dot(closestP, closestP);
 
-      let va = evalPulsarVolume(
-        samplePos, sampleVel, rSamp, simTime, betaEq, spinPhase, mu0, em1_0, em2_0,
-        twistShear, rLightCylVis, plasmaDensity, beamIntensity, beamConeHalfAngle,
-        cosMaxCone, pwnVisibility, pwnJetPower, spinVisualSpeed, camDistFade
-      );
+      if (minR2 < volBoundR * volBoundR) {
+        let maxR2 = max(dot(pos, pos), dot(segEnd, segEnd));
+        let segNeedsMag = hasMag && (minR2 < rMagOuter * rMagOuter);
+        let segNeedsBeam = hasBeam && (minR2 < 324.0);
+        let segNeedsPwn = hasPwn && (minR2 < 77.44) && (maxR2 > 6.5025)
+                       && (min(abs(pos.y), abs(segEnd.y)) < 1.32 || pos.y * segEnd.y < 0.0);
 
-      let tau = max(va.extinction, 0.0) * segLen;
-      if (tau > 1e-5 || dot(va.emission, va.emission) > 1e-10) {
-        let stepT = exp(-min(tau, 40.0));
-        let stepRad = select(
-          va.emission * segLen,
-          va.emission * ((1.0 - stepT) / max(va.extinction, 1e-5)),
-          tau > 1e-4
-        );
-        radiance += transmittance * stepRad;
-        transmittance *= stepT;
+        let segXZ2 = dot(segVec.xz, segVec.xz);
+        let tXZ = select(0.0, clamp(-dot(pos.xz, segVec.xz) / segXZ2, 0.0, 1.0), segXZ2 > 1e-10);
+        let clXZ = pos.xz + tXZ * segVec.xz;
+        let segNeedsJet = hasJet && (dot(clXZ, clXZ) < 3.6)
+                       && (min(abs(pos.y), abs(segEnd.y)) < 18.0)
+                       && (max(abs(pos.y), abs(segEnd.y)) > 1.25);
+
+        if (segNeedsMag || segNeedsBeam || segNeedsPwn || segNeedsJet) {
+          let midPos = pos + 0.5 * segVec;
+          let r2Mid = max(dot(midPos, midPos), 1e-8);
+          let invRMid = inverseSqrt(r2Mid);
+          let rMid = r2Mid * invRMid;
+
+          var hVol = clamp(0.11 * (rMid - 0.55) * qualScale, 0.06 * qualScale, 1.65 * qualScale);
+          if (rMid < 2.2) {
+            hVol = min(hVol, (0.032 + 0.055 * max(rMid - 1.0, 0.0)) * qualScale);
+          }
+          if (segNeedsMag && minR2 < rMagLoopMax * rMagLoopMax && nearMagShell) {
+            hVol = min(hVol, (0.072 + 0.050 * max(rMid - 1.0, 0.0)) * qualScale);
+          }
+          if (segNeedsJet) {
+            hVol = min(hVol, 0.20 * qualScale);
+          }
+          if (segNeedsPwn) {
+            hVol = min(hVol, 0.26 * qualScale);
+          }
+
+          let nSub = clamp(i32(floor(segLen / max(hVol, 0.03) + 0.5)), 1, 6);
+          let invNSub = 1.0 / f32(nSub);
+          let dsSub = segLen * invNSub;
+
+          let segVelMid = 0.5 * (k1.dpos + segVelEnd);
+          let segToCamDir = select(-midPos * invRMid, -normalize(segVelMid), dot(segVelMid, segVelMid) > 1e-10);
+
+          var segCorotBeam : f32 = 1.0;
+          if (segNeedsMag) {
+            let rhoCyl2 = dot(midPos.xz, midPos.xz);
+            let invRhoCyl = select(0.0, inverseSqrt(rhoCyl2), rhoCyl2 > 1e-10);
+            let rhoCyl = rhoCyl2 * invRhoCyl;
+            let betaCorotMag = clamp(rhoCyl * invRLc, 0.0, 0.72) * (0.35 + 0.65 * min(betaEq * 3.5, 1.0));
+            let corotDot = (midPos.z * segToCamDir.x - midPos.x * segToCamDir.z) * invRhoCyl;
+            let gammaCorot = inverseSqrt(max(1.0 - betaCorotMag * betaCorotMag, 0.15));
+            let dopCorot = 1.0 / max(gammaCorot * (1.0 - betaCorotMag * corotDot), 0.30);
+            segCorotBeam = pow(clamp(dopCorot, 0.35, 3.2), 1.8);
+          }
+
+          var segNearMag = false;
+          let jBase = fract(bn.y + f32(step) * 0.61803399);
+          for (var sub: i32 = 0; sub < 6; sub++) {
+            if (sub >= nSub) { break; }
+            let uSub = (f32(sub) + jBase) * invNSub;
+            let samplePos = pos + uSub * segVec;
+            let r2Samp = max(dot(samplePos, samplePos), 1e-8);
+            let invRSamp = inverseSqrt(r2Samp);
+            let rSamp = r2Samp * invRSamp;
+            let outsideCrust = select(
+              rSamp > 1.01,
+              evalKerrR(samplePos, a2) > 1.01,
+              a2 >= 1e-6 && r2Samp < 1.06 + a2
+            );
+
+            if (outsideCrust && rSamp < volBoundR) {
+              let camDistFade = smoothstep(0.25, 1.75, rayDist + uSub * segLen);
+              let volRes = evalPulsarVolume(
+                samplePos, segToCamDir, rSamp, invRSamp, simTime, spinPhase, sinObl, cosObl,
+                twistShear, twistFactor, rLightCylVis, invSepW, retardFactor, rMagLoopMax, rSheetMin,
+                rSheetMax, rMagOuter, plasmaDensity, beamIntensity, beamConeHalfAngle, cosMaxCone,
+                pwnVisibility, jetAmp, spinVisualSpeed, camDistFade, segCorotBeam,
+                segNeedsMag, segNeedsBeam, segNeedsPwn, segNeedsJet
+              );
+              radiance += volRes.rgb * dsSub;
+              if (rSamp >= rMagLoopMax || volRes.a > 0.5) {
+                segNearMag = true;
+              }
+            } else if (rSamp >= rMagLoopMax) {
+              segNearMag = true;
+            }
+          }
+          nearMagShell = segNearMag;
+        } else if (minR2 >= rMagLoopMax * rMagLoopMax) {
+          nearMagShell = true;
+        }
+      } else {
+        nearMagShell = true;
       }
+    }
+
+    if (hitThisStep) {
+      hitStar = true;
+      shadeStar = true;
+      break;
     }
 
     pos = posNext;
     p   = pNext;
     rayDist += segLen;
+  }
 
-    if (transmittance < 0.004) {
-      break;
-    }
+  if (shadeStar) {
+    radiance += shadeNeutronStarSurface(
+      hitPos, hitP, pt, hitVel, M, a, a2, lensing, betaEq, simTime, spinPhase,
+      sinObl, cosObl, twistShear, rLightCylVis, polarCapTempK, crustTempK, magnetarCrackGlow
+    );
   }
 
   if (!hitStar && !escaped) {
@@ -1030,16 +1347,16 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
     }
   }
 
-  let escFlag = select(0.0, 1.0, escaped && !hitStar && transmittance > 0.004);
+  let escFlag = select(0.0, 1.0, escaped && !hitStar);
   let edgeMask = fwidth(escFlag);
   let safeSkyDir = select(localRay, normalize(finalVel), dot(finalVel, finalVel) > 1e-10);
   let skyColor = sampleSkyBackground(safeSkyDir, skyIntensity, skyMode, skyRot, escFlag > 0.5, edgeMask);
 
   if (escFlag > 0.5) {
-    radiance += transmittance * skyColor;
+    radiance += skyColor;
   }
 
-  radiance = clamp(sanitizeVec3Zero(radiance), vec3f(0.0), vec3f(28.0));
+  radiance = clamp(sanitizeVec3Zero(radiance), vec3f(0.0), vec3f(36.0));
   return vec4f(radiance, 1.0);
 }
 `;

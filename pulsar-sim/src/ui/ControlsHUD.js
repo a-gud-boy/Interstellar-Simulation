@@ -103,7 +103,7 @@ const CONTROL_SECTIONS = [
       {
         type: 'range',
         key: 'magnetarCrackGlow',
-        label: 'Magnetar Crust Cracks',
+        label: 'Magnetar Shear Arcs',
         min: 0.0,
         max: 2.5,
         step: 0.05,

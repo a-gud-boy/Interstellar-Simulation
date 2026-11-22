@@ -835,9 +835,9 @@ export class WebGPURenderer {
     const pf = this._bloomPreF32;
     pf[0] = 1.0 / this.width;
     pf[1] = 1.0 / this.height;
-    pf[2] = 1.30;
+    pf[2] = 1.25;
     pf[3] = 0.45;
-    pf[4] = 11.0;
+    pf[4] = 16.0;
     pf[5] = 0.0;
     pf[6] = 0.0;
     pf[7] = 0.0;
@@ -858,8 +858,8 @@ export class WebGPURenderer {
       const uf = this._bloomUpF32[i];
       uf[0] = 1.0 / lowSrc.width;
       uf[1] = 1.0 / lowSrc.height;
-      uf[2] = 1.05;
-      uf[3] = 0.66;
+      uf[2] = 0.88;
+      uf[3] = 0.52;
       device.queue.writeBuffer(this.bloomUpUniformBufs[i], 0, uf);
     }
 

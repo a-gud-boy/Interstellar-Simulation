@@ -841,9 +841,9 @@ export class WebGLRenderer {
       gl.bindTexture(gl.TEXTURE_2D, hdrTex);
       gl.uniform1i(this._getUniform(preProg, 'uSrcTex'), 0);
       gl.uniform2f(this._getUniform(preProg, 'uTexelSize'), 1.0 / this.width, 1.0 / this.height);
-      gl.uniform1f(this._getUniform(preProg, 'uThreshold'), 1.30);
+      gl.uniform1f(this._getUniform(preProg, 'uThreshold'), 1.15);
       gl.uniform1f(this._getUniform(preProg, 'uKnee'), 0.45);
-      gl.uniform1f(this._getUniform(preProg, 'uClampMax'), 11.0);
+      gl.uniform1f(this._getUniform(preProg, 'uClampMax'), 16.0);
       this._drawFullscreen();
     }
 
@@ -918,7 +918,7 @@ export class WebGLRenderer {
       gl.bindTexture(gl.TEXTURE_2D, src0.texture);
       gl.uniform1i(uSrc, 0);
       gl.uniform2f(uTexel, 1.0 / src0.width, 1.0 / src0.height);
-      gl.uniform1f(uThresh, 1.85);
+      gl.uniform1f(uThresh, 2.45);
       gl.uniform1f(uSpread, 1.05);
       gl.uniform1i(uPass, 0);
       this._drawFullscreen();
