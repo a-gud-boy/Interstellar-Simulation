@@ -10,19 +10,21 @@
  *  - Pass 5: Troy Sobotka AgX Filmic Tone Mapping + CA, vignette, film grain & sRGB composite
  */
 
-import { FULLSCREEN_VERT, NOISE_BAKE_FRAG } from '../shaders/common.glsl.js';
+import { FULLSCREEN_VERT, NOISE_BAKE_FRAG } from '../../../shared/shaders/common.glsl.js';
 import { STARFLIGHT_FRAG } from '../shaders/starflight.frag.js';
-import {
+import { createPostShadersGLSL } from '../../../shared/shaders/post.glsl.js';
+import { computeStarflightTelemetry } from './StarflightPhysics.js';
+import { createProceduralSkyTextureWebGL } from '../../../shared/assets/skyLoader.js';
+import { createBlackbodyLUTWebGL, createBlueNoiseLUTWebGL } from '../../../shared/assets/physicalLuts.js';
+
+const {
   TAA_FRAG,
   BLOOM_PREFILTER_FRAG,
   BLOOM_DOWNSAMPLE_FRAG,
   BLOOM_UPSAMPLE_FRAG,
   ANAMORPHIC_FRAG,
   COMPOSITE_FRAG,
-} from '../shaders/post.glsl.js';
-import { computeStarflightTelemetry } from './StarflightPhysics.js';
-import { createProceduralSkyTextureWebGL } from '../assets/skyLoader.js';
-import { createBlackbodyLUTWebGL, createBlueNoiseLUTWebGL } from '../assets/physicalLuts.js';
+} = createPostShadersGLSL('starflight');
 
 const VOLUME_SIZE = 128;
 const BLOOM_MIP_COUNT = 6;

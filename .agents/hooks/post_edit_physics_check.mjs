@@ -25,6 +25,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const SIM_EDIT_RE = /^([a-z0-9-]+-sim)\/src\/(engine|shaders)\//;
+const SHARED_EDIT_RE = /^shared\/(?:shaders\/|assets\/|ui\/|simRegistry\.js$)/;
 
 function readStdinUtf8() {
   try {
@@ -87,7 +88,7 @@ function extractEditedPath(payload) {
   return null;
 }
 
-function summarizeFailure(sim, relEdited, result) {
+function summarizeFailure(targetLabel, relEdited, result, rerunCmd) {
   const lines = [];
   const combinedOut = `${result.stdout || ''}\n${result.stderr || ''}`.split(/\r?\n/);
 
@@ -96,10 +97,10 @@ function summarizeFailure(sim, relEdited, result) {
     .filter((l) => l.startsWith('[FAIL]') || l.includes('[FAIL]'));
   const summaryLine = combinedOut
     .map((l) => l.trim())
-    .find((l) => l.startsWith('SUMMARY:'));
+    .find((l) => l.startsWith('SUMMARY:') || l.startsWith('Total:'));
 
   lines.push(
-    `[physics_check FAILED] ${sim}/tests/physics_check.mjs (triggered by edit to ${relEdited})`
+    `[physics_check FAILED] ${targetLabel} (triggered by edit to ${relEdited})`
   );
 
   if (result.error) {
@@ -126,7 +127,7 @@ function summarizeFailure(sim, relEdited, result) {
   if (summaryLine) {
     lines.push(`  ${summaryLine}`);
   }
-  lines.push(`  Re-run: node ${sim}/tests/physics_check.mjs`);
+  lines.push(`  Re-run: ${rerunCmd}`);
   return lines.join('\n');
 }
 
@@ -184,21 +185,41 @@ function handlePostToolUse(payload) {
   const absPath = path.isAbsolute(rawPath) ? path.resolve(rawPath) : path.resolve(repoRoot, rawPath);
   const relPath = path.relative(repoRoot, absPath).split(path.sep).join('/');
 
-  const match = SIM_EDIT_RE.exec(relPath);
-  if (!match) {
+  let key;
+  let scriptArgs;
+  let targetLabel;
+  let rerunCmd;
+  let timeoutMs = 40_000;
+
+  const simMatch = SIM_EDIT_RE.exec(relPath);
+  if (simMatch) {
+    const sim = simMatch[1];
+    const testScript = path.join(repoRoot, sim, 'tests', 'physics_check.mjs');
+    if (!fs.existsSync(testScript)) {
+      finish(0);
+    }
+    key = sim;
+    scriptArgs = [testScript];
+    targetLabel = `${sim}/tests/physics_check.mjs`;
+    rerunCmd = `node ${sim}/tests/physics_check.mjs`;
+  } else if (SHARED_EDIT_RE.test(relPath)) {
+    const runnerScript = path.join(repoRoot, 'scripts', 'run-tests.mjs');
+    if (!fs.existsSync(runnerScript)) {
+      finish(0);
+    }
+    key = 'shared';
+    scriptArgs = [runnerScript, '--physics'];
+    targetLabel = 'scripts/run-tests.mjs --physics';
+    rerunCmd = 'node scripts/run-tests.mjs --physics';
+    timeoutMs = 90_000;
+  } else {
     finish(0);
   }
 
-  const sim = match[1];
-  const testScript = path.join(repoRoot, sim, 'tests', 'physics_check.mjs');
-  if (!fs.existsSync(testScript)) {
-    finish(0);
-  }
-
-  const result = spawnSync(process.execPath, [testScript], {
+  const result = spawnSync(process.execPath, scriptArgs, {
     cwd: repoRoot,
     encoding: 'utf8',
-    timeout: 40_000,
+    timeout: timeoutMs,
     maxBuffer: 4 * 1024 * 1024,
   });
 
@@ -206,15 +227,15 @@ function handlePostToolUse(payload) {
   const pending = loadPendingFailures(stateFile);
 
   if (result.status === 0 && !result.error) {
-    if (pending[sim]) {
-      delete pending[sim];
+    if (pending[key]) {
+      delete pending[key];
       savePendingFailures(stateFile, pending);
     }
     finish(0);
   }
 
-  const report = summarizeFailure(sim, relPath, result);
-  pending[sim] = report;
+  const report = summarizeFailure(targetLabel, relPath, result, rerunCmd);
+  pending[key] = report;
   savePendingFailures(stateFile, pending);
   process.stderr.write(`${report}\n`);
   finish(1);

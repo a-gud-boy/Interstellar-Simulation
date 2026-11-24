@@ -33,9 +33,10 @@ Backend Options:
   --webgpu, -w          Start directly in WebGPU backend (?backend=webgpu)
   --webgl2, --webgl     Start directly in WebGL2 backend (default)
 
-Browser Options:
+Target / Browser Options:
   --chrome              Launch in Google Chrome / Chromium in dark mode (default)
   --firefox, -f         Launch in Firefox (with NVIDIA WebGL2 + WebGPU enabled)
+  --desktop, -d         Launch native Rust desktop binary (desktop/run.sh)
   --help, -h            Show this help message
 EOF
 }
@@ -129,6 +130,10 @@ while [[ $# -gt 0 ]]; do
       MODE="chrome"
       shift
       ;;
+    --desktop|-d)
+      MODE="desktop"
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -166,6 +171,16 @@ elif [[ "${SIM_TARGET}" == "starflight" ]]; then
 else
   SIM_DIR="blackhole-sim"
   SIM_LABEL="Gargantua Black Hole Sim"
+fi
+
+if [[ "${MODE}" == "desktop" ]]; then
+  DESKTOP_RUNNER="${SCRIPT_DIR}/desktop/run.sh"
+  if [[ ! -x "${DESKTOP_RUNNER}" ]]; then
+    echo "Error: desktop launcher not found or not executable: ${DESKTOP_RUNNER}" >&2
+    exit 1
+  fi
+  echo "Launching native Rust desktop simulator (--sim ${SIM_TARGET})..."
+  exec "${DESKTOP_RUNNER}" --sim "${SIM_TARGET}" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 fi
 
 APP_DIR="${SCRIPT_DIR}/${SIM_DIR}"

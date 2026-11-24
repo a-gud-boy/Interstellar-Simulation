@@ -1,7 +1,7 @@
 use std::f64::consts::PI;
 use std::sync::OnceLock;
 
-pub const MILKYWAY_4K_JPEG: &[u8] = include_bytes!("../../assets/milkyway_4k.jpg");
+pub const MILKYWAY_4K_JPEG: &[u8] = include_bytes!("../../../shared/assets/milkyway_4k.jpg");
 
 #[derive(Clone)]
 pub struct RgbaImageData {

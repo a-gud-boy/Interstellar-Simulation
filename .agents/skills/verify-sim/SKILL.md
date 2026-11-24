@@ -10,27 +10,31 @@ description: >-
 
 # Verify Simulation (`verify-sim`)
 
-Execute the three-tier verification sequence for one target simulation directory (`<sim>` ∈ `blackhole-sim`, `wormhole-sim`, `binary-bh-sim`, `warp-drive-sim`, `supernova-sim`, or any `*-sim` directory containing `tests/physics_check.mjs`). Always run commands from the **repository root**.
+Execute the three-tier verification sequence for one target simulation directory (`<sim>` ∈ `blackhole-sim`, `wormhole-sim`, `binary-bh-sim`, `warp-drive-sim`, `supernova-sim`, `pulsar-sim`, `starflight-sim`), or run unified verification via `node scripts/run-tests.mjs` (`--physics`, `--desktop`, `--browser`, `--firefox`, `--all`, `--sim <name>`). Always run commands from the **repository root**.
 
 ## Rules
 
-- **Never start `./launch.sh`** before running `browser_qa.mjs` or `firefox_qa.mjs` — both scripts spawn and close their own internal local HTTP server.
+- **Never start `./launch.sh`** before running `browser_qa.mjs` or `firefox_qa.mjs` — both scripts spawn and close their own internal repo-root HTTP server via `shared/testing/staticServer.mjs`.
 - **Never run `firefox_qa.mjs` with `--headless`** — the script enforces headed Wayland with `dom.webgpu.allow-present-without-readback = false` and `MOZ_LOG=WebGPU:4`.
-- **Fail fast on physics**: if `physics_check.mjs` exits non-zero, stop immediately and do not run browser QA until the contract/physics failure is fixed.
+- **Fail fast on physics**: if `physics_check.mjs` (or `shared/tests/shared_check.mjs` for shared changes) exits non-zero, stop immediately and do not run browser QA until the contract/physics failure is fixed.
 - **Distinguish SKIPPED vs. FAILED**: check display, browser, and GPU prerequisites before each browser suite so headless or display-less environments report a clear **SKIPPED** status instead of a misleading crash.
 
 ## Verification Sequence
 
 ### 1. Resolve Target Simulation
 
-Identify `<sim>` from the user's request or the active edited simulation directory (`blackhole-sim`, `wormhole-sim`, `binary-bh-sim`, `warp-drive-sim`, `supernova-sim`, or any `*-sim` directory with `tests/physics_check.mjs`). If ambiguous, ask before running.
+Identify `<sim>` from the user's request or the active edited simulation directory (`blackhole-sim`, `wormhole-sim`, `binary-bh-sim`, `warp-drive-sim`, `supernova-sim`, `pulsar-sim`, `starflight-sim`, or `shared/` / `desktop/`). If ambiguous, ask before running.
 
 ### 2. Stage 1 — Physics & Dual-Backend Contract Suite (Fail Fast)
 
-Run:
+Run for one simulation (or run `node scripts/run-tests.mjs --physics` to validate `shared/tests/shared_check.mjs` + all 7 sims, and `node scripts/run-tests.mjs --desktop` for Rust `desktop/` parity & WGSL validation):
 
 ```bash
 node <sim>/tests/physics_check.mjs
+# or unified runner:
+node scripts/run-tests.mjs --physics --sim <sim>
+# full suite (shared + all 7 sims):
+node scripts/run-tests.mjs --physics
 ```
 
 - Check exit code (`0` = PASS, non-zero = FAIL) and capture the `SUMMARY: N passed, M failed...` line.

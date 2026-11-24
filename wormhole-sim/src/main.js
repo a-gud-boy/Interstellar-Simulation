@@ -8,7 +8,8 @@ import { PRESETS, createInitialState, getPresetById } from './engine/Presets.js'
 import { WormholeCamera } from './engine/WormholeCamera.js';
 import { WebGLRenderer } from './engine/WebGLRenderer.js';
 import { WebGPURenderer } from './engine/WebGPURenderer.js';
-import { loadSkyTextureAWebGL, loadSkyTextureAWebGPU } from './assets/skyLoader.js';
+import { loadSkyTextureAWebGL, loadSkyTextureAWebGPU } from '../../shared/assets/skyLoader.js';
+import { mountSimSwitcher } from '../../shared/ui/simSwitcher.js';
 import { createHUD } from './ui/ControlsHUD.js';
 
 const POST_ONLY_KEYS = new Set(['exposure', 'bloomIntensity', 'anamorphicIntensity']);
@@ -75,24 +76,17 @@ async function bootstrap() {
   }
 
   const canvasFallbackText = canvas.textContent;
-  const switcherLinks = Array.from(
-    document.querySelectorAll('nav[aria-label="Simulation switcher"] a[data-sim-href]')
-  );
-
-  function syncSimSwitchLink(backend) {
-    const normalized = normalizeBackend(backend) || 'webgl2';
-    for (const link of switcherLinks) {
-      const baseHref = link.getAttribute('data-sim-href');
-      if (baseHref) {
-        link.setAttribute('href', `${baseHref}?backend=${normalized}`);
-      }
-    }
-  }
-
   const state = createInitialState();
   let activeBackend = resolveInitialBackend();
   state.backend = activeBackend;
-  syncSimSwitchLink(activeBackend);
+  const simSwitcher = mountSimSwitcher({
+    currentSimId: 'wormhole',
+    initialBackend: activeBackend,
+  });
+
+  function syncSimSwitchLink(backend) {
+    simSwitcher.syncBackend(backend);
+  }
 
   const initialPreset = getPresetById(state.presetId) || PRESETS[0];
 
@@ -122,6 +116,7 @@ async function bootstrap() {
     }
     const nextCanvas = document.createElement('canvas');
     nextCanvas.id = 'wormhole-canvas';
+    nextCanvas.className = canvas?.className || 'sim-canvas';
     nextCanvas.setAttribute(
       'aria-label',
       canvas?.getAttribute('aria-label') || 'Interactive relativistic traversable wormhole simulation'
@@ -188,10 +183,9 @@ async function bootstrap() {
       targetBackend === 'webgpu'
         ? loadSkyTextureAWebGPU(
             targetRenderer.device,
-            (tex, w, h, m) => targetRenderer.generateMipmaps(tex, w, h, m),
-            './assets/milkyway_4k.jpg'
+            (tex, w, h, m) => targetRenderer.generateMipmaps(tex, w, h, m)
           )
-        : loadSkyTextureAWebGL(targetRenderer.gl, './assets/milkyway_4k.jpg');
+        : loadSkyTextureAWebGL(targetRenderer.gl);
 
     return loader
       .then((result) => {

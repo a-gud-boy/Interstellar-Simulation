@@ -341,7 +341,7 @@ console.log('\n=== 5. Syntax, GLSL/WGSL Uniform Parity, Uniformity & Asset Contr
 {
   // node --check on ALL .js files under supernova-sim/src
   const jsFiles = collectJsFiles(path.join(ROOT, 'src')).sort();
-  assert(jsFiles.length >= 12, `Discovered ${jsFiles.length} JS modules under supernova-sim/src/`);
+  assert(jsFiles.length >= 9, `Discovered ${jsFiles.length} JS modules under supernova-sim/src/`);
   for (const fullPath of jsFiles) {
     const rel = path.relative(ROOT, fullPath);
     try {
@@ -438,11 +438,11 @@ console.log('\n=== 5. Syntax, GLSL/WGSL Uniform Parity, Uniformity & Asset Contr
   );
 
   // Assets & physicalLuts WebGPU test
-  const skyExists = fs.existsSync(path.join(ROOT, 'assets/milkyway_4k.jpg')) &&
-    fs.statSync(path.join(ROOT, 'assets/milkyway_4k.jpg')).size > 1_000_000;
-  assert(skyExists, 'assets/milkyway_4k.jpg present and complete');
+  const skyPath = path.resolve(ROOT, '../shared/assets/milkyway_4k.jpg');
+  const skyExists = fs.existsSync(skyPath) && fs.statSync(skyPath).size > 1_000_000;
+  assert(skyExists, 'shared/assets/milkyway_4k.jpg present and complete');
 
-  const lutsMod = await import(path.join(ROOT, 'src/assets/physicalLuts.js'));
+  const lutsMod = await import(path.resolve(ROOT, '../shared/assets/physicalLuts.js'));
   globalThis.GPUTextureUsage = globalThis.GPUTextureUsage || { TEXTURE_BINDING: 4, COPY_DST: 2 };
   let gpuUploaded = null;
   const mockDevice = {

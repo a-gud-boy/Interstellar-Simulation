@@ -5,6 +5,8 @@ ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
 declare -A CHANGED_SIMS=()
+SHARED_CHANGED=0
+DESKTOP_CHANGED=0
 
 while IFS= read -r file; do
   if [[ "$file" =~ ^([a-z0-9-]+-sim)/src/(engine|shaders)/ ]]; then
@@ -12,20 +14,46 @@ while IFS= read -r file; do
     if [[ -f "${sim}/tests/physics_check.mjs" ]]; then
       CHANGED_SIMS["$sim"]=1
     fi
+  elif [[ "$file" =~ ^shared/(shaders|assets|ui)/ ]] || [[ "$file" == "shared/simRegistry.js" ]] || [[ "$file" == "scripts/run-tests.mjs" ]]; then
+    SHARED_CHANGED=1
+  fi
+
+  if [[ "$file" =~ ^desktop/ ]] || [[ "$file" == "shared/assets/milkyway_4k.jpg" ]]; then
+    DESKTOP_CHANGED=1
   fi
 done < <(git diff --cached --name-only --diff-filter=ACMR)
 
-if [[ "${#CHANGED_SIMS[@]}" -eq 0 ]]; then
+if [[ "${#CHANGED_SIMS[@]}" -eq 0 && "$SHARED_CHANGED" -eq 0 && "$DESKTOP_CHANGED" -eq 0 ]]; then
   exit 0
 fi
 
 failed=0
-for sim in "${!CHANGED_SIMS[@]}"; do
-  echo "[pre-commit] Running node ${sim}/tests/physics_check.mjs ..."
-  if ! node "${sim}/tests/physics_check.mjs"; then
-    echo "[pre-commit] FAILED: ${sim}/tests/physics_check.mjs" >&2
+if [[ "$SHARED_CHANGED" -eq 1 ]]; then
+  echo "[pre-commit] Running node scripts/run-tests.mjs --physics ..."
+  if ! node scripts/run-tests.mjs --physics; then
+    echo "[pre-commit] FAILED: scripts/run-tests.mjs --physics" >&2
     failed=1
   fi
-done
+else
+  for sim in "${!CHANGED_SIMS[@]}"; do
+    echo "[pre-commit] Running node ${sim}/tests/physics_check.mjs ..."
+    if ! node "${sim}/tests/physics_check.mjs"; then
+      echo "[pre-commit] FAILED: ${sim}/tests/physics_check.mjs" >&2
+      failed=1
+    fi
+  done
+fi
+
+if [[ "$DESKTOP_CHANGED" -eq 1 ]]; then
+  if command -v cargo >/dev/null 2>&1; then
+    echo "[pre-commit] Running cargo test (desktop physics_parity & shader_validation) ..."
+    if ! cargo test --manifest-path desktop/Cargo.toml --test physics_parity --test shader_validation; then
+      echo "[pre-commit] FAILED: desktop cargo tests" >&2
+      failed=1
+    fi
+  else
+    echo "[pre-commit] Note: cargo not found in PATH, skipping desktop cargo tests." >&2
+  fi
+fi
 
 exit "$failed"

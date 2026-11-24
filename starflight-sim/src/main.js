@@ -10,7 +10,8 @@ import { StarflightCamera } from './engine/StarflightCamera.js';
 import { computeStarflightTelemetry } from './engine/StarflightPhysics.js';
 import { WebGLRenderer } from './engine/WebGLRenderer.js';
 import { WebGPURenderer } from './engine/WebGPURenderer.js';
-import { loadSkyTextureWebGL, loadSkyTextureWebGPU } from './assets/skyLoader.js';
+import { loadSkyTextureWebGL, loadSkyTextureWebGPU } from '../../shared/assets/skyLoader.js';
+import { mountSimSwitcher } from '../../shared/ui/simSwitcher.js';
 import { createHUD } from './ui/ControlsHUD.js';
 
 const POST_ONLY_KEYS = new Set(['exposure', 'bloomIntensity', 'anamorphicIntensity']);
@@ -128,20 +129,6 @@ async function bootstrap() {
   }
 
   const canvasFallbackText = canvas.textContent;
-  const switcherLinks = Array.from(
-    document.querySelectorAll('nav[aria-label="Simulation switcher"] a[data-sim-href]')
-  );
-
-  function syncSimSwitchLinks(backend) {
-    const normalized = normalizeBackend(backend) || 'webgl2';
-    for (const link of switcherLinks) {
-      const baseHref = link.getAttribute('data-sim-href');
-      if (baseHref) {
-        link.setAttribute('href', `${baseHref}?backend=${normalized}`);
-      }
-    }
-  }
-
   const state = createInitialState();
   if (!Number.isFinite(state.flightPosZ)) {
     state.flightPosZ = 0.0;
@@ -151,7 +138,14 @@ async function bootstrap() {
   }
   let activeBackend = resolveInitialBackend();
   state.backend = activeBackend;
-  syncSimSwitchLinks(activeBackend);
+  const simSwitcher = mountSimSwitcher({
+    currentSimId: 'starflight',
+    initialBackend: activeBackend,
+  });
+
+  function syncSimSwitchLinks(backend) {
+    simSwitcher.syncBackend(backend);
+  }
 
   const initialPreset = getPresetById(state.presetId) || PRESETS[0];
 
@@ -188,6 +182,7 @@ async function bootstrap() {
     }
     const nextCanvas = document.createElement('canvas');
     nextCanvas.id = 'starflight-canvas';
+    nextCanvas.className = canvas?.className || 'sim-canvas';
     nextCanvas.setAttribute(
       'aria-label',
       canvas?.getAttribute('aria-label') || 'Interactive relativistic starflight simulation'
@@ -246,10 +241,9 @@ async function bootstrap() {
       targetBackend === 'webgpu'
         ? loadSkyTextureWebGPU(
             targetRenderer.device,
-            (tex, w, h, m) => targetRenderer.generateMipmaps(tex, w, h, m),
-            './assets/milkyway_4k.jpg'
+            (tex, w, h, m) => targetRenderer.generateMipmaps(tex, w, h, m)
           )
-        : loadSkyTextureWebGL(targetRenderer.gl, './assets/milkyway_4k.jpg');
+        : loadSkyTextureWebGL(targetRenderer.gl);
 
     return loader
       .then((result) => {

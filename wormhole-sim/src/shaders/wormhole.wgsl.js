@@ -9,7 +9,7 @@
  *  - Optional translucent 3D volumetric throat caustic halo & swirling dust filaments
  */
 
-import { FULLSCREEN_VERT_WGSL } from './common.wgsl.js';
+import { FULLSCREEN_VERT_WGSL } from '../../../shared/shaders/common.wgsl.js';
 
 export const WORMHOLE_WGSL = /* wgsl */ `
 ${FULLSCREEN_VERT_WGSL}

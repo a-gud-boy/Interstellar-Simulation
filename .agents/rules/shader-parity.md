@@ -1,15 +1,16 @@
 ---
 trigger: glob
-globs: "**/src/shaders/**, **/src/engine/Web*Renderer.js"
+globs: "shared/shaders/**, **/src/shaders/**, **/src/engine/Web*Renderer.js"
 ---
 
 # Dual-Backend Shader & Renderer Parity
 
-All simulators maintain 1:1 visual and physical parity between **WebGL2** (`WebGLRenderer.js`, `*.frag.js`, `*.glsl.js`) and **WebGPU** (`WebGPURenderer.js`, `*.wgsl.js`).
+All simulators maintain 1:1 visual and physical parity between **WebGL2** (`WebGLRenderer.js`, `*.frag.js`, `*.glsl.js`) and **WebGPU** (`WebGPURenderer.js`, `*.wgsl.js`), including the shared ray/post modules in `shared/shaders/`.
 
 ## Mandatory Rules
 
 1. **Symmetric Edits**: Any change to physics equations, geodesic integrators, volumetric transfer, uniforms, buffer layouts, or HDR post-processing (`TAA`, bloom, anamorphic flare, AgX composite) in one backend **must** be mirrored in the other backend in the same change.
+   - Changes in `shared/shaders/` (`common.glsl.js`/`common.wgsl.js`, `post.glsl.js`/`post.wgsl.js`, `postConfig.js`) affect **all 7 simulators** — keep GLSL and WGSL exports and optical profiles synchronized.
 2. **Uniform Alignment & Padding**:
    - Pack WGSL `var<uniform>` structs (and WebGL2 `layout(std140)` UBOs where used) strictly as 16-byte aligned `vec4` members (`vec4f`/`vec4<f32>` or `vec4i`) with explicit trailing padding so total byte size is a multiple of 16.
    - Keep `ArrayBuffer` byte allocation, `Float32Array` / `Int32Array` write indices, and struct member order in exact lockstep—never write integer fields through `Float32Array` when WGSL declares `vec4i` (or vice versa).
@@ -18,7 +19,9 @@ All simulators maintain 1:1 visual and physical parity between **WebGL2** (`WebG
 4. **Locked Resource Bindings & NaN Safety**:
    - Keep WGSL `@group(0) @binding(N)` indices contiguous (`0..N-1`) and WebGL2 texture units (`TEXTURE0..N`) locked to the contract checked by `physics_check.mjs`.
    - Preserve IEEE NaN/Inf guards (`isBadFloat` / `sanitizeHdr` / safe hyperbolic clamps) across both backends, especially for NVIDIA WebGPU and `rg11b10ufloat` / `rgba16float` HDR render targets.
-5. **Mandatory Verification**: After editing any shader or renderer file, run the edited simulation's contract suite and confirm zero failures:
+5. **Mandatory Verification**: After editing any simulation shader or renderer file, run that simulation's contract suite; after editing `shared/shaders/`, run the full physics suite and confirm zero failures:
    ```bash
    node <sim>/tests/physics_check.mjs
+   # or for shared/shaders/ changes:
+   node scripts/run-tests.mjs --physics
    ```

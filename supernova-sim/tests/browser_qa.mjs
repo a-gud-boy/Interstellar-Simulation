@@ -3,227 +3,29 @@
  * Supernova Remnant (Unified WebGL2 + WebGPU) — Automated Hardware NVIDIA Chrome QA & E2E Capture Suite
  */
 
-import http from 'node:http';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { startStaticServer } from '../../shared/testing/staticServer.mjs';
+import { sleep, launchChromeDualCDP } from '../../shared/testing/chromeCdp.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SIM_ROOT = path.resolve(__dirname, '..');
-const TRIAL_ROOT = path.resolve(SIM_ROOT, '..');
 const SHOT_DIR = path.join(__dirname, 'screenshots');
 
 const VIEWPORT_W = 1440;
 const VIEWPORT_H = 810;
 
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'application/javascript; charset=utf-8',
-  '.mjs': 'application/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.png': 'image/png',
-  '.webp': 'image/webp',
-  '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon',
-};
-
-function startStaticServer(preferredPort = 8785) {
-  let skyRequestCount = 0;
-  return new Promise((resolve, reject) => {
-    const server = http.createServer((req, res) => {
-      const urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
-      if (urlPath.endsWith('milkyway_4k.jpg')) {
-        skyRequestCount++;
-      }
-      let rel = urlPath.replace(/^\/+/, '');
-      if (rel === '' || rel.endsWith('/')) {
-        rel += 'index.html';
-      }
-      const fullPath = path.resolve(TRIAL_ROOT, rel);
-      if (!fullPath.startsWith(TRIAL_ROOT)) {
-        res.writeHead(403);
-        res.end('Forbidden');
-        return;
-      }
-      fs.stat(fullPath, (err, stat) => {
-        if (!err && stat.isDirectory()) {
-          const idxPath = path.join(fullPath, 'index.html');
-          fs.stat(idxPath, (err2, stat2) => {
-            if (err2 || !stat2.isFile()) {
-              res.writeHead(404);
-              res.end('Not found');
-              return;
-            }
-            res.writeHead(200, {
-              'Content-Type': MIME['.html'],
-              'Content-Length': stat2.size,
-              'Cache-Control': 'no-cache',
-            });
-            fs.createReadStream(idxPath).pipe(res);
-          });
-          return;
-        }
-        if (err || !stat.isFile()) {
-          res.writeHead(404);
-          res.end('Not found');
-          return;
-        }
-        const ext = path.extname(fullPath).toLowerCase();
-        res.writeHead(200, {
-          'Content-Type': MIME[ext] || 'application/octet-stream',
-          'Content-Length': stat.size,
-          'Cache-Control': 'no-cache',
-        });
-        fs.createReadStream(fullPath).pipe(res);
-      });
-    });
-
-    server.on('error', (err) => {
-      if (err.code === 'EADDRUSE' && preferredPort !== 0) {
-        server.listen(0, '127.0.0.1');
-      } else {
-        reject(err);
-      }
-    });
-
-    server.listen(preferredPort, '127.0.0.1', () => {
-      resolve({
-        server,
-        port: server.address().port,
-        getSkyRequestCount: () => skyRequestCount,
-      });
-    });
-  });
-}
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-async function launchChromeDualCDP(debugPort) {
-  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'supernova-qa-'));
-  fs.mkdirSync(path.join(userDataDir, 'Default'), { recursive: true });
-  fs.writeFileSync(
-    path.join(userDataDir, 'Default', 'Preferences'),
-    JSON.stringify({
-      browser: { theme: { color_scheme: 2, color_scheme2: 2 } },
-      extensions: { theme: { id: '', system_theme: 0 } },
-    })
-  );
-
-  const nvEnv = {
-    ...process.env,
-    GTK_THEME: 'Adwaita:dark',
-    __NV_PRIME_RENDER_OFFLOAD: '1',
-    __NV_PRIME_RENDER_OFFLOAD_PROVIDER: 'NVIDIA-G0',
-    __GLX_VENDOR_LIBRARY_NAME: 'nvidia',
-    __VK_LAYER_NV_optimus: 'NVIDIA_only',
-    VK_ICD_FILENAMES: '/usr/share/vulkan/icd.d/nvidia_icd.json',
-  };
-
-  const chrome = spawn(
-    '/usr/bin/google-chrome',
-    [
-      '--ozone-platform=x11',
-      `--remote-debugging-port=${debugPort}`,
-      `--user-data-dir=${userDataDir}`,
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--enable-unsafe-webgpu',
-      '--enable-features=Vulkan,WebUIDarkMode',
-      '--force-dark-mode',
-      '--ignore-gpu-blocklist',
-      '--gtk-version=3',
-      '--disable-background-timer-throttling',
-      '--disable-renderer-backgrounding',
-      `--window-size=${VIEWPORT_W},${VIEWPORT_H}`,
-      '--force-device-scale-factor=1',
-      'about:blank',
-    ],
-    { env: nvEnv, stdio: ['ignore', 'pipe', 'pipe'] }
-  );
-
-  let stderr = '';
-  chrome.stderr.on('data', (d) => {
-    stderr += d.toString();
-  });
-
-  let targets = null;
-  for (let i = 0; i < 45; i++) {
-    await sleep(160);
-    try {
-      const res = await fetch(`http://127.0.0.1:${debugPort}/json`);
-      if (res.ok) {
-        targets = await res.json();
-        if (targets.some((t) => t.type === 'page')) break;
-      }
-    } catch {
-      // poll until CDP is listening
-    }
-  }
-  if (!targets) {
-    chrome.kill('SIGKILL');
-    fs.rmSync(userDataDir, { recursive: true, force: true });
-    throw new Error(`Chrome CDP failed to start. stderr:\n${stderr.slice(-800)}`);
-  }
-
-  const pageTarget = targets.find((t) => t.type === 'page');
-  const ws = new WebSocket(pageTarget.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => {
-    ws.onopen = resolve;
-    ws.onerror = reject;
-  });
-
-  let nextId = 1;
-  const pending = new Map();
-  const listeners = new Map();
-
-  ws.addEventListener('message', (ev) => {
-    const msg = JSON.parse(ev.data);
-    if (msg.id && pending.has(msg.id)) {
-      const { resolve, reject } = pending.get(msg.id);
-      pending.delete(msg.id);
-      if (msg.error) reject(new Error(`${msg.error.message} (${msg.error.code})`));
-      else resolve(msg.result);
-    } else if (msg.method && listeners.has(msg.method)) {
-      for (const fn of listeners.get(msg.method)) fn(msg.params);
-    }
-  });
-
-  const send = (method, params = {}) =>
-    new Promise((resolve, reject) => {
-      const id = nextId++;
-      pending.set(id, { resolve, reject });
-      ws.send(JSON.stringify({ id, method, params }));
-    });
-
-  const on = (method, fn) => {
-    if (!listeners.has(method)) listeners.set(method, []);
-    listeners.get(method).push(fn);
-  };
-
-  const close = async () => {
-    try { ws.close(); } catch {}
-    chrome.kill('SIGTERM');
-    await sleep(300);
-    if (!chrome.killed) chrome.kill('SIGKILL');
-    fs.rmSync(userDataDir, { recursive: true, force: true });
-  };
-
-  return { send, on, close };
-}
-
 async function main() {
   fs.mkdirSync(SHOT_DIR, { recursive: true });
 
-  const { server, port, getSkyRequestCount } = await startStaticServer(8785);
+  const { server, port, getSkyRequestCount } = await startStaticServer({ preferredPort: 8785 });
   const debugPort = 9550 + Math.floor(Math.random() * 400);
-  const cdp = await launchChromeDualCDP(debugPort);
+  const cdp = await launchChromeDualCDP({
+    debugPort,
+    viewportW: VIEWPORT_W,
+    viewportH: VIEWPORT_H,
+    profilePrefix: 'supernova-qa-',
+  });
 
   const consoleErrors = [];
   const consoleWarnings = [];
@@ -696,7 +498,7 @@ async function main() {
     const switcherCheck = await evalJS(`(() => {
       const nav = document.querySelector('nav[aria-label="Simulation switcher"]');
       const cur = nav?.querySelector('[aria-current="page"]');
-      const bh = document.getElementById('sim-switch-link');
+      const bh = document.getElementById('sim-switch-blackhole');
       const wh = document.getElementById('sim-switch-wormhole');
       const bin = document.getElementById('sim-switch-binary');
       const warp = document.getElementById('sim-switch-warp');
@@ -711,7 +513,7 @@ async function main() {
       };
     })()`);
 
-    await evalJS(`document.getElementById('sim-switch-link')?.click()`);
+    await evalJS(`document.getElementById('sim-switch-blackhole')?.click()`);
     const diagBlackholeSwitch = await waitForReadyBackend('webgpu', '__GARGANTUA__', '/blackhole-sim/');
     await waitFrames(12);
     await captureShot('13_e2e_blackhole_via_switcher.png');

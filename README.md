@@ -12,15 +12,18 @@ Interactive, zero-dependency relativistic GPU ray-tracers inspired by *Interstel
 - **[`pulsar-sim/`](./pulsar-sim/)** — **Magnetar & Millisecond Pulsar Magnetosphere**: 3D Outgoing Kerr–Schild null geodesics with explicit compactness $M/R \in [0.12, 0.30]$ exposing $>50\%$ of the solid neutron star crust (`GR Curved` vs `Flat Space`), relativistic gravitational redshift & rotational Doppler beaming across $10^6$–$10^7\,\text{K}$ polar caps and molten magnetar tectonic cracks, twisted oblique dipole pair-plasma flux tubes inside the light cylinder $R_{\text{LC}}$, sweeping lighthouse beams with Deutsch retardation, equatorial PWN torus & helical polar jets, and 6 presets (`Crab Pulsar`, `Millisecond`, `Magnetar`, `Polar Cap`, `Lighthouse`, `Torus & Jet`).
 - **[`starflight-sim/`](./starflight-sim/)** — **Relativistic Starflight — Aberration, Doppler & Terrell Sky**: Cancellation-free Special Relativistic Lorentz null-ray aberration up to $0.9999996c$ ($\gamma \approx 1050$, `Exact SR` vs `Rest Frame`), exact Doppler shift $D = [\gamma(1 - \beta\cos\theta')]^{-1}$ with CIE-1931 Planck blackbody temperature shift across the 4K Milky Way, UV/IR procedural star bands, and Planck-mottled Cosmic Microwave Background shell ($T_{\text{fwd}} = 2.7255\,D_{\text{fwd}}$), Penrose–Terrell rotated 3D periodic navigation rings & beacon stations, 128³ volumetric hydrogen dust streaks, $1g$ constant proper-acceleration brachistochrone cruise, live Forward ↔ Aft window flipping (`T`), and 6 presets (`0.50c Cruise`, `0.90c Cone`, `0.995c UV Sky`, `0.9999c CMB`, `Aft Window`, `1g Cruise`).
 
+- **[`shared/`](./shared/)** — **Canonical Shared Layer**: Unified simulator registry ([`simRegistry.js`](./shared/simRegistry.js)), single 4K Milky Way sky texture ([`milkyway_4k.jpg`](./shared/assets/milkyway_4k.jpg)), Planck blackbody & blue-noise LUTs, sky loaders, shared GLSL/WGSL post-processing (`TAA`, bloom, anamorphic flare, AgX), Observatory Glass base CSS & dynamic switcher, and QA test harnesses.
+- **[`desktop/`](./desktop/)** — **Native Rust Desktop App (`wgpu` + `egui`)**: Hardware-accelerated native executable supporting all seven simulators (`./desktop/run.sh --sim <name>` or `./launch.sh --desktop --<sim>`), cross-platform Windows & macOS build scripts, and headless WGSL/physics parity tests (`cargo test`).
+
 ## Dual Rendering Backends & Cross-Sim Switcher
 
 - **Live Backend Toggle**: Switch seamlessly between **WebGL2** (`RGBA16F` multi-pass HDR) and **WebGPU** (`rg11b10ufloat`/`rgba16float` HDR + compute 3D noise bake) inside the **Controls** drawer (`Optics, Sky & Quality` → `Rendering Backend`), preserving camera pose and reusing RAM-cached sky textures without re-fetching assets.
-- **Cross-Simulation Switcher**: Use the top-right **Black Hole / Wormhole / Binary BH / Warp Drive / Supernova / Pulsar / Starflight** switcher (`nav[aria-label="Simulation switcher"]`) to jump directly between all seven simulators while carrying the active backend (`?backend=webgl2` or `?backend=webgpu`).
+- **Cross-Simulation Switcher**: Use the top-right **Black Hole / Wormhole / Binary BH / Warp Drive / Supernova / Pulsar / Starflight** switcher (`nav[aria-label="Simulation switcher"]`, dynamically rendered via [`shared/ui/simSwitcher.js`](./shared/ui/simSwitcher.js)) to jump directly between all seven simulators while carrying the active backend (`?backend=webgl2` or `?backend=webgpu`).
 - **Post-Processing Pipeline**: HDR YCoCg variance-clipped TAA + 128-sample progressive accumulation on pause, 6-mip Karis/Jimenez HDR bloom, 70mm Panavision horizontal anamorphic flare, and Troy Sobotka AgX filmic tone mapping.
 
 ## Quick Start
 
-Serve the repository root (so relative `../blackhole-sim/`, `../wormhole-sim/`, `../binary-bh-sim/`, `../warp-drive-sim/`, `../supernova-sim/`, `../pulsar-sim/`, and `../starflight-sim/` switcher links resolve) or use the included launcher (configured for NVIDIA PRIME/Vulkan/Wayland on Linux):
+Serve the repository root (so relative `../shared/` and `../<sim>/` switcher links resolve) or use the included launcher (configured for NVIDIA PRIME/Vulkan/Wayland on Linux):
 
 ```bash
 # Launch Gargantua Black Hole (WebGL2 default, Google Chrome dark mode)
@@ -45,6 +48,9 @@ Serve the repository root (so relative `../blackhole-sim/`, `../wormhole-sim/`, 
 
 # Launch in Firefox (with NVIDIA WebGL2 + WebGPU prefs enabled)
 ./launch.sh --firefox --starflight
+
+# Launch the native Rust desktop binary
+./launch.sh --desktop --pulsar
 ```
 
 ### Controls & Keyboard Shortcuts
@@ -65,10 +71,17 @@ Serve the repository root (so relative `../blackhole-sim/`, `../wormhole-sim/`, 
 
 ## Verification Suites
 
-All seven simulators include physics/contract checks, automated NVIDIA Chrome hardware QA, and headed Firefox Wayland WebGPU QA:
+All seven simulators include physics/contract checks, automated NVIDIA Chrome hardware QA, and headed Firefox Wayland WebGPU QA, alongside [`shared/tests/shared_check.mjs`](./shared/tests/shared_check.mjs), native [`desktop/`](./desktop/) Rust tests, and the unified runner [`scripts/run-tests.mjs`](./scripts/run-tests.mjs):
 
 ```bash
-# Physics & contract verification (no browser required)
+# Unified runner (recommended)
+node scripts/run-tests.mjs --physics            # Shared contracts + all 7 physics checks
+node scripts/run-tests.mjs --desktop            # Native Rust physics parity & WGSL validation
+node scripts/run-tests.mjs --all                # All physics, desktop, Chrome & Firefox QA suites
+node scripts/run-tests.mjs --all --sim pulsar   # Scoped full run for one simulator
+
+# Shared layer & individual per-simulator physics checks (no browser required)
+node shared/tests/shared_check.mjs
 node blackhole-sim/tests/physics_check.mjs
 node wormhole-sim/tests/physics_check.mjs
 node binary-bh-sim/tests/physics_check.mjs

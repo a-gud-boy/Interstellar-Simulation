@@ -9,7 +9,7 @@
  *  - Origin-safe r -> 0 softened central illuminator and radial normalization.
  */
 
-import { FULLSCREEN_VERT_WGSL } from './common.wgsl.js';
+import { FULLSCREEN_VERT_WGSL } from '../../../shared/shaders/common.wgsl.js';
 
 export const SUPERNOVA_WGSL = /* wgsl */ `
 ${FULLSCREEN_VERT_WGSL}

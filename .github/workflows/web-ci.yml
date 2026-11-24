@@ -1,0 +1,37 @@
+name: Web Physics & Shader Verification
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "index.html"
+      - "shared/**"
+      - "scripts/**"
+      - "*-sim/**"
+      - ".github/workflows/web-ci.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "index.html"
+      - "shared/**"
+      - "scripts/**"
+      - "*-sim/**"
+      - ".github/workflows/web-ci.yml"
+
+jobs:
+  physics-check:
+    name: Shared & 7-Sim Physics Contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run shared & simulator physics checks
+        run: node scripts/run-tests.mjs --physics

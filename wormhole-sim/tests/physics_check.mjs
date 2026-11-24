@@ -423,15 +423,18 @@ const expectedFiles = [
   'styles.css',
   '../index.html',
   '../launch.sh',
-  'assets/milkyway_4k.jpg',
-  'src/assets/skyLoader.js',
-  'src/assets/physicalLuts.js',
-  'src/shaders/common.glsl.js',
+  '../shared/simRegistry.js',
+  '../shared/ui/base.css',
+  '../shared/ui/simSwitcher.js',
+  '../shared/assets/milkyway_4k.jpg',
+  '../shared/assets/skyLoader.js',
+  '../shared/assets/physicalLuts.js',
+  '../shared/shaders/common.glsl.js',
   'src/shaders/wormhole.frag.js',
-  'src/shaders/post.glsl.js',
-  'src/shaders/common.wgsl.js',
+  '../shared/shaders/post.glsl.js',
+  '../shared/shaders/common.wgsl.js',
   'src/shaders/wormhole.wgsl.js',
-  'src/shaders/post.wgsl.js',
+  '../shared/shaders/post.wgsl.js',
   'src/engine/Presets.js',
   'src/engine/WormholeCamera.js',
   'src/engine/WebGLRenderer.js',
@@ -463,9 +466,9 @@ for (const full of jsFiles) {
 
 if (missingFiles.length === 0) {
   // WGSL shader exports, entry points, zero GLSL-isms, UBO layout & bindings
-  const commonWgsl = await import(path.join(ROOT, 'src/shaders/common.wgsl.js'));
+  const commonWgsl = await import(path.resolve(ROOT, '../shared/shaders/common.wgsl.js'));
   const whWgsl = await import(path.join(ROOT, 'src/shaders/wormhole.wgsl.js'));
-  const postWgsl = await import(path.join(ROOT, 'src/shaders/post.wgsl.js'));
+  const postWgsl = await import(path.resolve(ROOT, '../shared/shaders/post.wgsl.js'));
 
   const wgslStages = [
     { name: 'NOISE_BAKE_COMPUTE_WGSL', code: commonWgsl.NOISE_BAKE_COMPUTE_WGSL, entry: '@compute' },
@@ -525,9 +528,9 @@ if (missingFiles.length === 0) {
   );
 
   // GLSL ES 3.00 shader & WebGLRenderer uniform parity check
-  const commonGlsl = await import(path.join(ROOT, 'src/shaders/common.glsl.js'));
+  const commonGlsl = await import(path.resolve(ROOT, '../shared/shaders/common.glsl.js'));
   const whGlsl = await import(path.join(ROOT, 'src/shaders/wormhole.frag.js'));
-  const postGlsl = await import(path.join(ROOT, 'src/shaders/post.glsl.js'));
+  const postGlsl = await import(path.resolve(ROOT, '../shared/shaders/post.glsl.js'));
 
   const glslStages = [
     { name: 'FULLSCREEN_VERT', code: commonGlsl.FULLSCREEN_VERT },
@@ -635,13 +638,16 @@ if (missingFiles.length === 0) {
       !htmlSrc.includes('ctrl-backend'),
     'Rendering Backend toggle (WebGL2/WebGPU) lives inside collapsible ControlsHUD drawer, not main HUD chrome'
   );
+  const mainSrc = fs.readFileSync(path.join(ROOT, 'src/main.js'), 'utf8');
   assert(
-    htmlSrc.includes('id="sim-switch-link"') &&
+    htmlSrc.includes('data-current-sim="wormhole"') &&
       htmlSrc.includes('id="btn-traverse"') &&
-      bhHtmlSrc.includes('id="sim-switch-link"') &&
+      htmlSrc.includes('../shared/ui/base.css') &&
+      bhHtmlSrc.includes('data-current-sim="blackhole"') &&
+      mainSrc.includes('mountSimSwitcher') &&
       !htmlSrc.includes('role="tab"') &&
       !bhHtmlSrc.includes('role="tab"'),
-    'Cross-sim switcher link (#sim-switch-link) and Traverse button (#btn-traverse) present cleanly without role="tab"'
+    'Shared sim switcher (data-current-sim + mountSimSwitcher) and Traverse button (#btn-traverse) present cleanly without role="tab"'
   );
 
   const telA = computeWormholeTelemetry(DEFAULT_STATE, 10.5);
@@ -659,8 +665,8 @@ if (missingFiles.length === 0) {
   );
 
   // Dual-backend physicalLuts.js & skyLoader.js verification (mock GPUDevice AND mock WebGL2RenderingContext)
-  const lutsMod = await import(path.join(ROOT, 'src/assets/physicalLuts.js'));
-  const skyMod = await import(path.join(ROOT, 'src/assets/skyLoader.js'));
+  const lutsMod = await import(path.resolve(ROOT, '../shared/assets/physicalLuts.js'));
+  const skyMod = await import(path.resolve(ROOT, '../shared/assets/skyLoader.js'));
 
   const blueData = lutsMod.getBlueNoiseData?.(128);
   assert(

@@ -463,28 +463,30 @@ console.log('\n=== 5. Telemetry, Presets, Dual-Mode WarpCamera & Assets ===');
   );
   cam.dispose();
 
-  // Verify syntax and copied assets
+  // Verify syntax and shared/owned assets
   const ownedJs = [
-    'src/assets/physicalLuts.js',
-    'src/assets/skyLoader.js',
+    '../shared/assets/physicalLuts.js',
+    '../shared/assets/skyLoader.js',
+    '../shared/ui/simSwitcher.js',
+    '../shared/simRegistry.js',
     'src/engine/WarpPhysics.js',
     'src/engine/Presets.js',
     'src/engine/WarpCamera.js',
   ];
   for (const rel of ownedJs) {
     try {
-      execFileSync(process.execPath, ['--check', path.join(ROOT, rel)], { stdio: 'pipe' });
+      execFileSync(process.execPath, ['--check', path.resolve(ROOT, rel)], { stdio: 'pipe' });
       assert(true, `JS syntax OK: ${rel}`);
     } catch (err) {
       assert(false, `JS syntax ERROR: ${rel}`, err.stderr?.toString().trim() || err.message);
     }
   }
 
-  const skyExists = fs.existsSync(path.join(ROOT, 'assets/milkyway_4k.jpg')) &&
-    fs.statSync(path.join(ROOT, 'assets/milkyway_4k.jpg')).size > 1_000_000;
-  assert(skyExists, 'assets/milkyway_4k.jpg present and complete');
+  const skyPath = path.resolve(ROOT, '../shared/assets/milkyway_4k.jpg');
+  const skyExists = fs.existsSync(skyPath) && fs.statSync(skyPath).size > 1_000_000;
+  assert(skyExists, 'shared/assets/milkyway_4k.jpg present and complete');
 
-  const lutsMod = await import(path.join(ROOT, 'src/assets/physicalLuts.js'));
+  const lutsMod = await import(path.resolve(ROOT, '../shared/assets/physicalLuts.js'));
   globalThis.GPUTextureUsage = globalThis.GPUTextureUsage || { TEXTURE_BINDING: 4, COPY_DST: 2 };
   let gpuUploaded = null;
   const mockDevice = {

@@ -435,15 +435,18 @@ const expectedFiles = [
   'index.html',
   'styles.css',
   '../launch.sh',
-  'assets/milkyway_4k.jpg',
-  'src/assets/skyLoader.js',
-  'src/assets/physicalLuts.js',
-  'src/shaders/common.glsl.js',
+  '../shared/simRegistry.js',
+  '../shared/ui/base.css',
+  '../shared/ui/simSwitcher.js',
+  '../shared/assets/milkyway_4k.jpg',
+  '../shared/assets/skyLoader.js',
+  '../shared/assets/physicalLuts.js',
+  '../shared/shaders/common.glsl.js',
   'src/shaders/blackhole.frag.js',
-  'src/shaders/post.glsl.js',
-  'src/shaders/common.wgsl.js',
+  '../shared/shaders/post.glsl.js',
+  '../shared/shaders/common.wgsl.js',
   'src/shaders/blackhole.wgsl.js',
-  'src/shaders/post.wgsl.js',
+  '../shared/shaders/post.wgsl.js',
   'src/engine/Presets.js',
   'src/engine/CameraController.js',
   'src/engine/WebGLRenderer.js',
@@ -471,9 +474,9 @@ for (const rel of jsFiles) {
 }
 
 // WGSL shader exports, entry points, zero GLSL-isms, UBO layout & bindings
-const commonWgsl = await import(path.join(ROOT, 'src/shaders/common.wgsl.js'));
+const commonWgsl = await import(path.resolve(ROOT, '../shared/shaders/common.wgsl.js'));
 const bhWgsl = await import(path.join(ROOT, 'src/shaders/blackhole.wgsl.js'));
-const postWgsl = await import(path.join(ROOT, 'src/shaders/post.wgsl.js'));
+const postWgsl = await import(path.resolve(ROOT, '../shared/shaders/post.wgsl.js'));
 
 const wgslStages = [
   { name: 'NOISE_BAKE_COMPUTE_WGSL', code: commonWgsl.NOISE_BAKE_COMPUTE_WGSL, entry: '@compute' },
@@ -525,9 +528,9 @@ assert(
 );
 
 // GLSL ES 3.00 shader & WebGLRenderer uniform parity check
-const commonGlsl = await import(path.join(ROOT, 'src/shaders/common.glsl.js'));
+const commonGlsl = await import(path.resolve(ROOT, '../shared/shaders/common.glsl.js'));
 const bhGlsl = await import(path.join(ROOT, 'src/shaders/blackhole.frag.js'));
-const postGlsl = await import(path.join(ROOT, 'src/shaders/post.glsl.js'));
+const postGlsl = await import(path.resolve(ROOT, '../shared/shaders/post.glsl.js'));
 
 const glslStages = [
   { name: 'FULLSCREEN_VERT', code: commonGlsl.FULLSCREEN_VERT },
@@ -618,7 +621,7 @@ assert(
 );
 
 // Dual-backend physicalLuts.js verification (mock GPUDevice AND mock WebGL2RenderingContext)
-const lutsMod = await import(path.join(ROOT, 'src/assets/physicalLuts.js'));
+const lutsMod = await import(path.resolve(ROOT, '../shared/assets/physicalLuts.js'));
 assert(
   lutsMod.BLACKBODY_T_MIN === 800.0 && lutsMod.BLACKBODY_T_MAX === 40000.0,
   'physicalLuts.js exports exact temperature range [800K, 40000K]',

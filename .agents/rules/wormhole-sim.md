@@ -22,7 +22,7 @@ globs: "**/wormhole-sim/**"
   - GLSL texture units `0..4`: `uVolumeNoise`, `uSkyMapA`, `uProcSkyMapA`, `uSkyMapB`, `uBlueNoise`.
 
 ## Intentional Divergences from Other Sims
-- **No Blackbody LUT**: `src/assets/physicalLuts.js` intentionally omits Planck blackbody LUT exports and provides only 128×128 blue noise (`getBlueNoiseData`, `createBlueNoiseLUT*`).
-- **Dual-Universe Sky Loader**: `src/assets/skyLoader.js` exports `getProceduralSkyPixelsA`, `getExoticNebulaPixelsB`, `createProceduralSkyTextureA*`, `createExoticNebulaTextureB*`, and `loadSkyTextureA*` (incompatible with the single-sky `skyLoader.js` in the other 3 sims).
+- **No Blackbody LUT**: Imports only blue noise (`getBlueNoiseData`, `createBlueNoiseLUT*`) from `../../shared/assets/physicalLuts.js` (omits Planck blackbody LUT creation).
+- **Dual-Universe Sky Loader**: Imports `getProceduralSkyPixelsA`, `getExoticNebulaPixelsB`, `createProceduralSkyTextureA*`, `createExoticNebulaTextureB*`, and `loadSkyTextureA*` from `../../shared/assets/skyLoader.js` (Universe A `shared/assets/milkyway_4k.jpg` + procedural fallback, Universe B golden-amber/teal nebula).
 - **No `uSkyMode`**: Uses `uPlanetVisible` plus dual skies (`uSkyMapA`/`uProcSkyMapA` for Universe A, `uSkyMapB` for Universe B).
 - `WebGPURenderer.js` precomputes `camR` (`evalWormholeR`) and `escapeL` on CPU; keep in sync with `wormhole.frag.js`.

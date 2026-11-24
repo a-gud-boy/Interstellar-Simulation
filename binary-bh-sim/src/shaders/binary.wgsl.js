@@ -11,7 +11,7 @@
  *  - Wrap-safe, silhouette-safe textureSampleGrad equirectangular 4K Milky Way + micro-stars
  */
 
-import { FULLSCREEN_VERT_WGSL } from './common.wgsl.js';
+import { FULLSCREEN_VERT_WGSL } from '../../../shared/shaders/common.wgsl.js';
 
 export const BINARY_BH_WGSL = /* wgsl */ `
 ${FULLSCREEN_VERT_WGSL}

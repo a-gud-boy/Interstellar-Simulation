@@ -14,31 +14,14 @@
  *  - Saves capturePNG() screenshots (firefox_webgpu.png, firefox_webgl2.png, firefox_webgpu_after_switch.png)
  */
 
-import http from 'node:http';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { startStaticServer } from '../../shared/testing/staticServer.mjs';
+import { runHeadedFirefoxQA } from '../../shared/testing/firefoxHarness.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SIM_ROOT = path.resolve(__dirname, '..');
-const TRIAL_ROOT = path.resolve(SIM_ROOT, '..');
 const SHOT_DIR = path.join(__dirname, 'screenshots');
-
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'application/javascript; charset=utf-8',
-  '.mjs': 'application/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.png': 'image/png',
-  '.webp': 'image/webp',
-  '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon',
-};
 
 const INJECTED_QA_SCRIPT = `
 (async () => {
@@ -145,170 +128,28 @@ const INJECTED_QA_SCRIPT = `
 })();
 `;
 
-function startQaServer() {
-  let doneResolve;
-  const donePromise = new Promise((res) => {
-    doneResolve = res;
-  });
-
-  const server = http.createServer((req, res) => {
-    const reqUrl = new URL(req.url || '/', 'http://127.0.0.1');
-
-    if (req.method === 'GET' && reqUrl.pathname === '/__qa_runner.js') {
-      res.writeHead(200, { 'Content-Type': MIME['.js'], 'Cache-Control': 'no-cache' });
-      res.end(INJECTED_QA_SCRIPT);
-      return;
-    }
-
-    if (req.method === 'POST' && reqUrl.pathname === '/__qa_png') {
-      const name = path.basename(reqUrl.searchParams.get('name') || 'firefox_out.png');
-      const chunks = [];
-      req.on('data', (c) => chunks.push(c));
-      req.on('end', () => {
-        const buf = Buffer.concat(chunks);
-        fs.writeFileSync(path.join(SHOT_DIR, name), buf);
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('ok');
-      });
-      return;
-    }
-
-    if (req.method === 'POST' && reqUrl.pathname === '/__qa_done') {
-      const chunks = [];
-      req.on('data', (c) => chunks.push(c));
-      req.on('end', () => {
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('ok');
-        try {
-          doneResolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-        } catch (err) {
-          doneResolve({ fatalError: `Malformed report JSON: ${err.message}` });
-        }
-      });
-      return;
-    }
-
-    let rel = reqUrl.pathname.replace(/^\/+/, '');
-    if (rel === '' || rel.endsWith('/')) {
-      rel += 'index.html';
-    }
-    const fullPath = path.resolve(TRIAL_ROOT, rel);
-    if (!fullPath.startsWith(TRIAL_ROOT)) {
-      res.writeHead(403);
-      res.end('Forbidden');
-      return;
-    }
-
-    if (rel === 'binary-bh-sim/index.html') {
-      fs.readFile(fullPath, 'utf8', (err, html) => {
-        if (err) {
-          res.writeHead(500);
-          res.end(err.message);
-          return;
-        }
-        const instrumented = html.replace(
-          '</body>',
-          '  <script type="module" src="/__qa_runner.js"></script>\n</body>'
-        );
-        res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache' });
-        res.end(instrumented);
-      });
-      return;
-    }
-
-    fs.stat(fullPath, (err, stat) => {
-      if (err || !stat.isFile()) {
-        res.writeHead(404);
-        res.end('Not found');
-        return;
-      }
-      const ext = path.extname(fullPath).toLowerCase();
-      res.writeHead(200, {
-        'Content-Type': MIME[ext] || 'application/octet-stream',
-        'Content-Length': stat.size,
-        'Cache-Control': 'no-cache',
-      });
-      fs.createReadStream(fullPath).pipe(res);
-    });
-  });
-
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => {
-      resolve({ server, port: server.address().port, donePromise });
-    });
-  });
-}
-
-function checkNvidiaSmiFirefox() {
-  try {
-    const out = execFileSync('nvidia-smi', ['--query-compute-apps=process_name', '--format=csv,noheader'], {
-      encoding: 'utf8',
-    });
-    const fullOut = execFileSync('nvidia-smi', [], { encoding: 'utf8' });
-    return /firefox/i.test(out) || /firefox/i.test(fullOut);
-  } catch {
-    return false;
-  }
-}
-
 async function main() {
   fs.mkdirSync(SHOT_DIR, { recursive: true });
 
-  const { server, port, donePromise } = await startQaServer();
-  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'binary-bh-firefox-qa-'));
-
-  fs.writeFileSync(
-    path.join(profileDir, 'user.js'),
-    `user_pref("dom.webgpu.enabled", true);
-user_pref("gfx.webgpu.ignore-blocklist", true);
-// Avoid Wayland DMABUF zero-copy swapchain hangs on Linux NVIDIA (Mozilla Bug 1927839)
-user_pref("dom.webgpu.allow-present-without-readback", false);
-`
-  );
-
-  const env = {
-    ...process.env,
-    MOZ_LOG: 'WebGPU:4',
-    __NV_PRIME_RENDER_OFFLOAD: '1',
-    __NV_PRIME_RENDER_OFFLOAD_PROVIDER: 'NVIDIA-G0',
-    __GLX_VENDOR_LIBRARY_NAME: 'nvidia',
-    __VK_LAYER_NV_optimus: 'NVIDIA_only',
-    __EGL_VENDOR_LIBRARY_FILENAMES: '/usr/share/glvnd/egl_vendor.d/10_nvidia.json',
-    VK_ICD_FILENAMES: '/usr/share/vulkan/icd.d/nvidia_icd.json',
-  };
-  delete env.MOZ_ENABLE_WAYLAND;
+  const { server, port, donePromise } = await startStaticServer({
+    shotDir: SHOT_DIR,
+    enableQaEndpoints: true,
+    injectTargetRel: 'binary-bh-sim/index.html',
+    injectScript: INJECTED_QA_SCRIPT,
+  });
 
   const targetUrl = `http://127.0.0.1:${port}/binary-bh-sim/?backend=webgpu`;
-  console.log(`Launching headed Firefox Wayland on NVIDIA GPU: ${targetUrl}`);
-
-  const ff = spawn(
-    'firefox',
-    ['--no-remote', '--profile', profileDir, '--width', '1280', '--height', '720', targetUrl],
-    { env, stdio: ['ignore', 'pipe', 'pipe'] }
-  );
-
-  let stderr = '';
-  ff.stdout.on('data', (d) => { stderr += d.toString(); });
-  ff.stderr.on('data', (d) => { stderr += d.toString(); });
-
   let sawFirefoxOnNvidia = false;
-  const smiTimer = setInterval(() => {
-    if (checkNvidiaSmiFirefox()) sawFirefoxOnNvidia = true;
-  }, 700);
-
   let report;
+  let stderr = '';
   try {
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Firefox QA timed out after 45s')), 45000)
-    );
-    report = await Promise.race([donePromise, timeoutPromise]);
-    if (checkNvidiaSmiFirefox()) sawFirefoxOnNvidia = true;
+    ({ sawFirefoxOnNvidia, report, stderr } = await runHeadedFirefoxQA({
+      targetUrl,
+      donePromise,
+      profilePrefix: 'binary-bh-firefox-qa-',
+      timeoutMs: 45000,
+    }));
   } finally {
-    clearInterval(smiTimer);
-    ff.kill('SIGTERM');
-    await new Promise((r) => setTimeout(r, 900));
-    if (!ff.killed) ff.kill('SIGKILL');
-    fs.rmSync(profileDir, { recursive: true, force: true });
     server.close();
   }
 

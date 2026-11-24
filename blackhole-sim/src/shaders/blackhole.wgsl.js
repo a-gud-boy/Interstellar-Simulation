@@ -16,7 +16,7 @@
  *    crisp 3D-cell spectral micro-stars
  */
 
-import { FULLSCREEN_VERT_WGSL } from './common.wgsl.js';
+import { FULLSCREEN_VERT_WGSL } from '../../../shared/shaders/common.wgsl.js';
 
 export const BLACKHOLE_WGSL = /* wgsl */ `
 ${FULLSCREEN_VERT_WGSL}

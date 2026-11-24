@@ -17,7 +17,7 @@
  *    derivatives run in uniform control flow with textureSampleGrad.
  */
 
-import { FULLSCREEN_VERT_WGSL } from './common.wgsl.js';
+import { FULLSCREEN_VERT_WGSL } from '../../../shared/shaders/common.wgsl.js';
 
 export const PULSAR_WGSL = /* wgsl */ `
 ${FULLSCREEN_VERT_WGSL}

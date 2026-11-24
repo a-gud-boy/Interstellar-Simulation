@@ -6,6 +6,8 @@ cd "$ROOT"
 
 ZERO_SHA="0000000000000000000000000000000000000000"
 declare -A CHANGED_SIMS=()
+SHARED_CHANGED=0
+DESKTOP_CHANGED=0
 
 record_file() {
   local file="$1"
@@ -14,6 +16,12 @@ record_file() {
     if [[ -f "${sim}/tests/physics_check.mjs" ]]; then
       CHANGED_SIMS["$sim"]=1
     fi
+  elif [[ "$file" =~ ^(shared|scripts)/ ]] || [[ "$file" == "index.html" ]]; then
+    SHARED_CHANGED=1
+  fi
+
+  if [[ "$file" =~ ^desktop/ ]] || [[ "$file" == "shared/assets/milkyway_4k.jpg" ]]; then
+    DESKTOP_CHANGED=1
   fi
 }
 
@@ -54,17 +62,27 @@ if [[ "$saw_stdin" -eq 0 ]]; then
   fi
 fi
 
-if [[ "${#CHANGED_SIMS[@]}" -eq 0 ]]; then
+if [[ "${#CHANGED_SIMS[@]}" -eq 0 && "$SHARED_CHANGED" -eq 0 && "$DESKTOP_CHANGED" -eq 0 ]]; then
   exit 0
 fi
 
 failed=0
-for sim in "${!CHANGED_SIMS[@]}"; do
-  echo "[pre-push] Running node ${sim}/tests/physics_check.mjs ..."
-  if ! node "${sim}/tests/physics_check.mjs"; then
-    echo "[pre-push] FAILED: ${sim}/tests/physics_check.mjs" >&2
+if [[ "$SHARED_CHANGED" -eq 1 ]]; then
+  echo "[pre-push] Shared/root change detected — running node scripts/run-tests.mjs --physics ..."
+  if ! node scripts/run-tests.mjs --physics; then
+    echo "[pre-push] FAILED: scripts/run-tests.mjs --physics" >&2
     failed=1
-    continue
+  fi
+fi
+
+for sim in "${!CHANGED_SIMS[@]}"; do
+  if [[ "$SHARED_CHANGED" -eq 0 ]]; then
+    echo "[pre-push] Running node ${sim}/tests/physics_check.mjs ..."
+    if ! node "${sim}/tests/physics_check.mjs"; then
+      echo "[pre-push] FAILED: ${sim}/tests/physics_check.mjs" >&2
+      failed=1
+      continue
+    fi
   fi
 
   if [[ "${RUN_BROWSER_QA:-0}" == "1" ]]; then
@@ -87,5 +105,17 @@ for sim in "${!CHANGED_SIMS[@]}"; do
     fi
   fi
 done
+
+if [[ "$DESKTOP_CHANGED" -eq 1 ]]; then
+  if command -v cargo >/dev/null 2>&1; then
+    echo "[pre-push] Running cargo test (desktop physics_parity & shader_validation) ..."
+    if ! cargo test --manifest-path desktop/Cargo.toml --test physics_parity --test shader_validation; then
+      echo "[pre-push] FAILED: desktop cargo tests" >&2
+      failed=1
+    fi
+  else
+    echo "[pre-push] Note: cargo not found in PATH, skipping desktop cargo tests." >&2
+  fi
+fi
 
 exit "$failed"

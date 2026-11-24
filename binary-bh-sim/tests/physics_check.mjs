@@ -260,17 +260,20 @@ console.log('\n=== 5. Unified WebGL2 + WebGPU Codebase & Contract Verification =
     'index.html',
     'styles.css',
     '../launch.sh',
-    'assets/milkyway_4k.jpg',
-    'src/assets/skyLoader.js',
-    'src/assets/physicalLuts.js',
-    'src/shaders/common.glsl.js',
+    '../shared/simRegistry.js',
+    '../shared/ui/base.css',
+    '../shared/ui/simSwitcher.js',
+    '../shared/assets/milkyway_4k.jpg',
+    '../shared/assets/skyLoader.js',
+    '../shared/assets/physicalLuts.js',
+    '../shared/shaders/common.glsl.js',
     'src/shaders/tidal.glsl.js',
     'src/shaders/binary.frag.js',
-    'src/shaders/post.glsl.js',
-    'src/shaders/common.wgsl.js',
+    '../shared/shaders/post.glsl.js',
+    '../shared/shaders/common.wgsl.js',
     'src/shaders/tidal.wgsl.js',
     'src/shaders/binary.wgsl.js',
-    'src/shaders/post.wgsl.js',
+    '../shared/shaders/post.wgsl.js',
     'src/engine/BinaryPhysics.js',
     'src/engine/Presets.js',
     'src/engine/CameraController.js',
@@ -297,10 +300,10 @@ console.log('\n=== 5. Unified WebGL2 + WebGPU Codebase & Contract Verification =
     }
   }
 
-  const commonWgsl = await import(path.join(ROOT, 'src/shaders/common.wgsl.js'));
+  const commonWgsl = await import(path.resolve(ROOT, '../shared/shaders/common.wgsl.js'));
   const tidalWgsl = await import(path.join(ROOT, 'src/shaders/tidal.wgsl.js'));
   const binWgsl = await import(path.join(ROOT, 'src/shaders/binary.wgsl.js'));
-  const postWgsl = await import(path.join(ROOT, 'src/shaders/post.wgsl.js'));
+  const postWgsl = await import(path.resolve(ROOT, '../shared/shaders/post.wgsl.js'));
 
   const wgslStages = [
     { name: 'NOISE_BAKE_COMPUTE_WGSL', code: commonWgsl.NOISE_BAKE_COMPUTE_WGSL, entry: '@compute' },
@@ -359,10 +362,10 @@ console.log('\n=== 5. Unified WebGL2 + WebGPU Codebase & Contract Verification =
     'WebGPURenderer.js allocates 288-byte Binary UBO, 64-byte Tidal UBO, and tidal compute pipeline'
   );
 
-  const commonGlsl = await import(path.join(ROOT, 'src/shaders/common.glsl.js'));
+  const commonGlsl = await import(path.resolve(ROOT, '../shared/shaders/common.glsl.js'));
   const tidalGlsl = await import(path.join(ROOT, 'src/shaders/tidal.glsl.js'));
   const binGlsl = await import(path.join(ROOT, 'src/shaders/binary.frag.js'));
-  const postGlsl = await import(path.join(ROOT, 'src/shaders/post.glsl.js'));
+  const postGlsl = await import(path.resolve(ROOT, '../shared/shaders/post.glsl.js'));
 
   const glslStages = [
     commonGlsl.FULLSCREEN_VERT,
@@ -437,7 +440,7 @@ console.log('\n=== 5. Unified WebGL2 + WebGPU Codebase & Contract Verification =
     'Rendering Backend toggle lives inside collapsible ControlsHUD drawer, not main HUD chrome'
   );
 
-  const lutsMod = await import(path.join(ROOT, 'src/assets/physicalLuts.js'));
+  const lutsMod = await import(path.resolve(ROOT, '../shared/assets/physicalLuts.js'));
   globalThis.GPUTextureUsage = globalThis.GPUTextureUsage || { TEXTURE_BINDING: 4, COPY_DST: 2 };
   let gpuUploaded = null;
   const mockDevice = {

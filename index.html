@@ -4,39 +4,57 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="dark" />
-  <meta http-equiv="refresh" content="0; url=./blackhole-sim/" />
   <title>Interstellar Spacetime Simulators — Gargantua, Wormhole, Binary BH, Warp Drive, Supernova, Pulsar &amp; Starflight</title>
   <link
     rel="icon"
     type="image/svg+xml"
     href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2305060a'/%3E%3Ccircle cx='32' cy='32' r='20' fill='none' stroke='%23f0b35a' stroke-width='3' opacity='0.9'/%3E%3Cellipse cx='32' cy='32' rx='28' ry='7' transform='rotate(-14 32 32)' fill='none' stroke='%23f7ca82' stroke-width='2.6'/%3E%3Ccircle cx='32' cy='32' r='13' fill='%23000'/%3E%3C/svg%3E"
   />
-  <script>
-    (function () {
-      try {
-        var params = new URLSearchParams(window.location.search || '');
-        var sim = (params.get('sim') || '').trim().toLowerCase();
-        var dir = './blackhole-sim/';
-        if (sim === 'wormhole' || sim === 'wormhole-sim' || sim === 'wh') {
-          dir = './wormhole-sim/';
-        } else if (sim === 'binary' || sim === 'binary-bh' || sim === 'binary-bh-sim' || sim === 'bbh') {
-          dir = './binary-bh-sim/';
-        } else if (sim === 'warp' || sim === 'warp-drive' || sim === 'warp-drive-sim' || sim === 'alcubierre') {
-          dir = './warp-drive-sim/';
-        } else if (sim === 'supernova' || sim === 'supernova-sim' || sim === 'snr' || sim === 'nebula') {
-          dir = './supernova-sim/';
-        } else if (sim === 'pulsar' || sim === 'pulsar-sim' || sim === 'magnetar' || sim === 'ns') {
-          dir = './pulsar-sim/';
-        } else if (sim === 'starflight' || sim === 'starflight-sim' || sim === 'sf' || sim === 'relativistic') {
-          dir = './starflight-sim/';
-        }
-        params.delete('sim');
-        var qs = params.toString();
-        window.location.replace(dir + (qs ? '?' + qs : ''));
-      } catch (e) {
-        // Fallback links below remain available
+  <noscript>
+    <meta http-equiv="refresh" content="0; url=./blackhole-sim/" />
+  </noscript>
+  <script type="module">
+    import { SIMULATORS, resolveSimByAlias } from './shared/simRegistry.js';
+
+    function renderHubCards(qs) {
+      const nav = document.getElementById('hub-cards');
+      if (!nav) return;
+      nav.textContent = '';
+      for (const sim of SIMULATORS) {
+        const a = document.createElement('a');
+        a.className = sim.cardClass ? `card ${sim.cardClass}` : 'card';
+        a.href = `./${sim.dir}/${qs ? `?${qs}` : ''}`;
+
+        const title = document.createElement('span');
+        title.className = 'card-title';
+        title.textContent = sim.title;
+
+        const desc = document.createElement('span');
+        desc.className = 'card-desc';
+        desc.textContent = sim.description;
+
+        a.append(title, desc);
+        nav.appendChild(a);
       }
-    })();
+    }
+
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      const showHub = params.has('hub');
+      const simParam = params.get('sim') || '';
+      const target = resolveSimByAlias(simParam);
+      params.delete('sim');
+      params.delete('hub');
+      const qs = params.toString();
+
+      if (showHub) {
+        renderHubCards(qs);
+      } else {
+        window.location.replace(`./${target.dir}/${qs ? `?${qs}` : ''}`);
+      }
+    } catch {
+      renderHubCards('');
+    }
   </script>
   <style>
     :root {
@@ -143,24 +161,12 @@
       margin-bottom: 6px;
       color: var(--accent);
     }
-    .card.wormhole .card-title {
-      color: var(--accent-teal);
-    }
-    .card.binary .card-title {
-      color: var(--accent-violet);
-    }
-    .card.warp .card-title {
-      color: var(--accent-cyan);
-    }
-    .card.supernova .card-title {
-      color: var(--accent-nebula);
-    }
-    .card.pulsar .card-title {
-      color: var(--accent-pulsar);
-    }
-    .card.starflight .card-title {
-      color: var(--accent-starflight);
-    }
+    .card.wormhole .card-title { color: var(--accent-teal); }
+    .card.binary .card-title { color: var(--accent-violet); }
+    .card.warp .card-title { color: var(--accent-cyan); }
+    .card.supernova .card-title { color: var(--accent-nebula); }
+    .card.pulsar .card-title { color: var(--accent-pulsar); }
+    .card.starflight .card-title { color: var(--accent-starflight); }
     .card-desc {
       display: block;
       font-size: 0.85rem;
@@ -172,36 +178,14 @@
 <body>
   <main class="hub">
     <h1>Interstellar Spacetime Simulators</h1>
-    <p class="sub">Redirecting to Gargantua… Choose a relativistic GPU ray-tracer below:</p>
-    <nav class="cards" aria-label="Available spacetime simulators">
-      <a class="card" href="./blackhole-sim/">
-        <span class="card-title">Gargantua — Kerr Black Hole</span>
-        <span class="card-desc">3D Outgoing Kerr–Schild ray-traced accretion disk, relativistic Doppler beaming, and 128-sample cinema still mode.</span>
-      </a>
-      <a class="card wormhole" href="./wormhole-sim/">
-        <span class="card-title">Morris–Thorne Traversable Wormhole</span>
-        <span class="card-desc">James–Thorne &amp; Ellis spacetime throat linking Universe A (4K Milky Way) and Universe B (Exotic Golden–Teal Nebula).</span>
-      </a>
-      <a class="card binary" href="./binary-bh-sim/">
-        <span class="card-title">Binary Black Hole Inspiral &amp; GW Lensing</span>
-        <span class="card-desc">Two-body Brill–Lindquist + 2.5PN inspiral, retarded gravitational wave shear, fractal eyebrow shadows, and tidal gas bridges.</span>
-      </a>
-      <a class="card warp" href="./warp-drive-sim/">
-        <span class="card-title">Alcubierre Warp Drive — FTL Spacetime</span>
-        <span class="card-desc">Alcubierre, Natário zero-expansion, and Lentz soliton warp metrics with ADM null geodesic ray-tracing, relativistic Doppler bow caustics, and Inside Bridge causal horizon.</span>
-      </a>
-      <a class="card supernova" href="./supernova-sim/">
-        <span class="card-title">Supernova Remnant — Volumetric Nebula</span>
-        <span class="card-desc">Multi-scattering radiative transfer across Sedov–Taylor shock shells, Rayleigh–Taylor filaments, Bok globules, Hubble SHO / True Color palettes, and deep interior fly-through.</span>
-      </a>
-      <a class="card pulsar" href="./pulsar-sim/">
-        <span class="card-title">Magnetar &amp; Millisecond Pulsar</span>
-        <span class="card-desc">Outgoing Kerr–Schild light bending exposing &gt;50% of the neutron star crust, twisted pair-plasma dipole loops, sweeping lighthouse beams, and PWN torus &amp; jets.</span>
-      </a>
-      <a class="card starflight" href="./starflight-sim/">
-        <span class="card-title">Relativistic Starflight — Aberration &amp; Doppler Sky</span>
-        <span class="card-desc">Exact Special Relativistic Lorentz null-ray aberration up to 0.9999996c, Planck blackbody UV/IR &amp; CMB blue-shift, Penrose–Terrell rotation on 3D foreground beacons, and 1g brachistochrone cruise.</span>
-      </a>
+    <p class="sub">Choose a relativistic GPU ray-tracer below:</p>
+    <nav id="hub-cards" class="cards" aria-label="Available spacetime simulators">
+      <noscript>
+        <a class="card" href="./blackhole-sim/">
+          <span class="card-title">Gargantua — Kerr Black Hole</span>
+          <span class="card-desc">Enable JavaScript to launch any of the 7 WebGL2/WebGPU spacetime simulators.</span>
+        </a>
+      </noscript>
     </nav>
   </main>
 </body>

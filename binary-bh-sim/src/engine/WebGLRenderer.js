@@ -10,7 +10,7 @@
  *  - Pass 5: Troy Sobotka AgX Filmic Tone Mapping + CA, vignette, film grain & sRGB composite
  */
 
-import { FULLSCREEN_VERT, NOISE_BAKE_FRAG } from '../shaders/common.glsl.js';
+import { FULLSCREEN_VERT, NOISE_BAKE_FRAG } from '../../../shared/shaders/common.glsl.js';
 import { TIDAL_FIELD_FRAG } from '../shaders/tidal.glsl.js';
 import { BINARY_BH_FRAG } from '../shaders/binary.frag.js';
 import {
@@ -20,9 +20,9 @@ import {
   BLOOM_UPSAMPLE_FRAG,
   ANAMORPHIC_FRAG,
   COMPOSITE_FRAG,
-} from '../shaders/post.glsl.js';
-import { createProceduralSkyTextureWebGL } from '../assets/skyLoader.js';
-import { createBlackbodyLUTWebGL, createBlueNoiseLUTWebGL } from '../assets/physicalLuts.js';
+} from '../../../shared/shaders/post.glsl.js';
+import { createProceduralSkyTextureWebGL } from '../../../shared/assets/skyLoader.js';
+import { createBlackbodyLUTWebGL, createBlueNoiseLUTWebGL } from '../../../shared/assets/physicalLuts.js';
 import { computeBinaryState } from './BinaryPhysics.js';
 
 const VOLUME_SIZE = 128;

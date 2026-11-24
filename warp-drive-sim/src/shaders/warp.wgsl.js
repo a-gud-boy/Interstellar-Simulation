@@ -9,7 +9,7 @@
  *  - CIE-1931 Planck blackbody Doppler shift, UV/IR star layers, 128^3 3D wall shimmer & dust streaks
  */
 
-import { FULLSCREEN_VERT_WGSL } from './common.wgsl.js';
+import { FULLSCREEN_VERT_WGSL } from '../../../shared/shaders/common.wgsl.js';
 
 export const WARP_WGSL = /* wgsl */ `
 ${FULLSCREEN_VERT_WGSL}

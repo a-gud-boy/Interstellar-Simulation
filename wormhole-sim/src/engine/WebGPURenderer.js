@@ -8,7 +8,7 @@
  *  - Pass 5: Troy Sobotka AgX Filmic Tone Mapping + subtle CA, vignette, film grain & sRGB composite
  */
 
-import { MIPMAP_WGSL, NOISE_BAKE_COMPUTE_WGSL } from '../shaders/common.wgsl.js';
+import { MIPMAP_WGSL, NOISE_BAKE_COMPUTE_WGSL } from '../../../shared/shaders/common.wgsl.js';
 import { WORMHOLE_WGSL } from '../shaders/wormhole.wgsl.js';
 import {
   TAA_WGSL,
@@ -17,12 +17,12 @@ import {
   BLOOM_UPSAMPLE_WGSL,
   ANAMORPHIC_WGSL,
   COMPOSITE_WGSL,
-} from '../shaders/post.wgsl.js';
+} from '../../../shared/shaders/post.wgsl.js';
 import {
   createProceduralSkyTextureAWebGPU,
   createExoticNebulaTextureBWebGPU,
-} from '../assets/skyLoader.js';
-import { createBlueNoiseLUTWebGPU } from '../assets/physicalLuts.js';
+} from '../../../shared/assets/skyLoader.js';
+import { createBlueNoiseLUTWebGPU } from '../../../shared/assets/physicalLuts.js';
 
 const VOLUME_SIZE = 128;
 const BLOOM_MIP_COUNT = 6;

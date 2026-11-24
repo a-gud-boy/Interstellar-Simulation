@@ -428,7 +428,7 @@ console.log('\n=== 4. Presets, Telemetry & StarflightCamera Orthonormal / Clamp 
 console.log('\n=== 5. Syntax, GLSL/WGSL 176-Byte UBO Parity, Uniformity & Asset Contracts ===');
 {
   const jsFiles = collectJsFiles(path.join(ROOT, 'src')).sort();
-  assert(jsFiles.length >= 12, `Discovered ${jsFiles.length} JS modules under starflight-sim/src/`);
+  assert(jsFiles.length >= 9, `Discovered ${jsFiles.length} JS modules under starflight-sim/src/`);
   for (const fullPath of jsFiles) {
     const rel = path.relative(ROOT, fullPath);
     try {
@@ -540,8 +540,9 @@ console.log('\n=== 5. Syntax, GLSL/WGSL 176-Byte UBO Parity, Uniformity & Asset 
     /textureGrad\s*\(\s*uSkyMap\b/.test(glslSrc) &&
     /textureGrad\s*\(\s*uProcSkyMap\b/.test(glslSrc);
 
-  const commonWgsl = await import(path.join(ROOT, 'src/shaders/common.wgsl.js'));
-  const postWgsl = await import(path.join(ROOT, 'src/shaders/post.wgsl.js'));
+  const commonWgsl = await import(path.resolve(ROOT, '../shared/shaders/common.wgsl.js'));
+  const postWgslMod = await import(path.resolve(ROOT, '../shared/shaders/post.wgsl.js'));
+  const postWgsl = postWgslMod.createPostShadersWGSL('starflight');
   const forbiddenGlsl = /\b(isnan|isinf|inversesqrt|dFdx|dFdy|gl_FragCoord|gl_VertexID|texelFetch|textureGrad)\s*\(/;
   const wgslSources = [
     commonWgsl.FULLSCREEN_VERT_WGSL,
@@ -582,12 +583,11 @@ console.log('\n=== 5. Syntax, GLSL/WGSL 176-Byte UBO Parity, Uniformity & Asset 
   );
 
   // Assets & physicalLuts WebGPU check
-  const skyExists =
-    fs.existsSync(path.join(ROOT, 'assets/milkyway_4k.jpg')) &&
-    fs.statSync(path.join(ROOT, 'assets/milkyway_4k.jpg')).size > 1_000_000;
-  assert(skyExists, 'assets/milkyway_4k.jpg present and complete');
+  const skyPath = path.resolve(ROOT, '../shared/assets/milkyway_4k.jpg');
+  const skyExists = fs.existsSync(skyPath) && fs.statSync(skyPath).size > 1_000_000;
+  assert(skyExists, 'shared/assets/milkyway_4k.jpg present and complete');
 
-  const lutsMod = await import(path.join(ROOT, 'src/assets/physicalLuts.js'));
+  const lutsMod = await import(path.resolve(ROOT, '../shared/assets/physicalLuts.js'));
   globalThis.GPUTextureUsage = globalThis.GPUTextureUsage || { TEXTURE_BINDING: 4, COPY_DST: 2 };
   let gpuUploaded = null;
   const mockDevice = {

@@ -17,6 +17,7 @@ on:
       - main
     paths:
       - desktop/**
+      - shared/assets/milkyway_4k.jpg
       - .github/workflows/build-macos.yml
     tags:
       - "v*"
