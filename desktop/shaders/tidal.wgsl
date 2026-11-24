@@ -1,0 +1,314 @@
+struct TidalUniforms {
+  sep_q_omega_dens      : vec4f, // x=separation, y=massRatio, z=omega, w=diskDensity
+  bridge_outer_half_t   : vec4f, // x=bridgeIntensity, y=diskOuterRadius, z=fieldHalfSize, w=time
+  dt_reset_roche        : vec4f, // x=dt, y=resetFlag (0 or 1), z=rocheL1, w=rocheL2
+  cav_ringdown_pad      : vec4f, // x=rCavity, y=ringdownFactor, zw=0
+};
+
+@group(0) @binding(0) var<uniform> u: TidalUniforms;
+@group(0) @binding(1) var uPrevTidal: texture_2d<f32>;
+@group(0) @binding(2) var sLinear: sampler;
+@group(0) @binding(3) var uOutTidal: texture_storage_2d<rgba16float, write>;
+
+fn isBadFloat(x: f32) -> bool {
+  return (bitcast<u32>(x) & 0x7f800000u) == 0x7f800000u;
+}
+
+fn sanitizeVec4Eq(v: vec4f, eq: vec4f) -> vec4f {
+  return vec4f(
+    select(v.x, eq.x, isBadFloat(v.x)),
+    select(v.y, eq.y, isBadFloat(v.y)),
+    select(v.z, eq.z, isBadFloat(v.z)),
+    select(v.w, eq.w, isBadFloat(v.w))
+  );
+}
+
+struct ClosestResult {
+  pt   : vec2f,
+  segT : f32,
+};
+
+fn closestOnSegment(p: vec2f, a: vec2f, b: vec2f) -> ClosestResult {
+  let ab = b - a;
+  let len2 = max(dot(ab, ab), 1e-6);
+  let segT = clamp(dot(p - a, ab) / len2, 0.0, 1.0);
+  var res: ClosestResult;
+  res.pt = a + ab * segT;
+  res.segT = segT;
+  return res;
+}
+
+struct StreamEval {
+  minDist : f32,
+  bestS   : f32,
+  bestTan : vec2f,
+};
+
+fn evalBezierStream(p: vec2f, p0: vec2f, p1: vec2f, p2: vec2f, p3: vec2f) -> StreamEval {
+  var outS: StreamEval;
+  outS.minDist = 1e6;
+  outS.bestS = 0.0;
+  outS.bestTan = vec2f(1.0, 0.0);
+
+  var prev = p0;
+  const SEGS : i32 = 6;
+  for (var i: i32 = 1; i <= SEGS; i++) {
+    let t = f32(i) / f32(SEGS);
+    let it = 1.0 - t;
+    let cur = (it * it * it) * p0
+            + (3.0 * it * it * t) * p1
+            + (3.0 * it * t * t) * p2
+            + (t * t * t) * p3;
+    let cl = closestOnSegment(p, prev, cur);
+    let dist = length(p - cl.pt);
+    if (dist < outS.minDist) {
+      outS.minDist = dist;
+      outS.bestS = (f32(i - 1) + cl.segT) / f32(SEGS);
+      let dVec = cur - prev;
+      let dLen = length(dVec);
+      outS.bestTan = select(vec2f(1.0, 0.0), dVec / dLen, dLen > 1e-5);
+    }
+    prev = cur;
+  }
+  return outS;
+}
+
+fn evalEquilibrium(posRot: vec2f) -> vec4f {
+  let d = max(u.sep_q_omega_dens.x, 1.4);
+  let q = clamp(u.sep_q_omega_dens.y, 0.05, 1.0);
+  let omega = u.sep_q_omega_dens.z;
+  let diskDensity = u.sep_q_omega_dens.w;
+
+  let bridgeIntensity = u.bridge_outer_half_t.x;
+  let diskOuterRadius = u.bridge_outer_half_t.y;
+  let simTime = u.bridge_outer_half_t.w;
+
+  let rocheL1 = u.dt_reset_roche.z;
+  let rocheL2 = u.dt_reset_roche.w;
+  let rCavity = u.cav_ringdown_pad.x;
+  let ringdown = u.cav_ringdown_pad.y;
+
+  let m1 = 1.0 / (1.0 + q);
+  let m2 = q / (1.0 + q);
+  let eta = m1 * m2;
+
+  let c1 = vec2f(-m2 * d, 0.0);
+  let c2 = vec2f(m1 * d, 0.0);
+
+  let r = length(posRot);
+  let phi = atan2(posRot.y, posRot.x);
+
+  // 1. Circumbinary Disk (CBD)
+  var cbdSigma : f32 = 0.0;
+  var cbdTemp : f32 = 1.0;
+  var vCbd = vec2f(0.0);
+
+  let rCav = max(rCavity, d * 1.5);
+  let rOuter = max(diskOuterRadius, rCav + 4.0);
+  if (diskDensity > 0.001 && r < rOuter * 1.12) {
+    let ecc = 0.14 * clamp(4.0 * eta, 0.25, 1.0);
+    let phiPrec = phi - 0.12 * simTime;
+    let rCavEff = rCav * (1.0 + ecc * cos(phiPrec));
+
+    let cavWall = smoothstep(rCavEff * 0.76, rCavEff * 1.18, r);
+    let outerMask = 1.0 - smoothstep(rOuter * 0.72, rOuter * 1.06, r);
+    let rPeak = max(rCav * 1.22, 2.5);
+    let radProf = pow(clamp(rPeak / max(r, rPeak * 0.72), 0.10, 1.45), 0.72);
+
+    let spiralArg = 2.0 * (phi - 1.95 * log(max(r / max(rCav, 1.0), 0.45)));
+    let spiralShock = pow(max(0.5 + 0.5 * cos(spiralArg), 0.0), 3.0);
+
+    let cavSpan = max(0.26 * rCav, 0.5);
+    let lumpDist = (r - rCavEff * 1.07) / cavSpan;
+    let lumpRad = exp(-lumpDist * lumpDist);
+    let lumpAz = pow(max(0.5 + 0.5 * cos(phiPrec), 0.0), 2.2);
+    let lump = 0.50 * lumpRad * lumpAz;
+
+    cbdSigma = diskDensity * cavWall * outerMask * (radProf * (0.45 + 0.58 * spiralShock) + lump);
+    let rimDist = (r - rCavEff) / max(0.24 * rCav, 0.4);
+    cbdTemp = 1.0 + 0.34 * spiralShock + 0.28 * lump + 0.20 * exp(-rimDist * rimDist);
+
+    let safeR = max(r, 1.2);
+    let omegaCbd = 1.0 / (safeR * sqrt(safeR) + 0.5 * (3.0 - eta) * sqrt(safeR));
+    let tangentCbd = vec2f(posRot.y, -posRot.x);
+    vCbd = omegaCbd * tangentCbd - 0.035 * omegaCbd * posRot;
+  }
+
+  // 2. Twin Mini-Disks inside Eggleton Roche lobes
+  var miniSigma1 : f32 = 0.0;
+  var miniSigma2 : f32 = 0.0;
+  var miniTemp1 : f32 = 1.0;
+  var miniTemp2 : f32 = 1.0;
+  var vMini1 = vec2f(0.0);
+  var vMini2 = vec2f(0.0);
+
+  if (bridgeIntensity > 0.001) {
+    let dVec1 = posRot - c1;
+    let d1 = length(dVec1);
+    let rIn1 = 1.75 * m1;
+    let rOut1 = max(rIn1 + 0.45, min(0.84 * max(rocheL1, 0.5), 0.45 * d));
+    if (d1 < rOut1 * 1.15 && d1 > 0.45 * m1) {
+      let mMask1 = smoothstep(rIn1 * 0.72, rIn1 * 1.16, d1)
+                 * (1.0 - smoothstep(rOut1 * 0.68, rOut1 * 1.08, d1));
+      let phi1 = atan2(dVec1.y, dVec1.x);
+      let sBase1 = max(0.5 + 0.5 * cos(2.0 * (phi1 - 1.45 * log(max(d1 / max(rIn1, 0.1), 0.45)))), 0.0);
+      let sp1 = sBase1 * sBase1;
+      miniSigma1 = bridgeIntensity * (0.62 + 0.52 * m1) * mMask1 * (0.66 + 0.44 * sp1);
+      miniTemp1 = 1.68 + 0.55 * (1.0 - smoothstep(rIn1, rOut1, d1)) + 0.30 * sp1 + 0.35 * ringdown;
+
+      let safeD1 = max(d1, 1.35 * m1);
+      let omega1 = sqrt(m1 / (safeD1 * safeD1 * safeD1));
+      let vBH1 = vec2f(omega * c1.y, -omega * c1.x);
+      vMini1 = vBH1 + omega1 * vec2f(dVec1.y, -dVec1.x) - 0.04 * omega1 * dVec1;
+    }
+
+    let dVec2 = posRot - c2;
+    let d2 = length(dVec2);
+    let rIn2 = 1.75 * m2;
+    let rOut2 = max(rIn2 + 0.35, min(0.84 * max(rocheL2, 0.35), 0.44 * d));
+    if (d2 < rOut2 * 1.15 && d2 > 0.45 * m2) {
+      let mMask2 = smoothstep(rIn2 * 0.72, rIn2 * 1.16, d2)
+                 * (1.0 - smoothstep(rOut2 * 0.68, rOut2 * 1.08, d2));
+      let phi2 = atan2(dVec2.y, dVec2.x);
+      let sBase2 = max(0.5 + 0.5 * cos(2.0 * (phi2 - 1.45 * log(max(d2 / max(rIn2, 0.1), 0.45)))), 0.0);
+      let sp2 = sBase2 * sBase2;
+      miniSigma2 = bridgeIntensity * (0.58 + 0.56 * m2) * mMask2 * (0.66 + 0.44 * sp2);
+      miniTemp2 = 1.76 + 0.60 * (1.0 - smoothstep(rIn2, rOut2, d2)) + 0.30 * sp2 + 0.35 * ringdown;
+
+      let safeD2 = max(d2, 1.35 * m2);
+      let omega2 = sqrt(m2 / (safeD2 * safeD2 * safeD2));
+      let vBH2 = vec2f(omega * c2.y, -omega * c2.x);
+      vMini2 = vBH2 + omega2 * vec2f(dVec2.y, -dVec2.x) - 0.04 * omega2 * dVec2;
+    }
+  }
+
+  // 3. Twin S-shaped Tidal Gas Bridges + Inner L1 Sloshing Stream
+  var bridgeSigma : f32 = 0.0;
+  var bridgeTemp : f32 = 1.0;
+  var vBridge = vec2f(0.0);
+
+  if (bridgeIntensity > 0.001 && r < rCav * 1.25) {
+    let rOut1Est = max(1.75 * m1 + 0.45, min(0.84 * max(rocheL1, 0.5), 0.45 * d));
+    let rOut2Est = max(1.75 * m2 + 0.35, min(0.84 * max(rocheL2, 0.35), 0.44 * d));
+
+    let st1Eval = evalBezierStream(
+      posRot,
+      vec2f(rCav * 1.06 * cos(2.52), rCav * 1.06 * sin(2.52)),
+      vec2f(-0.70 * rCav, 0.35 * rCav),
+      vec2f(c1.x - 0.12 * d, 0.28 * d),
+      c1 + vec2f(0.0, 0.52 * rOut1Est)
+    );
+    let st2Eval = evalBezierStream(
+      posRot,
+      vec2f(rCav * 1.06 * cos(-0.62), rCav * 1.06 * sin(-0.62)),
+      vec2f(0.70 * rCav, -0.35 * rCav),
+      vec2f(c2.x + 0.12 * d, -0.28 * d),
+      c2 + vec2f(0.0, -0.52 * rOut2Est)
+    );
+    let stLEval = evalBezierStream(
+      posRot,
+      c1 + vec2f(0.35 * rOut1Est, 0.12 * d),
+      vec2f((m1 - m2) * 0.12 * d, 0.06 * d),
+      vec2f((m1 - m2) * 0.18 * d, -0.06 * d),
+      c2 + vec2f(-0.35 * rOut2Est, -0.12 * d)
+    );
+
+    let baseW = 0.085 * d + 0.042 * rCav;
+    let w1 = baseW * mix(1.25, 0.42, st1Eval.bestS);
+    let w2 = baseW * mix(1.25, 0.42, st2Eval.bestS);
+    let wL = baseW * 0.65;
+
+    let clumps1 = 0.72 + 0.34 * sin(st1Eval.bestS * 14.0 - simTime * 2.2);
+    let clumps2 = 0.72 + 0.34 * sin(st2Eval.bestS * 14.0 - simTime * 2.2 + 1.7);
+    let clumpsL = 0.68 + 0.32 * sin(stLEval.bestS * 10.0 + simTime * 1.6);
+
+    let mask1 = exp(-(st1Eval.minDist * st1Eval.minDist) / max(w1 * w1, 1e-4))
+              * smoothstep(0.0, 0.10, st1Eval.bestS) * (1.0 - smoothstep(0.88, 1.0, st1Eval.bestS));
+    let mask2 = exp(-(st2Eval.minDist * st2Eval.minDist) / max(w2 * w2, 1e-4))
+              * smoothstep(0.0, 0.10, st2Eval.bestS) * (1.0 - smoothstep(0.88, 1.0, st2Eval.bestS));
+    let maskL = exp(-(stLEval.minDist * stLEval.minDist) / max(wL * wL, 1e-4))
+              * smoothstep(0.0, 0.15, stLEval.bestS) * (1.0 - smoothstep(0.85, 1.0, stLEval.bestS));
+
+    let d1Hor = length(posRot - c1);
+    let d2Hor = length(posRot - c2);
+    let horCut = smoothstep(0.85 * m1, 1.35 * m1, d1Hor) * smoothstep(0.85 * m2, 1.35 * m2, d2Hor);
+
+    let st1 = mask1 * clumps1 * horCut;
+    let st2 = mask2 * clumps2 * horCut;
+    let stL = maskL * clumpsL * horCut * 0.65;
+
+    bridgeSigma = bridgeIntensity * (0.95 * st1 + 0.95 * st2 + 0.75 * stL);
+    let impactHeat = max(st1 * smoothstep(0.65, 0.95, st1Eval.bestS), st2 * smoothstep(0.65, 0.95, st2Eval.bestS));
+    bridgeTemp = 1.32 + 0.65 * impactHeat + 0.30 * ringdown;
+
+    let streamSpeed = min(0.55, sqrt(1.0 / max(r, 1.5)) * 1.15);
+    let corotRig = vec2f(omega * posRot.y, -omega * posRot.x);
+    let vSt1 = corotRig + st1Eval.bestTan * streamSpeed;
+    let vSt2 = corotRig + st2Eval.bestTan * streamSpeed;
+    let vStL = corotRig + stLEval.bestTan * (0.35 * streamSpeed);
+    let wSumB = st1 + st2 + stL + 1e-5;
+    vBridge = (st1 * vSt1 + st2 * vSt2 + stL * vStL) / wSumB;
+  }
+
+  let totalSigma = cbdSigma + miniSigma1 + miniSigma2 + bridgeSigma;
+  let wSum = cbdSigma + miniSigma1 + miniSigma2 + bridgeSigma + 1e-5;
+  var totalTemp = (cbdSigma * cbdTemp + miniSigma1 * miniTemp1 + miniSigma2 * miniTemp2 + bridgeSigma * bridgeTemp) / wSum;
+  if (totalSigma < 1e-5) {
+    totalTemp = 1.0;
+  }
+  var totalVel = (cbdSigma * vCbd + miniSigma1 * vMini1 + miniSigma2 * vMini2 + bridgeSigma * vBridge) / wSum;
+
+  let vMag = length(totalVel);
+  if (vMag > 0.72) {
+    totalVel *= (0.72 / vMag);
+  }
+
+  return vec4f(clamp(totalSigma, 0.0, 8.0), clamp(totalTemp, 0.8, 3.2), totalVel.x, totalVel.y);
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) id: vec3u) {
+  let dims = textureDimensions(uOutTidal);
+  if (id.x >= dims.x || id.y >= dims.y) {
+    return;
+  }
+
+  let uv = (vec2f(id.xy) + vec2f(0.5)) / vec2f(dims);
+  let fieldHalfSize = u.bridge_outer_half_t.z;
+  let posRot = (uv * 2.0 - 1.0) * fieldHalfSize;
+  let eq = evalEquilibrium(posRot);
+
+  let dt = u.dt_reset_roche.x;
+  let doReset = u.dt_reset_roche.y > 0.5;
+  if (doReset || dt <= 1e-6) {
+    textureStore(uOutTidal, vec2i(id.xy), eq);
+    return;
+  }
+
+  let omega = u.sep_q_omega_dens.z;
+  let texelSize = vec2f(1.0) / vec2f(dims);
+
+  let curPrev = textureSampleLevel(uPrevTidal, sLinear, uv, 0.0);
+  let vLab = curPrev.ba;
+  let uCorot = vec2f(vLab.x - omega * posRot.y, vLab.y + omega * posRot.x);
+
+  let advectDt = clamp(dt * 12.0, 0.0, 0.25);
+  let prevPos = posRot - uCorot * advectDt;
+  let prevUv = clamp(prevPos / (2.0 * fieldHalfSize) + 0.5, vec2f(0.002), vec2f(0.998));
+  let advected = textureSampleLevel(uPrevTidal, sLinear, prevUv, 0.0);
+
+  let ppx = textureSampleLevel(uPrevTidal, sLinear, clamp(uv + vec2f(texelSize.x, 0.0), vec2f(0.002), vec2f(0.998)), 0.0);
+  let pmx = textureSampleLevel(uPrevTidal, sLinear, clamp(uv - vec2f(texelSize.x, 0.0), vec2f(0.002), vec2f(0.998)), 0.0);
+  let ppy = textureSampleLevel(uPrevTidal, sLinear, clamp(uv + vec2f(0.0, texelSize.y), vec2f(0.002), vec2f(0.998)), 0.0);
+  let pmy = textureSampleLevel(uPrevTidal, sLinear, clamp(uv - vec2f(0.0, texelSize.y), vec2f(0.002), vec2f(0.998)), 0.0);
+  let cellWorld = 2.0 * fieldHalfSize * texelSize.x;
+  let divU = ((ppx.b - pmx.b) + (ppy.a - pmy.a)) / max(2.0 * cellWorld, 1e-3);
+  let shockHeat = clamp(max(0.0, -divU) * 0.45, 0.0, 0.65);
+
+  let relax = clamp(dt * 1.45, 0.04, 0.35);
+  var nextState = mix(advected, eq, relax);
+  nextState.g = clamp(max(nextState.g, eq.g) + shockHeat * 0.35, 0.8, 3.2);
+  nextState = sanitizeVec4Eq(nextState, eq);
+
+  textureStore(uOutTidal, vec2i(id.xy), nextState);
+}

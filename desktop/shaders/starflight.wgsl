@@ -1,0 +1,1388 @@
+struct VSOut {
+  @builtin(position) pos: vec4f,
+  @location(0) uv: vec2f,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
+  // Single oversized triangle covering NDC [-1, 1]^2 with uv in [0, 1]^2 (top-left origin)
+  let x = f32((vid & 1u) << 2u) - 1.0;
+  let y = f32((vid & 2u) << 1u) - 1.0;
+  var out: VSOut;
+  out.pos = vec4f(x, y, 0.0, 1.0);
+  out.uv = vec2f(x * 0.5 + 0.5, 0.5 - y * 0.5);
+  return out;
+}
+
+struct StarflightUniforms {
+  resolution_time_frame : vec4<f32>,  // (width, height, simTime, float(frameIndex))
+  jitter_fov_prog       : vec4<f32>,  // (jitterX, jitterY, fovY, isProgressive)
+  camRight_beta         : vec4<f32>,  // (right.x, right.y, right.z, beta)
+  camUp_gamma           : vec4<f32>,  // (up.x, up.y, up.z, gamma)
+  camFwd_oneMinusBeta   : vec4<f32>,  // (forward.x, forward.y, forward.z, oneMinusBeta)
+  flightKinematics      : vec4<f32>,  // (flightDir, flightPosZ, rapidity, dopplerStrength)
+  spectralParams        : vec4<f32>,  // (cmbVisibility, starDensity, uvIrGain, aberrationStrength)
+  foregroundParams      : vec4<f32>,  // (geometryVisibility, dustDensity, dustStreakScale, properAccelG)
+  skyParams             : vec4<f32>,  // (skyIntensity, float(skyMode), skyRotX, skyRotY)
+  qualityParams         : vec4<f32>,  // (float(quality), properTimeYr, coordTimeYr, visualPace)
+  extraParams           : vec4<f32>,  // (beamingGain, cmbTempScale, 0.0, 0.0)
+};
+
+@group(0) @binding(0) var<uniform> u: StarflightUniforms;
+@group(0) @binding(1) var uVolumeNoise: texture_3d<f32>;
+@group(0) @binding(2) var sVolume: sampler;
+@group(0) @binding(3) var uSkyMap: texture_2d<f32>;
+@group(0) @binding(4) var uProcSkyMap: texture_2d<f32>;
+@group(0) @binding(5) var sSky: sampler;
+@group(0) @binding(6) var uBlackbodyLut: texture_2d<f32>;
+@group(0) @binding(7) var sLut: sampler;
+@group(0) @binding(8) var uBlueNoise: texture_2d<f32>;
+
+const PI             : f32 = 3.14159265359;
+const TAU            : f32 = 6.28318530718;
+const INV_PI         : f32 = 0.31830988618;
+const INV_TAU        : f32 = 0.15915494309;
+const T_MIN          : f32 = 800.0;
+const T_MAX          : f32 = 40000.0;
+const INV_LOG_T_SPAN : f32 = 1.0 / 3.91202300543; // 1 / ln(40000 / 800)
+const PLANCK_VIS_K   : f32 = 25920.0;             // h*c / (555 nm * k_B)
+const CELL_Z         : f32 = 34.0;
+const MAX_TRACE_DIST : f32 = 115.0;
+const VOL_MAX_DIST   : f32 = 84.0;
+const LUMA_W         : vec3f = vec3f(0.2126, 0.7152, 0.0722);
+
+// ============================================================================
+// 1. IEEE-754 SANITIZER, PLANCK BLACKBODY & SPECTRAL DOPPLER TRANSFER
+// ============================================================================
+
+fn isBadFloat(x: f32) -> bool {
+  return (bitcast<u32>(x) & 0x7f800000u) == 0x7f800000u;
+}
+
+fn sanitizeHdr(v: vec3f) -> vec3f {
+  let clean = vec3f(
+    select(v.x, 0.0, isBadFloat(v.x)),
+    select(v.y, 0.0, isBadFloat(v.y)),
+    select(v.z, 0.0, isBadFloat(v.z))
+  );
+  return clamp(clean, vec3f(0.0), vec3f(32.0));
+}
+
+fn sampleBlackbody(tempK: f32) -> vec3f {
+  let t = clamp(tempK, T_MIN, T_MAX);
+  let uCoord = clamp(log(t / T_MIN) * INV_LOG_T_SPAN, 0.0, 1.0);
+  return textureSampleLevel(uBlackbodyLut, sLut, vec2f(uCoord, 0.5), 0.0).rgb;
+}
+
+// Overflow-free ln(exp(x) - 1) valid across all x > 0 (from 50 K to 10^7 K)
+fn logExpm1(x: f32) -> f32 {
+  if (x > 20.0) {
+    return x;
+  }
+  if (x < 0.01) {
+    let xs = max(x, 1e-6);
+    return log(xs) + 0.5 * xs;
+  }
+  return x + log(max(1.0 - exp(-x), 1e-7));
+}
+
+// Physically monotonic Planck 555 nm visible-band radiance ratio with C1-smooth
+// photographic HDR knee for relativistic headlight beaming & Wien redshift cutoff
+fn evalPlanckBeam(tBase: f32, dBeam: f32, beamingGain: f32) -> f32 {
+  let t0 = max(tBase, 250.0);
+  let d = max(dBeam, 1e-4);
+  let t1 = max(t0 * d, 40.0);
+
+  let logR = logExpm1(PLANCK_VIS_K / t0) - logExpm1(PLANCK_VIS_K / t1);
+  var baseRatio : f32;
+  if (logR >= 0.0) {
+    let rawGain = exp(min(logR * 0.572, 12.0));
+    let excess = rawGain - 1.0;
+    baseRatio = 1.0 + excess / (1.0 + excess / 11.2);
+  } else {
+    let absL = -logR;
+    baseRatio = exp(-0.55 * absL / (1.0 + 0.16 * absL) - 0.022 * absL);
+  }
+  return pow(max(baseRatio, 1e-5), clamp(beamingGain, 0.0, 2.0));
+}
+
+fn evalPlanckChroma(tObs: f32) -> vec3f {
+  let bbRaw = sampleBlackbody(tObs);
+  // Deepen sub-800 K Wien tail toward velvety ruby-crimson
+  let deepRed = mix(vec3f(1.0, 0.024, 0.002), bbRaw, smoothstep(260.0, 820.0, tObs));
+  // Subtle electric sapphire-white tint at extreme relativistic blueshift (> 35,000 K)
+  let hotBlue = mix(deepRed, vec3f(0.32, 0.56, 1.00), smoothstep(32000.0, 120000.0, tObs) * 0.26);
+  let luma = max(dot(hotBlue, LUMA_W), 0.05);
+  return hotBlue / luma;
+}
+
+fn applyRelativisticShift(
+  baseCol: vec3f,
+  tBase: f32,
+  dColor: f32,
+  dBeam: f32,
+  beamingGain: f32,
+  beamMix: f32
+) -> vec3f {
+  let dSafe = max(dColor, 1e-4);
+  let tObs = tBase * dSafe;
+  let bbObs = evalPlanckChroma(tObs);
+  let baseLuma = dot(baseCol, LUMA_W);
+
+  let shiftMix = 1.0 - exp(-abs(log(dSafe)) * 1.45);
+  let shiftedChroma = mix(baseCol, bbObs * baseLuma, shiftMix);
+
+  let planckBeam = evalPlanckBeam(tBase, dBeam, beamingGain);
+  let gain = mix(1.0, planckBeam, beamMix);
+  return max(shiftedChroma * gain, vec3f(0.0));
+}
+
+// Smooth perceptual spectral locus (380..740 nm) for true emission-line Doppler shift
+fn wavelengthToRgb(nm: f32) -> vec3f {
+  if (nm < 375.0 || nm > 740.0) {
+    return vec3f(0.0);
+  }
+  let dr = (nm - 605.0) / 46.0;
+  let dv = (nm - 435.0) / 24.0;
+  let dg = (nm - 538.0) / 42.0;
+  let db = (nm - 452.0) / 30.0;
+  let r = exp(-0.5 * dr * dr) + 0.24 * exp(-0.5 * dv * dv);
+  let g = exp(-0.5 * dg * dg);
+  let b = exp(-0.5 * db * db);
+  let edge = smoothstep(375.0, 415.0, nm) * (1.0 - smoothstep(670.0, 740.0, nm));
+  return vec3f(r, g, b) * edge;
+}
+
+fn rotateSkyDir(d: vec3f, rot: vec2f) -> vec3f {
+  let cy = cos(rot.x);
+  let sy = sin(rot.x);
+  let r1 = vec3f(cy * d.x + sy * d.z, d.y, -sy * d.x + cy * d.z);
+  let cp = cos(rot.y);
+  let sp = sin(rot.y);
+  return vec3f(r1.x, cp * r1.y - sp * r1.z, sp * r1.y + cp * r1.z);
+}
+
+fn hash33f(pIn: vec3f) -> vec3f {
+  var p = fract(pIn * vec3f(0.1031, 0.1030, 0.0973));
+  p += vec3f(dot(p, p.yxz + vec3f(33.33)));
+  return fract((p.xxy + p.yxx) * p.zyx);
+}
+
+// ============================================================================
+// 2. PIXEL-LOCKED PINPOINT STARFIELD, SPECTRAL SKY & SMOOTH CMB FIREBALL
+// ============================================================================
+
+fn evalSpectralStarLayer(
+  dir: vec3f,
+  scale: f32,
+  densityThresh: f32,
+  boost: f32,
+  pixelFwRest: f32,
+  doppler: f32,
+  dColor: f32,
+  beamingGain: f32,
+  uvIrGain: f32,
+  spectralClass: i32,
+  lodLimit: f32
+) -> vec3f {
+  let cellFw = pixelFwRest * scale;
+  let lodFade = 1.0 - smoothstep(lodLimit * 0.45, lodLimit, cellFw);
+  if (lodFade <= 0.002) {
+    return vec3f(0.0);
+  }
+
+  let p = dir * scale;
+  let cell = floor(p);
+  let rnd = hash33f(cell);
+
+  // Weight star density toward the Milky Way galactic plane plus isotropic halo stars
+  let galWeight = exp(-dir.y * dir.y * 16.0);
+  let effThresh = clamp(densityThresh - galWeight * 0.088, 0.58, 0.985);
+  if (rnd.x < effThresh) {
+    return vec3f(0.0);
+  }
+
+  let starPos = cell + vec3f(0.25) + 0.50 * hash33f(cell + vec3f(19.17, 73.41, 41.83));
+  let dist = length(p - starPos);
+
+  // Cleanly mask to zero before cell boundary (dist = 0.22) so zero square clipping occurs
+  let cellMask = smoothstep(0.22, 0.11, dist);
+  if (cellMask <= 0.001) {
+    return vec3f(0.0);
+  }
+
+  let magU = clamp((rnd.x - effThresh) / max(1.0 - effThresh, 1e-4), 0.0, 1.0);
+  let mag2 = magU * magU;
+  let mag = mag2 * mag2 * sqrt(magU);
+
+  // Measure star PSF strictly in ship-frame pixels: crisp 1-2 px Airy/Moffat pinpoints
+  let pxDist = dist / max(cellFw, 1e-5);
+  let corePx = mix(0.46, 0.96, mag);
+  let core = exp(-min((pxDist * pxDist) / (corePx * corePx), 36.0));
+  var psf = core;
+  if (mag > 0.35) {
+    let brightFrac = (mag - 0.35) / 0.65;
+    let moffatR = mix(1.20, 2.25, brightFrac);
+    let uM = pxDist / moffatR;
+    let moffat = 1.0 / pow(1.0 + uM * uM, 2.35);
+    psf += moffat * (0.10 * brightFrac);
+  }
+  psf *= cellMask;
+  if (psf < 0.002) {
+    return vec3f(0.0);
+  }
+
+  let ry = max(rnd.y, 0.0);
+  var tEmit : f32;
+  var bandpassGain : f32;
+  var beamFactor : f32;
+
+  if (spectralClass == 1) {
+    // Cool L/T Brown Dwarfs (750K..1900K): ignite inside the forward headlight cone D > 1.3
+    tEmit = mix(750.0, 1900.0, ry);
+    let fwdIgnite = smoothstep(1.30, 2.45, doppler);
+    bandpassGain = fwdIgnite * uvIrGain * 1.95;
+    let irBeam = evalPlanckBeam(2600.0, max(doppler * 0.55, 1.0), beamingGain);
+    beamFactor = mix(1.0, irBeam, 0.65);
+  } else if (spectralClass == 2) {
+    // Hot UV O/B stars & White Dwarfs (14000K..95000K): crisp warm-amber to sapphire-white aft pinpoints
+    tEmit = mix(14000.0, 95000.0, ry * ry);
+    let aftWindow = smoothstep(0.018, 0.044, doppler) * (1.0 - smoothstep(0.45, 0.68, doppler));
+    let restTrace = 0.055 * smoothstep(0.68, 1.02, doppler) * (1.0 - smoothstep(1.45, 2.8, doppler));
+    bandpassGain = restTrace + aftWindow * uvIrGain * 2.25;
+    let uvBeam = mix(0.85, 1.40, smoothstep(0.025, 0.35, doppler));
+    beamFactor = pow(max(uvBeam, 1e-4), clamp(beamingGain, 0.0, 2.0));
+  } else {
+    // Main sequence OBAFGKM (2800K..22000K)
+    tEmit = 2800.0 * exp((ry * ry * 0.84 + ry * 0.16) * 2.061423);
+    bandpassGain = 1.0;
+    let msBeam = evalPlanckBeam(tEmit, doppler, beamingGain);
+    beamFactor = mix(1.0, msBeam, 0.88);
+  }
+
+  if (bandpassGain <= 0.002) {
+    return vec3f(0.0);
+  }
+
+  let tObs = tEmit * max(dColor, 1e-4);
+  var col = sampleBlackbody(tObs);
+  if (tObs < 820.0) {
+    col = mix(vec3f(1.0, 0.03, 0.003), col, smoothstep(260.0, 820.0, tObs));
+  } else if (tObs > 32000.0) {
+    col = mix(col, vec3f(0.48, 0.72, 1.00), smoothstep(32000.0, 120000.0, tObs) * 0.25);
+  }
+
+  let wienCut = select(
+    smoothstep(240.0, 760.0, tObs),
+    smoothstep(520.0, 960.0, tObs),
+    spectralClass == 1
+  );
+
+  let antiAlias = 1.0 / (1.0 + cellFw * 1.45);
+  let lum = (0.18 + 5.20 * mag) * boost * antiAlias * bandpassGain * beamFactor * wienCut * lodFade;
+  return col * (psf * lum);
+}
+
+fn evalCmbShell(rdRest: vec3f, doppler: f32, cmbVisibility: f32, cmbTempScale: f32) -> vec3f {
+  if (cmbVisibility <= 0.001) {
+    return vec3f(0.0);
+  }
+
+  // Multi-scale 3-octave Planck acoustic mottling (strictly LOD 0)
+  let n1 = textureSampleLevel(uVolumeNoise, sVolume, rdRest * 4.5, 0.0);
+  let n2 = textureSampleLevel(uVolumeNoise, sVolume, rdRest * 11.0 + vec3f(0.23, 0.41, 0.17), 0.0);
+  let n3 = textureSampleLevel(uVolumeNoise, sVolume, rdRest * 26.0 + vec3f(0.67, 0.19, 0.53), 0.0);
+  let acousticMottle = ((n1.r * 0.54 + n2.b * 0.30 + n3.g * 0.16) - 0.5) * 2.0;
+
+  let dipoleDir = normalize(vec3f(0.45, 0.35, 0.82));
+  let dipoleTerm = 0.001233 * dot(rdRest, dipoleDir);
+  let mottle = 0.065 * acousticMottle;
+  let tCmbObs = 2.7255 * max(cmbTempScale, 0.0) * doppler * (1.0 + dipoleTerm + mottle);
+
+  if (tCmbObs < 45.0) {
+    return vec3f(0.0);
+  }
+
+  // C-infinity smooth Wien-like NIR thermal onset -> exact CIE-1931 optical blackbody
+  let nirWien = exp(-560.0 / max(tCmbObs, 1.0));
+  let nirLum = 11.5 * nirWien / (1.0 + 1.45 * nirWien);
+
+  // Smooth C-infinity thermal color ramp: deep IR crimson (~115K) -> ember-gold (385K)
+  let cWarm1 = 1.0 - exp(-max(tCmbObs - 60.0, 0.0) / 175.0);
+  let cWarm2 = 1.0 - exp(-max(tCmbObs - 180.0, 0.0) / 340.0);
+  var thermalCol = mix(vec3f(0.50, 0.022, 0.004), vec3f(0.98, 0.24, 0.028), cWarm1);
+  thermalCol = mix(thermalCol, vec3f(1.00, 0.52, 0.11), cWarm2);
+
+  // Seamless blend into exact CIE-1931 Planck blackbody above ~800 K (solar-white at eta=7.0..7.65)
+  let optBlend = 1.0 - exp(-max(tCmbObs - 720.0, 0.0) / 1150.0);
+  let optCol = sampleBlackbody(tCmbObs);
+  let cmbTint = mix(thermalCol, optCol, optBlend);
+
+  let optWien = exp(-2800.0 / max(tCmbObs, 1.0));
+  let optLum = 18.0 * optWien / (1.0 + 0.55 * optWien);
+
+  let totalLum = (nirLum + optLum) * (1.0 + 0.18 * acousticMottle) * cmbVisibility;
+  return max(cmbTint * totalLum, vec3f(0.0));
+}
+
+fn sampleSkyBackground(
+  rdRest: vec3f,
+  pixelFwRest: f32,
+  doppler: f32,
+  dopplerStrength: f32,
+  beamingGain: f32,
+  skyIntensity: f32,
+  skyMode: i32,
+  skyRot: vec2f,
+  starDensity: f32,
+  uvIrGain: f32,
+  cmbVisibility: f32,
+  cmbTempScale: f32
+) -> vec3f {
+  let dir = normalize(rotateSkyDir(rdRest, skyRot));
+
+  // Seam-safe & pole-safe equirectangular derivatives strictly in uniform control flow
+  let azim = select(0.0, atan2(dir.z, dir.x), abs(dir.x) + abs(dir.z) > 1e-6);
+  let u1 = azim * INV_TAU + 0.5;
+  let v = acos(clamp(dir.y, -1.0, 1.0)) * INV_PI;
+  let uv1 = vec2f(u1, v);
+  let uv2 = vec2f(fract(u1 + 0.5), v);
+
+  let dx1 = dpdx(uv1);
+  let dy1 = dpdy(uv1);
+  let dx2 = dpdx(uv2);
+  let dy2 = dpdy(uv2);
+
+  var dUVdx = vec2f(select(dx2.x, dx1.x, abs(dx1.x) < abs(dx2.x)), dx1.y);
+  var dUVdy = vec2f(select(dy2.x, dy1.x, abs(dy1.x) < abs(dy2.x)), dy1.y);
+
+  // Smooth magnification mip-gradient floor when doppler < 0.72 so magnified mip-0 JPEG stars
+  // smooth into velvety crimson continuum (zero effect for doppler >= 0.72: crisp 4K forward sky)
+  let magSmooth = 1.0 - smoothstep(0.14, 0.72, doppler);
+  let minGrad = magSmooth * 0.0065;
+  if (minGrad > 1e-6) {
+    let lenX = length(vec2f(dUVdx.x, dUVdx.y * 0.5));
+    let lenY = length(vec2f(dUVdy.x, dUVdy.y * 0.5));
+    dUVdx = select(vec2f(minGrad, 0.0), dUVdx * max(1.0, minGrad / max(lenX, 1e-6)), lenX > 1e-5);
+    dUVdy = select(vec2f(0.0, minGrad * 2.0), dUVdy * max(1.0, minGrad / max(lenY, 1e-6)), lenY > 1e-5);
+  }
+  dUVdx = clamp(dUVdx, vec2f(-0.25), vec2f(0.25));
+  dUVdy = clamp(dUVdy, vec2f(-0.25), vec2f(0.25));
+
+  let sampleUv = vec2f(uv1.x, clamp(uv1.y, 0.002, 0.998));
+  var mapSrgb : vec3f;
+  if (skyMode >= 1) {
+    mapSrgb = textureSampleGrad(uProcSkyMap, sSky, sampleUv, dUVdx, dUVdy).rgb;
+  } else {
+    mapSrgb = textureSampleGrad(uSkyMap, sSky, sampleUv, dUVdx, dUVdy).rgb;
+  }
+
+  var skyLin = pow(max(mapSrgb, vec3f(1e-5)), vec3f(2.2));
+  let rawSkyLuma = dot(skyLin, LUMA_W);
+
+  // Preserve crisp dust-lane contrast & pure #000 deep-space black floor
+  let blackFloorGate = smoothstep(0.0016, 0.032, rawSkyLuma);
+  skyLin *= blackFloorGate;
+  let coreBoost = max(rawSkyLuma - 0.14, 0.0);
+  skyLin *= (1.0 + coreBoost * 1.65);
+
+  let dColor = pow(max(doppler, 1e-4), clamp(dopplerStrength, 0.0, 2.0));
+
+  // Reconstruct rest-frame effective temperature (~3200K warm bulge -> ~5800K disk -> ~10500K OB clouds)
+  let rgbSum = max(skyLin.r + skyLin.g + skyLin.b, 1e-5);
+  let chromaRB = clamp((skyLin.b - skyLin.r) / rgbSum, -0.55, 0.55);
+  let tNorm = clamp(chromaRB * 1.43 + 0.50, 0.0, 1.0);
+  let tBaseMw = 3200.0 * exp(tNorm * 1.188224); // 3200K * (10500/3200)^tNorm
+
+  var shiftedSky = applyRelativisticShift(skyLin, tBaseMw, dColor, dColor, beamingGain, 0.88);
+
+  // Physically real Far-IR Galactic Dust Thermal Shift in dark extinction lanes (activates only for D > 28)
+  if (dColor > 28.0) {
+    let planeWeight = exp(-dir.y * dir.y * 42.0);
+    let darkRift = 1.0 - smoothstep(0.015, 0.14, rawSkyLuma);
+    let dustN = textureSampleLevel(uVolumeNoise, sVolume, dir * 4.2 + vec3f(0.17, 0.53, 0.31), 0.0);
+    let dustFil = smoothstep(0.26, 0.86, dustN.r * 0.56 + dustN.g * 0.44);
+    let tDustRest = mix(30.0, 50.0, dustN.b);
+    let tDustObs = tDustRest * dColor;
+    let irOnset = smoothstep(28.0, 92.0, dColor) * smoothstep(950.0, 3100.0, tDustObs);
+    let dustCol = sampleBlackbody(tDustObs);
+    let dustLum = 0.82 * planeWeight * darkRift * dustFil * irOnset * (0.50 + 0.50 * clamp(uvIrGain, 0.0, 2.5));
+    shiftedSky += dustCol * dustLum;
+  }
+
+  // Subtle aft UV galactic-plane OB continuum glow (D in [0.025, 0.55])
+  let aftUvWindow = smoothstep(0.025, 0.052, dColor) * (1.0 - smoothstep(0.32, 0.55, dColor));
+  if (aftUvWindow > 0.001) {
+    let galBand = exp(-dir.y * dir.y * 24.0);
+    let obN = textureSampleLevel(uVolumeNoise, sVolume, dir * 3.8 + vec3f(0.41, 0.13, 0.67), 0.0);
+    let obStruct = 0.38 + 0.62 * smoothstep(0.20, 0.84, obN.r * 0.62 + obN.b * 0.38);
+    let dustCarve = 0.24 + 1.65 * smoothstep(0.009, 0.17, rawSkyLuma);
+    let tUvObs = mix(19000.0, 34000.0, obN.b) * dColor;
+    let uvBb = sampleBlackbody(tUvObs);
+    let garnetCol = mix(vec3f(0.84, 0.095, 0.024), uvBb, smoothstep(950.0, 2900.0, tUvObs) * 0.48);
+    let uvLum = aftUvWindow * galBand * obStruct * dustCarve * (0.14 + 0.11 * clamp(uvIrGain, 0.0, 2.5));
+    shiftedSky += garnetCol * uvLum;
+  }
+
+  skyLin = shiftedSky;
+
+  if (starDensity > 0.001) {
+    let starGain = select(0.92, 1.15, skyMode >= 1) * starDensity;
+    var stars = vec3f(0.0);
+    // Main sequence octaves (2800K..22000K)
+    stars += evalSpectralStarLayer(dir,  18.0, 0.800, 0.82 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 0, 1.85);
+    stars += evalSpectralStarLayer(dir,  46.0, 0.882, 1.00 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 0, 1.35);
+    stars += evalSpectralStarLayer(dir, 115.0, 0.902, 0.96 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 0, 1.20);
+    stars += evalSpectralStarLayer(dir, 240.0, 0.892, 0.52 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 0, 1.15);
+    // Cool L/T Brown Dwarfs (750K..1900K, forward headlight ignition D > 1.3)
+    stars += evalSpectralStarLayer(dir,  22.0, 0.825, 0.95 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 1, 1.75);
+    stars += evalSpectralStarLayer(dir,  64.0, 0.880, 1.22 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 1, 1.30);
+    stars += evalSpectralStarLayer(dir, 150.0, 0.895, 1.00 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 1, 1.20);
+    // Hot UV O/B stars & White Dwarfs (14000K..95000K, crisp warm-to-sapphire aft pinpoints)
+    stars += evalSpectralStarLayer(dir,  38.0, 0.805, 1.35 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 2, 1.50);
+    stars += evalSpectralStarLayer(dir,  96.0, 0.828, 1.65 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 2, 1.25);
+    stars += evalSpectralStarLayer(dir, 210.0, 0.838, 1.30 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 2, 1.15);
+    skyLin += stars;
+  }
+
+  let cmbCol = evalCmbShell(rdRest, doppler, cmbVisibility, cmbTempScale);
+  return skyLin * max(skyIntensity, 0.0) + cmbCol;
+}
+
+// ============================================================================
+// 3. NASA / INTERSTELLAR-GRADE PENROSE-TERRELL 3D FOREGROUND CORRIDOR (REST S)
+// ============================================================================
+
+fn sdBox(p: vec3f, b: vec3f) -> f32 {
+  let q = abs(p) - b;
+  return length(max(q, vec3f(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+fn sdCylinderZ(p: vec3f, r: f32, h: f32) -> f32 {
+  let d = vec2f(length(p.xy) - r, abs(p.z) - h);
+  return min(max(d.x, d.y), 0.0) + length(max(d, vec2f(0.0)));
+}
+
+fn sdOctPrismZ(p: vec3f, r: f32, h: f32) -> f32 {
+  let ap = abs(p.xy);
+  let octD = max(max(ap.x, ap.y), (ap.x + ap.y) * 0.70710678) - r;
+  let d = vec2f(octD, abs(p.z) - h);
+  return min(max(d.x, d.y), 0.0) + length(max(d, vec2f(0.0)));
+}
+
+fn sdCapsule(p: vec3f, a: vec3f, b: vec3f, r: f32) -> f32 {
+  let pa = p - a;
+  let ba = b - a;
+  let h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
+  return length(pa - ba * h) - r;
+}
+
+// Object 0: Precision Relativistic Metrology Gate (R = 6.35 dual-flange I-beam, 24 ribs, 4 optical nodes)
+fn sdRingGate(p: vec3f) -> f32 {
+  let rXY = length(p.xy);
+  let dr = rXY - 6.35;
+  let az = abs(p.z);
+
+  // Dual-flange I-beam ring: dark recessed web + proud brushed-titanium inner/outer flanges
+  let qWeb = vec2f(abs(dr) - 0.115, az - 0.165);
+  let dWeb = length(max(qWeb, vec2f(0.0))) + min(max(qWeb.x, qWeb.y), 0.0) - 0.012;
+
+  let qFlange = vec2f(abs(abs(dr) - 0.118) - 0.026, az - 0.245);
+  let dFlange = length(max(qFlange, vec2f(0.0))) + min(max(qFlange.x, qFlange.y), 0.0) - 0.012;
+  let dRing = min(dWeb, dFlange);
+
+  // 24 sculpted radial bulkhead stiffening ribs (exact Euclidean angular sector fold)
+  let angle = select(0.0, atan2(p.y, p.x), rXY > 1e-6);
+  const SEC_24 : f32 = TAU / 24.0;
+  let aRib = ((angle + 0.5 * SEC_24) - floor((angle + 0.5 * SEC_24) / SEC_24) * SEC_24) - 0.5 * SEC_24;
+  let pRib = vec3f(rXY * cos(aRib) - 6.35, rXY * sin(aRib), p.z);
+  let dRib = sdBox(pRib, vec3f(0.140, 0.032, 0.220)) - 0.008;
+
+  // 4 sleek chamfered octagonal optical-interferometer nodes at cardinal points
+  let ap = abs(p.xy);
+  let mxy = select(ap.yx, ap.xy, ap.x > ap.y);
+  let pNode = vec3f(mxy.x - 6.44, mxy.y, p.z);
+  let dNodeOct = sdOctPrismZ(pNode, 0.31, 0.39) - 0.022;
+  // Recessed circular optical lens apertures on both bow (-Z) and stern (+Z) faces
+  let dApertureCut = sdCylinderZ(vec3f(pNode.x, pNode.y, abs(pNode.z) - 0.40), 0.135, 0.055);
+  let dNodeBody = max(dNodeOct, -dApertureCut);
+  // Recessed optical objective lens dome inside the baffle
+  let dLens = length(vec3f(pNode.x, pNode.y, abs(pNode.z) - 0.355)) - 0.118;
+  // Slender radial stabilizer fin projecting outward from each cardinal node
+  let dFin = sdBox(pNode - vec3f(0.42, 0.0, 0.0), vec3f(0.30, 0.026, 0.155)) - 0.008;
+
+  let dNode = min(min(dNodeBody, dLens), dFin);
+  return min(min(dRing, dRib), dNode);
+}
+
+// Object 1: Deep-Space Relativistic Interferometer Probe (NASA / Voyager / JWST silhouette)
+fn sdBeaconStation(p: vec3f) -> f32 {
+  // Central chamfered octagonal spacecraft bus wrapped in gold-Kapton MLI + louver bays
+  let dBus = sdOctPrismZ(p, 0.43, 0.46) - 0.024;
+  // Seamless gimbal pedestal deck bridging bus to parabolic dish vertex (z in [-0.62, -0.44])
+  let dDeck = sdCylinderZ(p - vec3f(0.0, 0.0, -0.53), 0.28, 0.09) - 0.010;
+
+  // Thin concave white-ceramic parabolic high-gain dish antenna opening forward (-Z)
+  let pd = p - vec3f(0.0, 0.0, -0.60);
+  let rD = length(pd.xy);
+  let rClamp = min(rD, 0.72);
+  let zSurf = -0.44 * rClamp * rClamp;
+  let dz = pd.z - zSurf;
+  let drEdge = max(rD - 0.72, 0.0);
+  let invSlope = 1.0 / sqrt(1.0 + 0.7744 * rClamp * rClamp);
+  let dDishShell = sqrt(dz * dz * invSlope * invSlope + drEdge * drEdge) - 0.018;
+  let dDishRim = length(vec2f(rD - 0.72, pd.z + 0.228)) - 0.024;
+  let dDish = min(dDishShell, dDishRim);
+
+  // Central feed horn + 3-leg tripod struts (exact 3-fold symmetry)
+  let dHorn = sdCylinderZ(p - vec3f(0.0, 0.0, -1.10), 0.072, 0.062) - 0.010;
+  let aTri = select(0.0, atan2(p.y, p.x), rD > 1e-6);
+  const SEC_3 : f32 = TAU / 3.0;
+  let aFold = ((aTri + 0.5 * SEC_3) - floor((aTri + 0.5 * SEC_3) / SEC_3) * SEC_3) - 0.5 * SEC_3;
+  let pTri = vec3f(rD * cos(aFold), rD * sin(aFold), p.z);
+  let dTripod = sdCapsule(pTri, vec3f(0.60, 0.0, -0.77), vec3f(0.05, 0.0, -1.10), 0.014);
+
+  // Paper-thin photovoltaic solar arrays (~0.032 total thickness) on slender tubular booms
+  let dBoom = sdCapsule(vec3f(p.x, abs(p.y), p.z), vec3f(0.0, 0.40, 0.04), vec3f(0.0, 2.04, 0.04), 0.024);
+  const C15 : f32 = 0.96592583;
+  const S15 : f32 = 0.25881905;
+  let pz = p.z - 0.04;
+  let pWing = vec3f(C15 * p.x + S15 * pz, abs(p.y) - 1.40, -S15 * p.x + C15 * pz);
+  let dSolar = sdBox(pWing, vec3f(0.012, 0.62, 0.34)) - 0.004;
+
+  // Recessed aft xenon ion-thruster nozzle bell seamlessly mounted to aft bulkhead (+Z)
+  let zNoz = clamp((p.z - 0.46) / 0.46, 0.0, 1.0);
+  let rBell = mix(0.155, 0.285, sqrt(zNoz));
+  let dBellOut = max((rD - rBell) * 0.85, abs(p.z - 0.69) - 0.23);
+  let dBellIn = max((rD - (rBell - 0.030)) * 0.85, -(p.z - 0.58));
+  let dNozzle = max(dBellOut, -dBellIn) - 0.008;
+
+  // Small forward star-tracker optical baffle & tiny navigation strobe mast
+  let dTracker = sdCylinderZ(p - vec3f(0.35, 0.33, -0.42), 0.062, 0.11) - 0.008;
+  let dMast = sdCapsule(p, vec3f(-0.30, 0.28, -0.30), vec3f(-0.45, 0.47, -0.45), 0.011);
+  let dStrobe = length(p - vec3f(-0.46, 0.48, -0.46)) - 0.030;
+
+  let dCore = min(min(dBus, dDeck), min(dNozzle, dTracker));
+  let dAnt = min(dDish, min(dHorn, dTripod));
+  let dWings = min(dBoom, dSolar);
+  let dNav = min(dMast, dStrobe);
+  return min(min(dCore, dAnt), min(dWings, dNav));
+}
+
+// Per-cell deterministic 3D orientation & triaxial axes for zero cloned asteroids
+fn asteroidLocalPoint(p: vec3f, cellMod: i32) -> vec3f {
+  let fm = f32(cellMod);
+  let h = hash33f(vec3f(fm * 1.73 + 5.1, fm * 2.91 + 13.7, fm * 4.19 + 29.3));
+  let yaw = h.x * TAU;
+  let pitch = (h.y - 0.5) * 2.4;
+  let roll = h.z * TAU;
+
+  let cy = cos(yaw); let sy = sin(yaw);
+  let cp = cos(pitch); let sp = sin(pitch);
+  let cr = cos(roll); let sr = sin(roll);
+
+  let r1 = vec3f(cy * p.x + sy * p.z, p.y, -sy * p.x + cy * p.z);
+  let r2 = vec3f(r1.x, cp * r1.y - sp * r1.z, sp * r1.y + cp * r1.z);
+  return vec3f(cr * r2.x - sr * r2.y, sr * r2.x + cr * r2.y, r2.z);
+}
+
+fn asteroidAxes(cellMod: i32) -> vec3f {
+  let fm = f32(cellMod);
+  let h = hash33f(vec3f(fm * 5.31 + 2.7, fm * 1.17 + 17.9, fm * 3.83 + 41.1));
+  return vec3f(
+    mix(0.96, 1.44, h.x),
+    mix(0.78, 1.16, h.y),
+    mix(1.02, 1.50, h.z)
+  );
+}
+
+fn evalHeroCrater(uDir: vec3f, axis: vec3f, angRad: f32, depth: f32) -> f32 {
+  let d = length(uDir - axis) / angRad;
+  if (d >= 1.55) {
+    return 0.0;
+  }
+  let bowl = -depth * max(1.0 - d * d, 0.0);
+  let dr = d - 1.06;
+  let rim = depth * 0.34 * exp(-(dr * dr) / 0.030);
+  return bowl + rim;
+}
+
+// Object 2: Pure Cratered Carbonaceous/Silicate Rubble-Pile Asteroid (ZERO glued pods!)
+fn sdFacetedAsteroid(p: vec3f, cellMod: i32) -> f32 {
+  let pa = asteroidLocalPoint(p, cellMod);
+  let axes = asteroidAxes(cellMod);
+
+  let k0 = length(pa / axes);
+  let k1 = length(pa / (axes * axes));
+  let minAxis = min(axes.x, min(axes.y, axes.z));
+  let dEllip = select(-minAxis, k0 * (k0 - 1.0) / max(k1, 1e-5), k0 > 1e-4);
+
+  let fm = f32(cellMod);
+  let seedOff = hash33f(vec3f(fm * 2.13 + 9.4, fm * 3.67 + 1.9, fm * 1.41 + 27.5)) * 0.77;
+
+  // Broad geological facets & ridges from 128^3 3D Perlin + ridged multifractal
+  let nMacro = textureSampleLevel(uVolumeNoise, sVolume, pa * 0.25 + seedOff, 0.0);
+  let nCell = textureSampleLevel(uVolumeNoise, sVolume, pa * 0.62 + seedOff * 1.63, 0.0);
+
+  let broadDisp = (nMacro.r - 0.5) * 0.30 + (nMacro.g - 0.45) * 0.22;
+
+  // Secondary Worley cellular pockmarks with raised ejecta rims
+  let cRad = clamp(1.0 - nCell.b, 0.0, 1.0);
+  let smallBowl = -0.070 * max(1.0 - (cRad / 0.36) * (cRad / 0.36), 0.0);
+  let sRimD = cRad - 0.40;
+  let smallRim = 0.022 * exp(-(sRimD * sRimD) / 0.0055);
+
+  // 5 deterministic concave hero impact craters with raised rims
+  let paLen = length(pa);
+  let uDir = select(vec3f(0.0, 0.0, 1.0), pa / max(paLen, 1e-5), paLen > 1e-5);
+  var heroCraters : f32 = 0.0;
+  heroCraters += evalHeroCrater(uDir, normalize(vec3f( 0.62,  0.44, -0.65)), 0.48, 0.135);
+  heroCraters += evalHeroCrater(uDir, normalize(vec3f(-0.70,  0.30,  0.65)), 0.42, 0.115);
+  heroCraters += evalHeroCrater(uDir, normalize(vec3f(-0.22, -0.82, -0.53)), 0.38, 0.105);
+  heroCraters += evalHeroCrater(uDir, normalize(vec3f( 0.35, -0.42,  0.84)), 0.34, 0.092);
+  heroCraters += evalHeroCrater(uDir, normalize(vec3f(-0.54,  0.76, -0.36)), 0.30, 0.082);
+
+  return (dEllip - broadDisp - smallBowl - smallRim - heroCraters) * 0.68;
+}
+
+fn evalObjSdf(pLocal: vec3f, objId: i32, cellMod: i32) -> f32 {
+  if (objId == 0) {
+    return sdRingGate(pLocal);
+  }
+  if (objId == 1) {
+    return sdBeaconStation(pLocal);
+  }
+  return sdFacetedAsteroid(pLocal, cellMod);
+}
+
+fn calcObjNormal(pLocal: vec3f, objId: i32, cellMod: i32) -> vec3f {
+  const eps : f32 = 0.0032;
+  let n = vec3f( 1.0, -1.0, -1.0) * evalObjSdf(pLocal + vec3f( 1.0, -1.0, -1.0) * eps, objId, cellMod)
+        + vec3f(-1.0, -1.0,  1.0) * evalObjSdf(pLocal + vec3f(-1.0, -1.0,  1.0) * eps, objId, cellMod)
+        + vec3f(-1.0,  1.0, -1.0) * evalObjSdf(pLocal + vec3f(-1.0,  1.0, -1.0) * eps, objId, cellMod)
+        + vec3f( 1.0,  1.0,  1.0) * evalObjSdf(pLocal + vec3f( 1.0,  1.0,  1.0) * eps, objId, cellMod);
+  let len = length(n);
+  return select(vec3f(0.0, 0.0, 1.0), n / max(len, 1e-6), len > 1e-6);
+}
+
+fn intersectSphere(ro: vec3f, rd: vec3f, center: vec3f, radius: f32) -> vec2f {
+  let oc = ro - center;
+  let b = dot(oc, rd);
+  let c = dot(oc, oc) - radius * radius;
+  let h = b * b - c;
+  if (h < 0.0) {
+    return vec2f(1e9, -1e9);
+  }
+  let s = sqrt(h);
+  return vec2f(-b - s, -b + s);
+}
+
+struct HitInfo {
+  hit      : bool,
+  t        : f32,
+  objId    : i32,
+  cellMod  : i32,
+  localPos : vec3f,
+};
+
+fn marchObject(
+  ro: vec3f,
+  rd: vec3f,
+  center: vec3f,
+  radius: f32,
+  tMin: f32,
+  tMax: f32,
+  objId: i32,
+  cellMod: i32,
+  zSlabHalf: f32
+) -> HitInfo {
+  var res: HitInfo;
+  res.hit = false;
+  res.t = tMax;
+  res.objId = objId;
+  res.cellMod = cellMod;
+  res.localPos = vec3f(0.0);
+
+  let sp = intersectSphere(ro, rd, center, radius);
+  var t0 = max(tMin, sp.x);
+  var t1 = min(tMax, sp.y);
+
+  if (zSlabHalf > 0.0) {
+    if (abs(rd.z) > 1e-5) {
+      let tzA = (center.z - zSlabHalf - ro.z) / rd.z;
+      let tzB = (center.z + zSlabHalf - ro.z) / rd.z;
+      t0 = max(t0, min(tzA, tzB));
+      t1 = min(t1, max(tzA, tzB));
+    } else if (abs(ro.z - center.z) > zSlabHalf) {
+      return res;
+    }
+  }
+
+  if (t0 >= t1) {
+    return res;
+  }
+
+  var t = t0;
+  let stepFactor = select(0.76, 0.90, objId == 0);
+  for (var i: i32 = 0; i < 46; i++) {
+    let pLocal = (ro + t * rd) - center;
+    let d = evalObjSdf(pLocal, objId, cellMod);
+    if (d < 0.0020 * max(1.0, t * 0.035)) {
+      res.hit = true;
+      res.t = t;
+      res.localPos = pLocal;
+      return res;
+    }
+    t += max(d * stepFactor, 0.005);
+    if (t > t1) {
+      break;
+    }
+  }
+  return res;
+}
+
+fn traceCorridorGeometry(ro: vec3f, rd: vec3f) -> HitInfo {
+  var best: HitInfo;
+  best.hit = false;
+  best.t = MAX_TRACE_DIST;
+  best.objId = -1;
+  best.cellMod = 0;
+  best.localPos = vec3f(0.0);
+
+  let kBase = i32(floor(ro.z / CELL_Z));
+  let stepK = select(-1, 1, rd.z >= 0.0);
+
+  for (var c: i32 = 0; c < 5; c++) {
+    let cellK = kBase + stepK * c;
+    let cellMod = ((cellK % 16) + 16) % 16;
+    let cellZ = f32(cellK) * CELL_Z;
+
+    // Conservative Z-slab early termination for distant cells
+    if (c >= 2) {
+      let distZ = select(max(0.0, ro.z - (cellZ + CELL_Z)), max(0.0, cellZ - ro.z), stepK > 0);
+      if (distZ > best.t * abs(rd.z) + 1.0) {
+        break;
+      }
+    }
+
+    // Object 0: Precision Relativistic Metrology Gate phase-offset to cellZ + 17.0
+    let h0 = marchObject(ro, rd, vec3f(0.0, 0.0, cellZ + 17.0), 7.35, 0.4, best.t, 0, cellMod, 0.58);
+    if (h0.hit && h0.t < best.t) {
+      best = h0;
+    }
+
+    // Deterministic mod-16 per-cell flanking offsets (central tunnel r_xy < 5.6 strictly clear)
+    let fm = f32(cellMod);
+    let hProbe = hash33f(vec3f(fm * 1.37 + 3.1, fm * 2.71 + 7.3, fm * 0.89 + 11.7));
+    let probeX = -(8.15 + 1.15 * hProbe.x);
+    let probeY = mix(-1.45, 1.15, hProbe.y);
+    let probeZ = cellZ + 8.5 + (hProbe.z - 0.5) * 3.2;
+
+    let h1 = marchObject(ro, rd, vec3f(probeX, probeY, probeZ), 2.30, 0.4, best.t, 1, cellMod, 0.0);
+    if (h1.hit && h1.t < best.t) {
+      best = h1;
+    }
+
+    let hAst = hash33f(vec3f(fm * 3.17 + 19.3, fm * 1.93 + 5.7, fm * 4.11 + 23.1));
+    let astX = 7.95 + 1.35 * hAst.x;
+    let astY = mix(-1.30, 2.05, hAst.y);
+    let astZ = cellZ + 23.8 + (hAst.z - 0.5) * 4.6;
+
+    let h2 = marchObject(ro, rd, vec3f(astX, astY, astZ), 1.95, 0.4, best.t, 2, cellMod, 0.0);
+    if (h2.hit && h2.t < best.t) {
+      best = h2;
+    }
+  }
+
+  return best;
+}
+
+// ============================================================================
+// 4. COOK-TORRANCE GGX PBR, VACUUM SELF-SHADOWS & MICRO-NORMAL PERTURBATION
+// ============================================================================
+
+fn distributionGGX(ndh: f32, roughness: f32) -> f32 {
+  let a = roughness * roughness;
+  let a2 = a * a;
+  let denom = ndh * ndh * (a2 - 1.0) + 1.0;
+  return a2 / max(PI * denom * denom, 1e-5);
+}
+
+fn geometrySchlickGGX(ndv: f32, roughness: f32) -> f32 {
+  let r = roughness + 1.0;
+  let k = (r * r) * 0.125;
+  return ndv / max(ndv * (1.0 - k) + k, 1e-5);
+}
+
+fn geometrySmith(ndv: f32, ndl: f32, roughness: f32) -> f32 {
+  return geometrySchlickGGX(ndv, roughness) * geometrySchlickGGX(ndl, roughness);
+}
+
+fn fresnelSchlick(cosTheta: f32, f0: vec3f) -> vec3f {
+  let m = clamp(1.0 - cosTheta, 0.0, 1.0);
+  let m2 = m * m;
+  return f0 + (vec3f(1.0) - f0) * (m2 * m2 * m);
+}
+
+fn calcSoftShadow(p: vec3f, lDir: vec3f, objId: i32, cellMod: i32) -> f32 {
+  var sh : f32 = 1.0;
+  var t : f32 = 0.045;
+  for (var i: i32 = 0; i < 4; i++) {
+    let h = evalObjSdf(p + lDir * t, objId, cellMod);
+    sh = min(sh, clamp(10.0 * h / max(t, 0.02), 0.0, 1.0));
+    t += clamp(h, 0.07, 0.38);
+  }
+  return clamp(sh, 0.0, 1.0);
+}
+
+fn calcObjAO(p: vec3f, n: vec3f, objId: i32, cellMod: i32) -> f32 {
+  var occ : f32 = 0.0;
+  var sca : f32 = 1.0;
+  for (var i: i32 = 1; i <= 3; i++) {
+    let h = 0.05 + 0.11 * f32(i);
+    let d = evalObjSdf(p + n * h, objId, cellMod);
+    occ += max(h - d, 0.0) * sca;
+    sca *= 0.65;
+  }
+  return clamp(1.0 - 2.35 * occ, 0.10, 1.0);
+}
+
+// 3-tap finite-difference bump perturbation using 128^3 volume noise (strictly LOD 0)
+fn evalVolumeBump(p: vec3f, freq: f32, amp: f32) -> vec3f {
+  let e = 0.014;
+  let uv = p * freq;
+  let c0 = textureSampleLevel(uVolumeNoise, sVolume, uv, 0.0);
+  let cx = textureSampleLevel(uVolumeNoise, sVolume, uv + vec3f(e, 0.0, 0.0), 0.0);
+  let cy = textureSampleLevel(uVolumeNoise, sVolume, uv + vec3f(0.0, e, 0.0), 0.0);
+  let cz = textureSampleLevel(uVolumeNoise, sVolume, uv + vec3f(0.0, 0.0, e), 0.0);
+  let h0 = c0.g * 0.60 + c0.a * 0.40;
+  let hx = cx.g * 0.60 + cx.a * 0.40;
+  let hy = cy.g * 0.60 + cy.a * 0.40;
+  let hz = cz.g * 0.60 + cz.a * 0.40;
+  return vec3f(hx - h0, hy - h0, hz - h0) * (amp / e);
+}
+
+fn shadeForegroundHit(
+  h: HitInfo,
+  rdRest: vec3f,
+  doppler: f32,
+  dopplerStrength: f32,
+  beamingGain: f32,
+  geometryVisibility: f32
+) -> vec3f {
+  let p = h.localPos;
+  let nGeo = calcObjNormal(p, h.objId, h.cellMod);
+  let v = -rdRest;
+
+  var albedo = vec3f(0.20, 0.22, 0.26);
+  var metallic : f32 = 0.50;
+  var roughness : f32 = 0.45;
+  var emissive = vec3f(0.0);
+  var emTemp : f32 = 6500.0;
+  var nBump = vec3f(0.0);
+
+  if (h.objId == 0) {
+    // Precision Relativistic Metrology Gate materials
+    let rXY = length(p.xy);
+    let dr = rXY - 6.35;
+    let angle = select(0.0, atan2(p.y, p.x), rXY > 1e-6);
+    let ap = abs(p.xy);
+    let mxy = select(ap.yx, ap.xy, ap.x > ap.y);
+    let pNode = vec3f(mxy.x - 6.44, mxy.y, p.z);
+    let onNode = (mxy.x > 6.08) && (mxy.y < 0.38);
+
+    if (onNode) {
+      let rLens = length(pNode.xy);
+      let inAperture = (rLens < 0.140) && (abs(pNode.z) > 0.26);
+      let onFin = (pNode.x > 0.31) && (abs(pNode.y) < 0.045);
+      if (inAperture) {
+        // Coated interferometer objective lens glass + tiny recessed optical beacon
+        albedo = vec3f(0.03, 0.05, 0.08);
+        metallic = 0.08;
+        roughness = 0.06;
+        let spot = smoothstep(0.095, 0.025, rLens);
+        if (p.z < -0.26) {
+          emissive = vec3f(0.52, 0.90, 1.00) * (spot * 2.1);
+          emTemp = 10500.0;
+        } else if (p.z > 0.26) {
+          emissive = vec3f(1.00, 0.56, 0.16) * (spot * 2.1);
+          emTemp = 2800.0;
+        }
+      } else if (onFin) {
+        // Dark carbon-titanium stabilizer fin
+        albedo = vec3f(0.09, 0.10, 0.12);
+        metallic = 0.45;
+        roughness = 0.46;
+      } else if (abs(pNode.z) < 0.34) {
+        // Crinkled gold-Kapton MLI thermal blanket wrapping the 4 octagonal nodes
+        albedo = vec3f(0.88, 0.61, 0.13);
+        metallic = 0.94;
+        roughness = 0.26;
+        nBump = evalVolumeBump(pNode, 4.8, 0.042);
+      } else {
+        // Anodized dark-titanium optical bezel ring
+        albedo = vec3f(0.14, 0.15, 0.18);
+        metallic = 0.82;
+        roughness = 0.34;
+      }
+    } else {
+      // I-beam ring: dark recessed carbon-titanium web + brushed titanium flanges & 24 ribs
+      const SEC_24 : f32 = TAU / 24.0;
+      let aRib = ((angle + 0.5 * SEC_24) - floor((angle + 0.5 * SEC_24) / SEC_24) * SEC_24) - 0.5 * SEC_24;
+      let onRib = abs(rXY * sin(aRib)) < 0.042;
+      let onFlange = abs(dr) > 0.082 || abs(p.z) > 0.195;
+
+      if (onFlange || onRib) {
+        // Brushed aerospace titanium alloy with subtle circumferential milling grain
+        let grain = 0.92 + 0.08 * sin(angle * 180.0 + dr * 95.0);
+        albedo = vec3f(0.42, 0.45, 0.50) * grain;
+        metallic = 0.88;
+        roughness = 0.30;
+        nBump = evalVolumeBump(vec3f(angle * 2.4, dr * 12.0, p.z * 8.0), 1.6, 0.012);
+      } else {
+        // Dark carbon-titanium structural web
+        albedo = vec3f(0.065, 0.072, 0.084);
+        metallic = 0.36;
+        roughness = 0.56;
+        // Razor-thin hairline optical calibration slits on bow (-Z) & stern (+Z) faces
+        let hairline = smoothstep(0.018, 0.004, abs(dr)) * select(1.0, 0.0, onRib);
+        if (p.z < -0.155 && hairline > 0.01) {
+          emissive = vec3f(0.55, 0.92, 1.00) * (hairline * 2.4);
+          emTemp = 10500.0;
+        } else if (p.z > 0.155 && hairline > 0.01) {
+          emissive = vec3f(1.00, 0.58, 0.18) * (hairline * 2.4);
+          emTemp = 2800.0;
+        }
+      }
+    }
+  } else if (h.objId == 1) {
+    // Deep-Space Relativistic Interferometer Probe materials
+    let rXY = length(p.xy);
+    let distStrobe = length(p - vec3f(-0.46, 0.48, -0.46));
+
+    if (distStrobe < 0.045) {
+      // Tiny crisp navigation strobe pinpoint
+      albedo = vec3f(0.85, 0.92, 1.0);
+      metallic = 0.1;
+      roughness = 0.15;
+      emissive = vec3f(0.68, 0.94, 1.00) * 3.0;
+      emTemp = 10500.0;
+    } else if (p.z < -0.54) {
+      // Concave NASA white-ceramic parabolic high-gain dish + dark titanium tripod & feed horn
+      let onHornOrTripod = (p.z < -0.88) || (rXY < 0.10 && p.z < -0.68);
+      let pd = p - vec3f(0.0, 0.0, -0.60);
+      let zParab = -0.44 * min(rXY, 0.72) * min(rXY, 0.72);
+      let onDishSurf = abs(pd.z - zParab) < 0.048;
+      if (onDishSurf && !onHornOrTripod) {
+        let angD = select(0.0, atan2(p.y, p.x), rXY > 1e-6);
+        let seam = smoothstep(0.96, 0.995, abs(cos(angD * 6.0)));
+        albedo = mix(vec3f(0.84, 0.85, 0.86), vec3f(0.62, 0.64, 0.67), seam * 0.45);
+        metallic = 0.04;
+        roughness = 0.42;
+        nBump = evalVolumeBump(p, 5.5, 0.008);
+      } else {
+        // Dark titanium tripod struts, gimbal neck & feed horn
+        albedo = vec3f(0.16, 0.18, 0.21);
+        metallic = 0.84;
+        roughness = 0.34;
+      }
+    } else if (abs(p.y) > 0.72) {
+      // Paper-thin photovoltaic solar arrays with fine procedural silicon-cell grid & glass specular
+      const C15 : f32 = 0.96592583;
+      const S15 : f32 = 0.25881905;
+      let pz = p.z - 0.04;
+      let uWing = -S15 * p.x + C15 * pz;
+      let vWing = abs(p.y) - 1.40;
+      let onFrame = abs(uWing) > 0.315 || abs(vWing) > 0.595 || abs(vWing - 0.20) < 0.014 || abs(vWing + 0.20) < 0.014;
+      let onBoom = rXY < 0.045 && abs(p.z - 0.04) < 0.045;
+
+      if (onBoom || onFrame) {
+        albedo = vec3f(0.28, 0.31, 0.36);
+        metallic = 0.86;
+        roughness = 0.34;
+      } else {
+        let cellU = abs(fract(uWing * 18.0) - 0.5);
+        let cellV = abs(fract(vWing * 14.0) - 0.5);
+        let fineBus = smoothstep(0.46, 0.495, max(cellU, cellV));
+        let microGrid = smoothstep(0.47, 0.50, abs(fract(uWing * 72.0) - 0.5));
+        albedo = mix(vec3f(0.022, 0.045, 0.115), vec3f(0.55, 0.60, 0.68), fineBus * 0.72 + microGrid * 0.18);
+        metallic = mix(0.18, 0.85, fineBus);
+        roughness = mix(0.11, 0.30, fineBus);
+        nBump = vec3f(0.0, (cellV - 0.25) * 0.06 * fineBus, (cellU - 0.25) * 0.06 * fineBus);
+      }
+    } else if (p.z > 0.47) {
+      // Recessed aft xenon ion-thruster nozzle bell
+      let inIonCore = (rXY < 0.175) && (p.z < 0.65) && (p.z > 0.50);
+      albedo = vec3f(0.13, 0.13, 0.16);
+      metallic = 0.88;
+      roughness = 0.36;
+      if (inIonCore) {
+        let ionGlow = smoothstep(0.175, 0.02, rXY);
+        emissive = vec3f(0.56, 0.48, 1.00) * (ionGlow * 1.9);
+        emTemp = 16000.0;
+      }
+    } else {
+      // Octagonal spacecraft bus: crinkled gold-Kapton MLI + dark slotted radiator louvers + booms/masts
+      let onRadiator = (abs(p.x) > 0.34) && (abs(p.y) < 0.24) && (abs(p.z) < 0.32);
+      let onBoomRoot = (abs(p.y) > 0.45) && (abs(p.x) < 0.05) && (abs(p.z - 0.04) < 0.05);
+      let onTrackerOrMast = (p.x > 0.25 && p.y > 0.22 && p.z < -0.26) || (p.x < -0.28 && p.y > 0.26 && p.z < -0.28);
+      if (onRadiator) {
+        let louver = 0.5 + 0.5 * sin(p.z * 78.0);
+        albedo = mix(vec3f(0.04, 0.045, 0.055), vec3f(0.14, 0.15, 0.17), louver);
+        metallic = 0.35;
+        roughness = 0.68;
+        nBump = vec3f(0.0, 0.0, cos(p.z * 78.0) * 0.24);
+      } else if (onBoomRoot || onTrackerOrMast) {
+        albedo = vec3f(0.15, 0.17, 0.20);
+        metallic = 0.82;
+        roughness = 0.35;
+      } else {
+        // Authentic crinkled gold-Kapton MLI thermal foil
+        albedo = vec3f(0.90, 0.62, 0.12);
+        metallic = 0.94;
+        roughness = 0.25;
+        nBump = evalVolumeBump(p, 5.2, 0.048);
+      }
+    }
+  } else {
+    // Object 2: Pure Cratered Carbonaceous/Silicate Asteroid (albedo ~ 0.07..0.18, roughness ~ 0.92)
+    let pa = asteroidLocalPoint(p, h.cellMod);
+    let fm = f32(h.cellMod);
+    let seedOff = hash33f(vec3f(fm * 2.13 + 9.4, fm * 3.67 + 1.9, fm * 1.41 + 27.5)) * 0.77;
+
+    let nMacro = textureSampleLevel(uVolumeNoise, sVolume, pa * 0.35 + seedOff, 0.0);
+    let nFine = textureSampleLevel(uVolumeNoise, sVolume, pa * 2.60 + seedOff * 2.1, 0.0);
+    let mineral = clamp(nMacro.r * 0.52 + nMacro.g * 0.28 + nFine.a * 0.20, 0.0, 1.0);
+    let ejectaTint = smoothstep(0.55, 0.88, nMacro.b);
+
+    albedo = mix(vec3f(0.068, 0.065, 0.062), vec3f(0.172, 0.158, 0.144), mineral);
+    albedo = mix(albedo, vec3f(0.185, 0.178, 0.168), ejectaTint * 0.28);
+    metallic = 0.02;
+    roughness = 0.92;
+    // High-frequency dusty regolith micro-bump normal perturbation
+    nBump = evalVolumeBump(pa + seedOff, 2.5, 0.036) + evalVolumeBump(pa + seedOff * 1.7, 6.2, 0.016);
+  }
+
+  let n = normalize(nGeo + nBump - nGeo * dot(nBump, nGeo));
+
+  // Crisp raking side-key solar light + 4-step SDF vacuum soft shadows + 3-tap AO
+  let keyDir = normalize(vec3f(0.82, 0.52, -0.24));
+  let ndl = max(dot(n, keyDir), 0.0);
+  let ndv = max(dot(n, v), 1e-4);
+  let halfV = normalize(keyDir + v);
+  let ndh = max(dot(n, halfV), 0.0);
+  let vdh = max(dot(v, halfV), 0.0);
+
+  var shadow : f32 = 0.0;
+  if (ndl > 0.002) {
+    shadow = calcSoftShadow(p + nGeo * 0.015, keyDir, h.objId, h.cellMod);
+  }
+  let ao = calcObjAO(p, nGeo, h.objId, h.cellMod);
+
+  // Cook-Torrance GGX direct solar BRDF
+  let f0 = mix(vec3f(0.04), albedo, metallic);
+  let D = distributionGGX(ndh, roughness);
+  let G = geometrySmith(ndv, max(ndl, 1e-4), roughness);
+  let F = fresnelSchlick(vdh, f0);
+  let spec = (D * G * F) / max(4.0 * ndv * max(ndl, 1e-4), 1e-4);
+  let kD = (vec3f(1.0) - F) * (1.0 - metallic);
+  let sunRadiance = vec3f(3.05, 2.94, 2.80);
+  let directLight = (kD * albedo * INV_PI + spec) * sunRadiance * (ndl * shadow);
+
+  // Deep vacuum-space dark ambient (0.025..0.04 -> stark ink-black NASA shadows)
+  let ambFill = vec3f(0.030, 0.034, 0.042) * albedo * (1.0 - 0.65 * metallic) * ao;
+  // Subtle starlight / galactic-plane mirror reflection on smooth metals & solar glass only
+  let reflDir = reflect(-v, n);
+  let galEnv = exp(-reflDir.y * reflDir.y * 7.5) * 0.14 + 0.022;
+  let smoothFactor = (1.0 - roughness) * (1.0 - roughness);
+  let envSpec = fresnelSchlick(ndv, f0) * smoothFactor * galEnv * ao;
+
+  let litSurface = directLight + ambFill + envSpec;
+
+  let dColor = pow(max(doppler, 1e-4), clamp(dopplerStrength, 0.0, 2.0));
+  let shiftedLit = applyRelativisticShift(litSurface, 5800.0, dColor, dColor, beamingGain, 0.72);
+  let emGain = 0.72 + 0.28 * clamp(geometryVisibility, 0.0, 1.8);
+  let shiftedEm = applyRelativisticShift(emissive * emGain, emTemp, dColor, dColor, beamingGain, 0.76);
+
+  let distFade = 1.0 - smoothstep(88.0, MAX_TRACE_DIST, h.t);
+  return max((shiftedLit + shiftedEm) * distFade, vec3f(0.0));
+}
+
+// ============================================================================
+// 5. PHYSICAL VOLUMETRIC INTERSTELLAR MEDIUM (ISM) CIRRUS & 3D PARALLAX GLINTS
+// ============================================================================
+
+fn henyeyGreenstein(cosTheta: f32, g: f32) -> f32 {
+  let g2 = g * g;
+  let denom = max(1.0 + g2 - 2.0 * g * cosTheta, 1e-3);
+  return (1.0 - g2) / (4.0 * PI * denom * sqrt(denom));
+}
+
+fn integrateCorridorVolume(
+  ro: vec3f,
+  rdRest: vec3f,
+  flightDir: f32,
+  pixelFwRest: f32,
+  tEnd: f32,
+  bn: vec4f,
+  quality: i32,
+  simTime: f32,
+  doppler: f32,
+  dopplerStrength: f32,
+  beamingGain: f32,
+  dustDensity: f32,
+  dustStreakScale: f32,
+  starDensity: f32
+) -> vec4f {
+  const tStart : f32 = 0.8;
+  if (tEnd <= tStart) {
+    return vec4f(0.0, 0.0, 0.0, 1.0);
+  }
+  if (dustDensity <= 0.001 && starDensity <= 0.001) {
+    return vec4f(0.0, 0.0, 0.0, 1.0);
+  }
+
+  var nSteps : i32 = 20;
+  if (quality <= 0) {
+    nSteps = 14;
+  } else if (quality >= 2) {
+    nSteps = 28;
+  }
+
+  let dColor = pow(max(doppler, 1e-4), clamp(dopplerStrength, 0.0, 2.0));
+  let invStreakZ = 0.038 / max(dustStreakScale, 0.25);
+  let invStreakFineZ = 0.082 / max(dustStreakScale, 0.25);
+  let fSteps = f32(nSteps);
+
+  // Henyey-Greenstein forward scattering (g = 0.58) aligned with the forward headlight cone
+  let flightAxis = vec3f(0.0, 0.0, select(-1.0, 1.0, flightDir >= 0.0));
+  let cosFwd = dot(rdRest, flightAxis);
+  let hgPhase = clamp(henyeyGreenstein(cosFwd, 0.58) * 3.1, 0.08, 2.25);
+
+  // True wavelength Doppler shift of H-alpha (656.3 nm), O-III (500.7 nm) & Paschen-alpha (1875 nm)
+  let haCol = wavelengthToRgb(656.3 / dColor);
+  let o3Col = wavelengthToRgb(500.7 / dColor);
+  let paCol = wavelengthToRgb(1875.0 / dColor) * 0.45;
+  let contCol = applyRelativisticShift(vec3f(0.56, 0.68, 0.88), 6600.0, dColor, dColor, beamingGain, 0.55);
+  let lineBeam = evalPlanckBeam(5800.0, dColor, beamingGain);
+
+  var volRad = vec3f(0.0);
+  var trans : f32 = 1.0;
+
+  for (var i: i32 = 0; i < 28; i++) {
+    if (i >= nSteps) {
+      break;
+    }
+    let j0 = fract(bn.y + f32(i) * 0.61803399);
+    let u0 = f32(i) / fSteps;
+    let u1 = f32(i + 1) / fSteps;
+    let t0 = mix(tStart, tEnd, u0 * (0.45 + 0.55 * u0));
+    let t1 = mix(tStart, tEnd, u1 * (0.45 + 0.55 * u1));
+    let tMid = mix(t0, t1, j0);
+    let dt = t1 - t0;
+
+    let p = ro + rdRest * tMid;
+    let rXY = length(p.xy);
+    let rangeMask = smoothstep(4.2, 15.0, tMid) * (1.0 - smoothstep(54.0, VOL_MAX_DIST, tMid));
+
+    if (rangeMask > 0.001) {
+      if (dustDensity > 0.001) {
+        let uvw1 = vec3f(p.xy * 0.095, p.z * invStreakZ) + vec3f(0.37, 0.61, 0.19);
+        let uvw2 = vec3f(p.xy * 0.210, p.z * invStreakFineZ) + vec3f(0.73, 0.29, 0.53);
+        let n1 = textureSampleLevel(uVolumeNoise, sVolume, uvw1, 0.0);
+        let n2 = textureSampleLevel(uVolumeNoise, sVolume, uvw2, 0.0);
+
+        let wisp = smoothstep(0.60, 0.94, n1.r * 0.52 + n1.g * 0.48);
+        let fil = smoothstep(0.64, 0.96, n1.g * 0.48 + n2.a * 0.58);
+        let clump = smoothstep(0.46, 0.84, n1.b);
+        let tunnelClear = smoothstep(1.4, 4.2, rXY);
+        let dens = (wisp * wisp * 0.22 + fil * fil * fil * 0.78) * clump * tunnelClear * rangeMask * dustDensity;
+
+        if (dens > 0.002) {
+          let lineMix = smoothstep(0.32, 0.78, n1.b);
+          let emLineCol = (mix(haCol, o3Col, lineMix) + paCol) * (0.48 * mix(1.0, lineBeam, 0.45));
+          let cirrusCol = emLineCol + contCol * (0.42 + 0.35 * fil);
+
+          let ext = dens * 0.0018;
+          let stepT = exp(-ext * dt);
+          volRad += trans * cirrusCol * (dens * 0.0042 * hgPhase * dt);
+          trans *= stepT;
+        }
+      }
+
+      // Crisp sparse sub-pixel 3D parallax dust/starlight glints strictly outside r_xy > 2.2
+      let glintAftFade = smoothstep(0.08, 0.38, doppler);
+      let glintRange = smoothstep(6.0, 14.0, tMid) * (1.0 - smoothstep(54.0, VOL_MAX_DIST, tMid)) * glintAftFade;
+      if (starDensity > 0.001 && glintRange > 0.001 && rXY > 2.2) {
+        const knotScale : f32 = 0.20;
+        let pScaled = p * knotScale;
+        let cell = floor(pScaled);
+        let rnd = hash33f(cell + vec3f(7.13, 19.41, 31.77));
+        if (rnd.x > 0.958) {
+          let starWorld = (cell + vec3f(0.26) + 0.48 * hash33f(cell + vec3f(53.1, 11.7, 97.3))) / knotScale;
+          let tProj = dot(starWorld - ro, rdRest);
+          if (tProj >= t0 && tProj < t1) {
+            let dPerp = length((ro + rdRest * tProj) - starWorld);
+            let glintR = min(mix(0.018, 0.044, fract(rnd.y * 13.7)), max(pixelFwRest * tProj * 1.15, 0.0025));
+            let glow = exp(-min((dPerp * dPerp) / (glintR * glintR), 32.0));
+            if (glow > 0.005) {
+              let tKnot = mix(3400.0, 14500.0, rnd.z);
+              let tKnotObs = tKnot * dColor;
+              let knotCol = sampleBlackbody(tKnotObs);
+              let knotBeam = evalPlanckBeam(tKnot, doppler, beamingGain);
+              let wienCut = smoothstep(260.0, 780.0, tKnotObs);
+              volRad += trans * knotCol * (glow * 2.15 * knotBeam * wienCut * starDensity * glintRange);
+            }
+          }
+        }
+      }
+    }
+
+    if (trans < 0.02) {
+      break;
+    }
+  }
+
+  return vec4f(volRad, trans);
+}
+
+// ============================================================================
+// 6. MAIN RELATIVISTIC ABERRATION, FOREGROUND & VOLUMETRIC PIPELINE
+// ============================================================================
+
+@fragment
+fn fs_main(in: VSOut) -> @location(0) vec4f {
+  let res = max(u.resolution_time_frame.xy, vec2f(1.0));
+  let pixelCoord = in.pos.xy + vec2f(u.jitter_fov_prog.x, -u.jitter_fov_prog.y);
+  let ndc = vec2f(
+    (pixelCoord.x / res.x) * 2.0 - 1.0,
+    1.0 - (pixelCoord.y / res.y) * 2.0
+  );
+
+  let aspect = res.x / res.y;
+  let tanHalfFov = tan(clamp(u.jitter_fov_prog.z, 0.1, 2.8) * 0.5);
+  let localRay = vec3f(ndc.x * aspect * tanHalfFov, ndc.y * tanHalfFov, 1.0);
+  let rdShip = normalize(
+    u.camRight_beta.xyz * localRay.x +
+    u.camUp_gamma.xyz * localRay.y +
+    u.camFwd_oneMinusBeta.xyz * localRay.z
+  );
+
+  let pixelFwShip = clamp(length(fwidth(rdShip)), 0.0002, 0.05);
+
+  let simTime = u.resolution_time_frame.z;
+  let frameIndex = i32(round(u.resolution_time_frame.w));
+  let beta = clamp(u.camRight_beta.w, 0.0, 0.9999996);
+  let gamma = max(u.camUp_gamma.w, 1.0);
+  let oneMinusBeta = max(u.camFwd_oneMinusBeta.w, 0.0);
+
+  let flightDir = u.flightKinematics.x;
+  let flightPosZ = u.flightKinematics.y;
+  let dopplerStrength = clamp(u.flightKinematics.w, 0.0, 2.0);
+
+  let cmbVisibility = max(u.spectralParams.x, 0.0);
+  let starDensity = max(u.spectralParams.y, 0.0);
+  let uvIrGain = max(u.spectralParams.z, 0.0);
+  let aberrationStrength = u.spectralParams.w;
+
+  let geometryVisibility = max(u.foregroundParams.x, 0.0);
+  let dustDensity = max(u.foregroundParams.y, 0.0);
+  let dustStreakScale = max(u.foregroundParams.z, 0.25);
+
+  let skyIntensity = max(u.skyParams.x, 0.0);
+  let skyMode = i32(round(u.skyParams.y));
+  let skyRot = u.skyParams.zw;
+
+  let quality = i32(round(u.qualityParams.x));
+  let beamingGain = max(u.extraParams.x, 0.0);
+  let cmbTempScale = max(u.extraParams.y, 0.0);
+
+  // Cancellation-free SR aberration & Doppler factor
+  var rdRest = rdShip;
+  var doppler : f32 = 1.0;
+
+  if (aberrationStrength > 0.5) {
+    let s = select(-1.0, 1.0, flightDir >= 0.0);
+    let muP = s * rdShip.z;
+    let oneMinusMuP = select(
+      1.0 - muP,
+      (rdShip.x * rdShip.x + rdShip.y * rdShip.y) / max(1.0 + muP, 1e-6),
+      muP >= 0.0
+    );
+    let denom = select(
+      1.0 - beta * muP,
+      oneMinusBeta + beta * oneMinusMuP,
+      muP >= 0.0
+    );
+    let muRest = select(muP - beta, oneMinusBeta - oneMinusMuP, muP >= 0.0) / max(denom, 1e-7);
+    let perpScale = 1.0 / max(gamma * denom, 1e-7);
+    let rawRest = vec3f(rdShip.x * perpScale, rdShip.y * perpScale, s * muRest);
+    let rawLen = length(rawRest);
+    rdRest = select(vec3f(0.0, 0.0, s), rawRest / max(rawLen, 1e-7), rawLen > 1e-7);
+    doppler = clamp(1.0 / max(gamma * denom, 1e-6), 1e-4, 2500.0);
+  }
+
+  let pixelFwRest = clamp(pixelFwShip * doppler, 1e-6, 0.45);
+
+  // Sample sky & CMB unconditionally in uniform control flow (wrap- & seam-safe!)
+  let skyColor = sampleSkyBackground(
+    rdRest,
+    pixelFwRest,
+    doppler,
+    dopplerStrength,
+    beamingGain,
+    skyIntensity,
+    skyMode,
+    skyRot,
+    starDensity,
+    uvIrGain,
+    cmbVisibility,
+    cmbTempScale
+  );
+
+  let bnCoord = vec2i(in.pos.xy) & vec2i(127);
+  let bnRaw = textureLoad(uBlueNoise, bnCoord, 0);
+  let fIdx = f32(frameIndex & 1023);
+  let bn = fract(bnRaw + fIdx * vec4f(0.75487766, 0.56984029, 0.43015971, 0.61803399));
+
+  let origin = vec3f(0.0, 0.0, flightPosZ);
+  var hitInfo: HitInfo;
+  hitInfo.hit = false;
+  hitInfo.t = MAX_TRACE_DIST;
+  hitInfo.objId = -1;
+  hitInfo.cellMod = 0;
+  hitInfo.localPos = vec3f(0.0);
+
+  if (geometryVisibility > 0.001) {
+    hitInfo = traceCorridorGeometry(origin, rdRest);
+  }
+
+  let geomAlpha = select(0.0, smoothstep(0.0, 0.18, geometryVisibility), hitInfo.hit);
+  let volMaxDist = select(VOL_MAX_DIST, hitInfo.t, hitInfo.hit && geomAlpha >= 0.99);
+
+  let volSample = integrateCorridorVolume(
+    origin,
+    rdRest,
+    flightDir,
+    pixelFwRest,
+    min(volMaxDist, VOL_MAX_DIST),
+    bn,
+    quality,
+    simTime,
+    doppler,
+    dopplerStrength,
+    beamingGain,
+    dustDensity,
+    dustStreakScale,
+    starDensity
+  );
+
+  var radiance = skyColor;
+  if (hitInfo.hit && geomAlpha > 0.001) {
+    let hitColor = shadeForegroundHit(hitInfo, rdRest, doppler, dopplerStrength, beamingGain, geometryVisibility);
+    radiance = mix(radiance, hitColor, geomAlpha);
+  }
+  radiance = radiance * volSample.w + volSample.xyz;
+
+  return vec4f(sanitizeHdr(radiance), 1.0);
+}
