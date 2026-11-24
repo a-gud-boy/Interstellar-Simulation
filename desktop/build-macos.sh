@@ -93,8 +93,11 @@ ensure_target() {
   fi
 }
 
-VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "${MANIFEST_PATH}" | head -n 1)"
-VERSION="${VERSION:-1.0.0}"
+CARGO_VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "${MANIFEST_PATH}" | head -n 1)"
+CARGO_VERSION="${CARGO_VERSION:-0.1.0-beta}"
+BUNDLE_VERSION="${CARGO_VERSION%%-*}"
+SHORT_VERSION="$(sed -n 's/^pub const APP_VERSION: &str = "\([^"]*\)";/\1/p' "${SCRIPT_DIR}/src/lib.rs" | head -n 1)"
+SHORT_VERSION="${SHORT_VERSION:-${CARGO_VERSION}}"
 
 APP_DIR="${BUNDLE_ROOT}/${APP_NAME}.app"
 CONTENTS_DIR="${APP_DIR}/Contents"
@@ -149,9 +152,9 @@ cat > "${CONTENTS_DIR}/Info.plist" <<EOF
   <key>CFBundleIdentifier</key>
   <string>io.github.agudboy.interstellar-desktop</string>
   <key>CFBundleVersion</key>
-  <string>${VERSION}</string>
+  <string>${BUNDLE_VERSION}</string>
   <key>CFBundleShortVersionString</key>
-  <string>${VERSION}</string>
+  <string>${SHORT_VERSION}</string>
   <key>CFBundleExecutable</key>
   <string>${BIN_NAME}</string>
   <key>CFBundlePackageType</key>

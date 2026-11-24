@@ -1659,18 +1659,34 @@ fn draw_controls_drawer(
                     [f_rect.left_top(), f_rect.right_top()],
                     Stroke::new(1.0, theme.glass_border),
                 );
+                let ver_text = format!("v{}", crate::APP_VERSION);
+                let ver_galley = ui.painter().layout_job(tracked_job(
+                    &ver_text,
+                    FontId::monospace(9.5),
+                    theme.text_muted,
+                    0.0,
+                ));
+                let ver_w = ver_galley.size().x;
                 let mut f_job = tracked_job(
                     &assets.adapter_label,
                     FontId::proportional(10.0),
                     theme.text_muted,
                     0.0,
                 );
-                f_job.wrap.max_width = drawer_rect.width() - 28.0;
+                f_job.wrap.max_width = (drawer_rect.width() - 28.0 - ver_w - 10.0).max(40.0);
                 f_job.wrap.max_rows = 1;
                 let f_galley = ui.painter().layout_job(f_job);
                 ui.painter().galley(
                     Pos2::new(f_rect.left() + 14.0, f_rect.center().y - f_galley.size().y * 0.5),
                     f_galley,
+                    theme.text_muted,
+                );
+                ui.painter().galley(
+                    Pos2::new(
+                        f_rect.right() - 14.0 - ver_w,
+                        f_rect.center().y - ver_galley.size().y * 0.5,
+                    ),
+                    ver_galley,
                     theme.text_muted,
                 );
             });

@@ -18,6 +18,7 @@ use interstellar_desktop::renderer::post::{PostPipeline, MAX_PROGRESSIVE_SAMPLES
 use interstellar_desktop::renderer::{readback_rgba8_texture, SharedGpuAssets};
 use interstellar_desktop::sims::{create_simulation, SimId, SimInput, Simulation};
 use interstellar_desktop::ui::{configure_fonts, draw_hud, HudAction, HudState};
+use interstellar_desktop::APP_VERSION;
 
 const DEFAULT_MAX_FPS: u32 = 165;
 
@@ -111,9 +112,12 @@ fn parse_cli_args() -> CliArgs {
             if let Ok(n) = val.parse::<u32>() {
                 out.smoke_frames = Some(n.max(1));
             }
+        } else if arg == "--version" || arg == "-V" {
+            println!("Interstellar Desktop {APP_VERSION}");
+            std::process::exit(0);
         } else if arg == "--help" || arg == "-h" {
             println!(
-                "Interstellar Desktop — Relativistic GPU Simulator Suite\n\n\
+                "Interstellar Desktop {APP_VERSION} — Relativistic GPU Simulator Suite\n\n\
                  USAGE:\n  interstellar-desktop [OPTIONS]\n\n\
                  OPTIONS:\n  \
                    --sim <name>            blackhole | wormhole | binary | warp | supernova | pulsar | starflight\n  \
@@ -121,7 +125,8 @@ fn parse_cli_args() -> CliArgs {
                    --height <px>           Initial window height (default: 720)\n  \
                    --vsync <on|off>        Initial VSync mode (default: on)\n  \
                    --max-fps <n>           Maximum frame rate cap (default: {DEFAULT_MAX_FPS})\n  \
-                   --smoke-frames <n>      Render N live windowed frames and exit cleanly\n"
+                   --smoke-frames <n>      Render N live windowed frames and exit cleanly\n  \
+                   --version, -V           Print version information\n"
             );
             std::process::exit(0);
         }
@@ -149,6 +154,10 @@ fn screenshot_dir() -> PathBuf {
         }
     }
     PathBuf::from("screenshots")
+}
+
+fn formatted_window_title(sim: SimId) -> String {
+    format!("{} · v{}", sim.window_title(), APP_VERSION)
 }
 
 struct InputTracker {
@@ -379,7 +388,7 @@ impl RuntimeState {
             wgpu::FilterMode::Linear,
         );
 
-        window.set_title(sim.id().window_title());
+        window.set_title(&formatted_window_title(sim.id()));
 
         let now = Instant::now();
         Self {
@@ -479,7 +488,7 @@ impl RuntimeState {
                     if next_id != self.sim.id() {
                         self.sim = create_simulation(next_id, &mut self.assets);
                         self.hud.open_sections.clear();
-                        self.window.set_title(next_id.window_title());
+                        self.window.set_title(&formatted_window_title(next_id));
                         let res_scale =
                             (self.sim.get_i32("resolutionScale") as f32 / 100.0).clamp(0.5, 1.0);
                         if self.post.resize(
@@ -803,7 +812,7 @@ impl ApplicationHandler for DesktopApp {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title(self.cli.sim.window_title())
+            .with_title(formatted_window_title(self.cli.sim))
             .with_inner_size(LogicalSize::new(self.cli.width, self.cli.height))
             .with_min_inner_size(LogicalSize::new(640, 420));
         let window = Arc::new(
