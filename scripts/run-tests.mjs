@@ -21,9 +21,10 @@ function printHelp() {
 Options:
   --physics          Run shared/tests/shared_check.mjs and <sim>/tests/physics_check.mjs (default)
   --desktop          Run cargo test --test physics_parity --test shader_validation in desktop/
-  --browser          Run <sim>/tests/browser_qa.mjs (Chrome X11 NVIDIA; skips if prereqs absent)
+  --homepage         Run shared/tests/homepage_qa.mjs (Chrome X11 NVIDIA; skips if prereqs absent)
+  --browser          Run homepage_qa.mjs (when unscoped) and <sim>/tests/browser_qa.mjs (Chrome X11 NVIDIA)
   --firefox          Run <sim>/tests/firefox_qa.mjs (Firefox Wayland NVIDIA; skips if prereqs absent)
-  --all              Run --physics, --desktop, --browser, and --firefox
+  --all              Run --physics, --desktop, --browser (incl. --homepage), and --firefox
   --sim <name>       Scope web suites to specific simulator(s) (repeatable or comma-separated)
   -h, --help         Show this help message and exit`);
 }
@@ -32,6 +33,7 @@ function parseArgs(argv) {
   const opts = {
     physics: false,
     desktop: false,
+    homepage: false,
     browser: false,
     firefox: false,
     simTokens: [],
@@ -46,6 +48,8 @@ function parseArgs(argv) {
       opts.physics = true;
     } else if (arg === '--desktop') {
       opts.desktop = true;
+    } else if (arg === '--homepage') {
+      opts.homepage = true;
     } else if (arg === '--browser') {
       opts.browser = true;
     } else if (arg === '--firefox') {
@@ -72,7 +76,7 @@ function parseArgs(argv) {
     }
   }
 
-  if (!opts.physics && !opts.desktop && !opts.browser && !opts.firefox) {
+  if (!opts.physics && !opts.desktop && !opts.homepage && !opts.browser && !opts.firefox) {
     opts.physics = true;
   }
   return opts;
@@ -175,20 +179,31 @@ function main() {
     }
   }
 
-  if (opts.browser) {
+  const runHomepage = opts.homepage || (opts.browser && !scopedBySim);
+  if (runHomepage || opts.browser) {
     const missing = [];
     if (!fs.existsSync('/usr/bin/google-chrome')) missing.push('/usr/bin/google-chrome');
     if (!process.env.DISPLAY) missing.push('DISPLAY (headed X11)');
     if (!hasNvidiaGpu()) missing.push('nvidia-smi');
 
     if (missing.length > 0) {
-      for (const sim of selectedSims) {
-        skipStep(results, `${sim.dir} browser_qa`, `missing prerequisites: ${missing.join(', ')}`);
+      if (runHomepage) {
+        skipStep(results, 'homepage_qa', `missing prerequisites: ${missing.join(', ')}`);
+      }
+      if (opts.browser) {
+        for (const sim of selectedSims) {
+          skipStep(results, `${sim.dir} browser_qa`, `missing prerequisites: ${missing.join(', ')}`);
+        }
       }
     } else {
-      for (const sim of selectedSims) {
-        const script = path.join(sim.dir, 'tests/browser_qa.mjs');
-        runStep(results, `${sim.dir} browser_qa`, process.execPath, [script]);
+      if (runHomepage) {
+        runStep(results, 'homepage_qa', process.execPath, ['shared/tests/homepage_qa.mjs']);
+      }
+      if (opts.browser) {
+        for (const sim of selectedSims) {
+          const script = path.join(sim.dir, 'tests/browser_qa.mjs');
+          runStep(results, `${sim.dir} browser_qa`, process.execPath, [script]);
+        }
       }
     }
   }

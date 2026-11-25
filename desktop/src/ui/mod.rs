@@ -10,6 +10,9 @@ use egui::{
     FontId, Id, Order, Painter, Pos2, Rect, ScrollArea, Sense, Shape, Stroke, TextureId, Ui, Vec2,
 };
 
+pub mod home;
+pub use home::{draw_homepage, HomeAction, HomeState};
+
 use crate::renderer::SharedGpuAssets;
 use crate::sims::{ControlKind, HudMetadata, SimId, SimTheme, Simulation};
 
@@ -44,6 +47,7 @@ impl HudState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HudAction {
+    GoHome,
     SwitchSim(SimId),
     SelectPreset(usize),
     TogglePause,
@@ -252,11 +256,11 @@ pub fn configure_fonts(ctx: &Context) {
     ctx.set_fonts(fonts);
 }
 
-fn semibold_family() -> FontFamily {
+pub(super) fn semibold_family() -> FontFamily {
     FontFamily::Name("semibold".into())
 }
 
-fn with_alpha(c: Color32, a: u8) -> Color32 {
+pub(super) fn with_alpha(c: Color32, a: u8) -> Color32 {
     Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
 }
 
@@ -485,7 +489,7 @@ fn draw_camera_icon(painter: &Painter, center: Pos2, color: Color32) {
     painter.circle_stroke(Pos2::new(center.x, center.y + 0.8), 2.1, stroke);
 }
 
-fn draw_close_icon(painter: &Painter, center: Pos2, color: Color32) {
+pub(super) fn draw_close_icon(painter: &Painter, center: Pos2, color: Color32) {
     let stroke = Stroke::new(1.6, color);
     painter.line_segment(
         [
@@ -526,7 +530,49 @@ fn draw_chevron_icon(painter: &Painter, center: Pos2, color: Color32, open: bool
     }
 }
 
-fn tracked_job(
+fn draw_home_icon(painter: &Painter, center: Pos2, color: Color32) {
+    let stroke = Stroke::new(1.4, color);
+    painter.line(
+        vec![
+            Pos2::new(center.x - 5.5, center.y - 0.5),
+            Pos2::new(center.x, center.y - 5.2),
+            Pos2::new(center.x + 5.5, center.y - 0.5),
+        ],
+        stroke,
+    );
+    painter.line(
+        vec![
+            Pos2::new(center.x - 4.0, center.y - 1.5),
+            Pos2::new(center.x - 4.0, center.y + 4.8),
+            Pos2::new(center.x + 4.0, center.y + 4.8),
+            Pos2::new(center.x + 4.0, center.y - 1.5),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            Pos2::new(center.x - 1.5, center.y + 4.8),
+            Pos2::new(center.x - 1.5, center.y + 1.2),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            Pos2::new(center.x - 1.5, center.y + 1.2),
+            Pos2::new(center.x + 1.5, center.y + 1.2),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            Pos2::new(center.x + 1.5, center.y + 1.2),
+            Pos2::new(center.x + 1.5, center.y + 4.8),
+        ],
+        stroke,
+    );
+}
+
+pub(super) fn tracked_job(
     text: &str,
     font_id: FontId,
     color: Color32,
@@ -654,6 +700,7 @@ fn draw_top_left_card(
     Area::new(Id::unique("hud_top_left"))
         .fixed_pos(Pos2::new(HUD_PAD, HUD_PAD))
         .order(Order::Foreground)
+        .fade_in(false)
         .show(ctx, |ui| {
             let bg_slot = ui.painter().add(Shape::Noop);
             let card = ui.scope(|ui| {
@@ -661,7 +708,7 @@ fn draw_top_left_card(
                 ui.add_space(9.0);
 
                 ui.horizontal(|ui| {
-                    ui.add_space(13.0);
+                    ui.add_space(11.0);
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing = Vec2::new(10.0, 7.0);
 
@@ -751,12 +798,12 @@ fn draw_top_left_card(
                             let cw = lbl_g.size().x.max(val_g.size().x);
                             grid_w += cw;
                             if idx > 0 {
-                                grid_w += 12.0;
+                                grid_w += 9.5;
                             }
                             cell_galleys.push((lbl_g, val_g, cw));
                         }
 
-                        let content_w = header_w.max(grid_w).max(380.0);
+                        let content_w = header_w.max(grid_w).max(372.0);
 
                         // Hairline divider
                         let (div_rect, _) = ui.allocate_exact_size(
@@ -788,10 +835,10 @@ fn draw_top_left_card(
                                 val_g,
                                 theme.text_primary,
                             );
-                            cx += cw + 12.0;
+                            cx += cw + 9.5;
                         }
                     });
-                    ui.add_space(13.0);
+                    ui.add_space(11.0);
                 });
 
                 ui.add_space(9.0);
@@ -1033,20 +1080,53 @@ fn draw_top_right_bar(
     Area::new(Id::unique("hud_top_right"))
         .anchor(Align2::RIGHT_TOP, Vec2::new(-HUD_PAD, HUD_PAD))
         .order(Order::Foreground)
+        .fade_in(false)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.spacing_mut().item_spacing.x = 5.0;
+
+                // Compact Observatory Home Button
+                let (home_rect, home_resp) =
+                    ui.allocate_exact_size(Vec2::new(34.0, 34.0), Sense::click());
+                if home_resp.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                }
+                let (home_fill, home_border, home_fg) = if home_resp.hovered() {
+                    (
+                        Color32::from_rgba_unmultiplied(20, 24, 34, 200),
+                        theme.accent_border,
+                        theme.accent_bright,
+                    )
+                } else {
+                    (theme.glass_bg, theme.glass_border, theme.text_secondary)
+                };
+                paint_glass_panel(
+                    ui.painter(),
+                    home_rect,
+                    17.0,
+                    screen_size,
+                    glass_tex_id,
+                    home_fill,
+                    home_border,
+                );
+                draw_home_icon(ui.painter(), home_rect.center(), home_fg);
+                if home_resp
+                    .on_hover_text("Return to Observatory Home")
+                    .clicked()
+                {
+                    actions.push(HudAction::GoHome);
+                }
 
                 // 7-Sim Switcher Glass Pill
                 let sw_bg = ui.painter().add(Shape::Noop);
                 let sw = ui.scope(|ui| {
                     ui.horizontal(|ui| {
                         ui.add_space(3.0);
-                        ui.spacing_mut().item_spacing.x = 2.0;
+                        ui.spacing_mut().item_spacing.x = 1.5;
                         ui.vertical(|ui| {
                             ui.add_space(3.0);
                             ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 1.5;
+                                ui.spacing_mut().item_spacing.x = 1.0;
                                 for id in SimId::ALL {
                                     let is_curr = id == active_id;
                                     let resp = draw_pill_button(
@@ -1055,8 +1135,8 @@ fn draw_top_right_bar(
                                         is_curr,
                                         is_curr,
                                         theme,
-                                        30.0,
-                                        7.0,
+                                        29.0,
+                                        5.5,
                                         None,
                                         None,
                                     );
@@ -1710,6 +1790,7 @@ fn draw_bottom_dock(
     Area::new(Id::unique("hud_bottom_dock"))
         .anchor(Align2::CENTER_BOTTOM, Vec2::new(0.0, -HUD_PAD))
         .order(Order::Foreground)
+        .fade_in(false)
         .show(ctx, |ui| {
             let bg_slot = ui.painter().add(Shape::Noop);
             let dock = ui.scope(|ui| {

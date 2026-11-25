@@ -214,5 +214,123 @@ assert(
   'Shared common.glsl.js & common.wgsl.js shader contracts valid'
 );
 
+console.log('\n=== 5. Observatory Homepage Contract, Catalog & Preview Assets ===');
+const homeFiles = [
+  'index.html',
+  'home/styles.css',
+  'home/app.js',
+  'home/catalogData.js',
+  'shared/tests/homepage_qa.mjs',
+];
+for (const rel of homeFiles) {
+  const full = path.join(REPO_ROOT, rel);
+  const exists = fs.existsSync(full) && fs.statSync(full).size > 0;
+  assert(exists, `Homepage file exists and is non-empty: ${rel}`);
+}
+
+for (const rel of ['home/app.js', 'home/catalogData.js', 'shared/tests/homepage_qa.mjs']) {
+  const full = path.join(REPO_ROOT, rel);
+  try {
+    execFileSync(process.execPath, ['--check', full], { stdio: 'pipe' });
+    assert(true, `JS syntax OK: ${rel}`);
+  } catch (err) {
+    assert(false, `JS syntax ERROR: ${rel}`, err.stderr?.toString().trim() || err.message);
+  }
+}
+
+const catalogMod = await import(path.join(REPO_ROOT, 'home/catalogData.js'));
+const { CATEGORIES, SIM_CATALOG_META } = catalogMod;
+const expectedCategoryIds = ['all', 'gr', 'exotic', 'astro', 'sr'];
+assert(
+  Array.isArray(CATEGORIES) &&
+    expectedCategoryIds.every((cid) => CATEGORIES.some((c) => c.id === cid && typeof c.label === 'string' && c.label.length > 0)),
+  'home/catalogData.js exports valid CATEGORIES',
+  Array.isArray(CATEGORIES) ? CATEGORIES.map((c) => c.id).join(', ') : 'missing'
+);
+
+let totalPreviewBytes = 0;
+let allPreviewsValid = true;
+const previewDetails = [];
+for (const sim of SIMULATORS) {
+  const meta = SIM_CATALOG_META?.[sim.id];
+  const expectedPreview = `./home/previews/${sim.id}.webp`;
+  const metaOk =
+    Boolean(meta) &&
+    typeof meta.index === 'string' &&
+    typeof meta.category === 'string' &&
+    expectedCategoryIds.includes(meta.category) &&
+    meta.category !== 'all' &&
+    typeof meta.categoryLabel === 'string' &&
+    meta.categoryLabel.length > 0 &&
+    typeof meta.tagline === 'string' &&
+    meta.tagline.length > 0 &&
+    typeof meta.accent === 'string' &&
+    /^#[0-9a-fA-F]{6}$/.test(meta.accent) &&
+    meta.preview === expectedPreview &&
+    typeof meta.previewAlt === 'string' &&
+    meta.previewAlt.length > 0 &&
+    typeof meta.equation === 'string' &&
+    meta.equation.length > 0 &&
+    typeof meta.metricName === 'string' &&
+    meta.metricName.length > 0 &&
+    Array.isArray(meta.highlights) &&
+    meta.highlights.length === 3 &&
+    Array.isArray(meta.specs) &&
+    meta.specs.length === 3 &&
+    meta.specs.every((s) => s && typeof s.label === 'string' && typeof s.value === 'string') &&
+    Array.isArray(meta.presets) &&
+    meta.presets.length >= 6 &&
+    meta.presets.every((p) => p && typeof p.id === 'string' && typeof p.name === 'string' && typeof p.summary === 'string');
+
+  assert(
+    metaOk,
+    `SIM_CATALOG_META['${sim.id}'] contract valid`,
+    meta ? `presets=${meta.presets?.length ?? 0}, category=${meta.category}` : 'missing entry'
+  );
+
+  const webpRel = `home/previews/${sim.id}.webp`;
+  const webpFull = path.join(REPO_ROOT, webpRel);
+  let webpOk = false;
+  let sizeBytes = 0;
+  if (fs.existsSync(webpFull)) {
+    const buf = fs.readFileSync(webpFull);
+    sizeBytes = buf.length;
+    totalPreviewBytes += sizeBytes;
+    const isRiffWebp =
+      buf.length >= 12 &&
+      buf.subarray(0, 4).toString('ascii') === 'RIFF' &&
+      buf.subarray(8, 12).toString('ascii') === 'WEBP';
+    webpOk = isRiffWebp && sizeBytes > 0 && sizeBytes <= 160 * 1024;
+  }
+  if (!webpOk) allPreviewsValid = false;
+  previewDetails.push(`${sim.id}:${(sizeBytes / 1024).toFixed(1)}KB`);
+  assert(
+    webpOk,
+    `Preview WebP valid & lightweight (<=160 KB): ${webpRel}`,
+    `${(sizeBytes / 1024).toFixed(1)} KB`
+  );
+}
+
+assert(
+  allPreviewsValid && totalPreviewBytes > 0 && totalPreviewBytes <= 900 * 1024,
+  'Total size of all 7 homepage preview WebPs is <= 900 KB',
+  `${(totalPreviewBytes / 1024).toFixed(1)} KB (${previewDetails.join(', ')})`
+);
+
+const rootHtml = fs.readFileSync(path.join(REPO_ROOT, 'index.html'), 'utf8');
+const homeAppJs = fs.readFileSync(path.join(REPO_ROOT, 'home/app.js'), 'utf8');
+const gpuInitPattern = /getContext\s*\(\s*['"]webgl|navigator\.gpu\.requestAdapter\s*\(/i;
+assert(
+  !gpuInitPattern.test(rootHtml) && !gpuInitPattern.test(homeAppJs) && !/<canvas\b/i.test(rootHtml),
+  'Homepage (index.html + home/app.js) does NOT instantiate WebGL/WebGPU contexts or <canvas>'
+);
+assert(
+  rootHtml.includes('./shared/simRegistry.js') &&
+    rootHtml.includes('resolveSimByAlias') &&
+    rootHtml.includes("params.get('sim')") &&
+    rootHtml.includes('window.location.replace'),
+  'Root index.html preserves fast-path ?sim= redirect routing via shared/simRegistry.js'
+);
+
 console.log(`\nSUMMARY: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

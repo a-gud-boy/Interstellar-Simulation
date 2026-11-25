@@ -24,7 +24,8 @@ Native Linux, Windows, and macOS desktop port of all 7 dual-backend relativistic
 ```bash
 cd desktop
 cargo build --release
-./run.sh                    # Launches blackhole by default
+./run.sh                    # Opens Observatory Homepage by default (zero idle GPU)
+./run.sh --sim blackhole    # Launch directly into Gargantua
 ./run.sh --sim starflight   # Start in a specific simulator
 ./run.sh --sim wormhole --vsync off --width 1600 --height 900
 ```
@@ -51,7 +52,7 @@ cargo build --release
 ```
 
 Notes:
-- Standalone PE32+ Windows GUI (`WINDOWS_GUI` subsystem, no console window on double-click) with `milkyway_4k.jpg` and all 19 WGSL shaders embedded directly in the binary.
+- Standalone PE32+ Windows GUI (`WINDOWS_GUI` subsystem, no console window on double-click) with `milkyway_4k.jpg`, all 7 WebP Observatory previews, and all 19 WGSL shaders embedded directly in the binary.
 - Uses DirectX 12 or Vulkan via `wgpu 30` with static MSVC CRT (`+crt-static` and static `libucrt`), Windows system font discovery (`Inter`, `Segoe UI`, `Cascadia Mono`, `Consolas`, `Segoe UI Symbol`), and 1ms timer resolution (`timeBeginPeriod(1)`) for the 165 FPS frame cap.
 - Zero external DLL dependencies beyond built-in Windows OS DLLs (`KERNEL32.dll`, `USER32.dll`, `GDI32.dll`, `WINMM.dll`, `DXGI.dll`, etc.).
 
@@ -81,7 +82,8 @@ Notes:
 
 ### CLI Options
 
-- `--sim <name>`: `blackhole`, `wormhole`, `binary`, `warp`, `supernova`, `pulsar`, `starflight`
+- `--home`, `--hub`: Open the Observatory Homepage (default)
+- `--sim <name>`: `home`, `blackhole`, `wormhole`, `binary`, `warp`, `supernova`, `pulsar`, `starflight`
 - `--width <px>` / `--height <px>`: Initial window dimensions (default `1280x720`)
 - `--vsync <on|off>`: Toggle Fifo VSync vs Mailbox/Immediate presentation (frame-capped at `--max-fps`)
 - `--max-fps <n>`: Maximum frame rate limit (default `165`)
@@ -101,7 +103,7 @@ Notes:
 - **`C`**: Open/close Controls drawer
 - **`P`**: Save composite PNG to `./screenshots/` (`~/Pictures/Interstellar/` on macOS)
 - **`R`**: Reset camera
-- **`H`**: Toggle HUD visibility (`Esc` closes Controls drawer; `Cmd+Q`/`Cmd+W` quits on macOS)
+- **`H`**: Toggle HUD visibility (`Esc` closes Controls drawer or Quick-Inspect Dossier; top-right Home button returns to Observatory Homepage; `Cmd+Q`/`Cmd+W` quits on macOS)
 
 ## Verification
 

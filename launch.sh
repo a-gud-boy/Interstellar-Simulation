@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-SIM_TARGET="blackhole"
+SIM_TARGET="home"
 HOST="127.0.0.1"
 START_PORT=8080
 MODE="chrome"
@@ -20,14 +20,15 @@ Relativistic Starflight) on NVIDIA GPU with live WebGL2/WebGPU switching and
 cross-simulation navigation.
 
 Simulation Options:
-  --blackhole           Open Gargantua Black Hole Simulator (default)
+  --home, --hub         Open Interstellar Observatory Homepage (default)
+  --blackhole           Open Gargantua Black Hole Simulator
   --wormhole            Open Morris-Thorne Wormhole Simulator
   --binary, --binary-bh Open Binary Black Hole Inspiral & GW Lensing Simulator
   --warp, --warp-drive  Open Alcubierre Warp Drive Simulator
   --supernova, --snr    Open Supernova Remnant & Nebula Simulator
   --pulsar, --magnetar  Open Magnetar & Millisecond Pulsar Simulator
   --starflight, --sf    Open Relativistic Starflight Simulator
-  --sim <name>          Select simulation: blackhole | wormhole | binary | warp | supernova | pulsar | starflight
+  --sim <name>          Select target: home | blackhole | wormhole | binary | warp | supernova | pulsar | starflight
 
 Backend Options:
   --webgpu, -w          Start directly in WebGPU backend (?backend=webgpu)
@@ -44,8 +45,11 @@ EOF
 set_sim_target() {
   local raw="${1,,}"
   case "${raw}" in
+    home|hub|index|observatory)
+      SIM_TARGET="home"
+      ;;
     blackhole|blackhole-sim|gargantua|bh)
-      SIM_TARGET="blackhole"
+      SIM_TARGET="home"
       ;;
     wormhole|wormhole-sim|wh)
       SIM_TARGET="wormhole"
@@ -66,7 +70,7 @@ set_sim_target() {
       SIM_TARGET="starflight"
       ;;
     *)
-      echo "Error: unknown simulation '${1}'. Expected 'blackhole', 'wormhole', 'binary', 'warp', 'supernova', 'pulsar', or 'starflight'." >&2
+      echo "Error: unknown simulation '${1}'. Expected 'home', 'blackhole', 'wormhole', 'binary', 'warp', 'supernova', 'pulsar', or 'starflight'." >&2
       exit 1
       ;;
   esac
@@ -74,8 +78,12 @@ set_sim_target() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --home|--hub)
+      SIM_TARGET="home"
+      shift
+      ;;
     --blackhole)
-      SIM_TARGET="blackhole"
+      SIM_TARGET="home"
       shift
       ;;
     --wormhole)
@@ -104,7 +112,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --sim)
       if [[ $# -lt 2 ]]; then
-        echo "Error: --sim requires an argument ('blackhole', 'wormhole', 'binary', 'warp', 'supernova', 'pulsar', or 'starflight')." >&2
+        echo "Error: --sim requires an argument ('home', 'blackhole', 'wormhole', 'binary', 'warp', 'supernova', 'pulsar', or 'starflight')." >&2
         exit 1
       fi
       set_sim_target "$2"
@@ -150,7 +158,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "${SIM_TARGET}" == "wormhole" ]]; then
+if [[ "${SIM_TARGET}" == "home" ]]; then
+  SIM_DIR=""
+  SIM_LABEL="Interstellar Observatory Homepage"
+elif [[ "${SIM_TARGET}" == "wormhole" ]]; then
   SIM_DIR="wormhole-sim"
   SIM_LABEL="Wormhole Sim"
 elif [[ "${SIM_TARGET}" == "binary" ]]; then
@@ -183,9 +194,14 @@ if [[ "${MODE}" == "desktop" ]]; then
   exec "${DESKTOP_RUNNER}" --sim "${SIM_TARGET}" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 fi
 
-APP_DIR="${SCRIPT_DIR}/${SIM_DIR}"
-if [[ ! -d "${APP_DIR}" ]]; then
-  echo "Error: application directory not found: ${APP_DIR}" >&2
+if [[ -n "${SIM_DIR}" ]]; then
+  APP_DIR="${SCRIPT_DIR}/${SIM_DIR}"
+  if [[ ! -d "${APP_DIR}" ]]; then
+    echo "Error: application directory not found: ${APP_DIR}" >&2
+    exit 1
+  fi
+elif [[ ! -f "${SCRIPT_DIR}/index.html" ]]; then
+  echo "Error: homepage not found: ${SCRIPT_DIR}/index.html" >&2
   exit 1
 fi
 
@@ -274,7 +290,11 @@ for _ in range(50):
 sys.exit(1)
 PY
 
-URL="http://${HOST}:${PORT}/${SIM_DIR}/${QUERY}"
+if [[ -n "${SIM_DIR}" ]]; then
+  URL="http://${HOST}:${PORT}/${SIM_DIR}/${QUERY}"
+else
+  URL="http://${HOST}:${PORT}/${QUERY}"
+fi
 
 echo "Serving ${SCRIPT_DIR} (${SIM_LABEL} · ${BACKEND_LABEL}) at ${URL} (PID ${SERVER_PID})"
 echo "Launching ${BROWSER} on NVIDIA GPU (press Ctrl-C or close the browser window to stop)..."

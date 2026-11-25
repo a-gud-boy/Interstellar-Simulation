@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "index.html"
+      - "home/**"
       - "shared/**"
       - "scripts/**"
       - "*-sim/**"
@@ -15,6 +16,7 @@ on:
       - main
     paths:
       - "index.html"
+      - "home/**"
       - "shared/**"
       - "scripts/**"
       - "*-sim/**"

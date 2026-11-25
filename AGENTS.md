@@ -17,7 +17,7 @@ Static, zero-dependency, dual-backend (**WebGL2 + WebGPU**) relativistic GPU ray
 | `pulsar-sim/` | Magnetar / Millisecond Pulsar Magnetosphere & GR Lensing | `window.__PULSAR__` |
 | `starflight-sim/` | Relativistic Starflight (SR Aberration, Doppler & Terrell Sky) | `window.__STARFLIGHT__` |
 
-- Root `index.html` resolves `?sim=<alias>` via `./shared/simRegistry.js` (defaulting to `./blackhole-sim/`, forwarding query params such as `?backend=webgpu`, or showing a `?hub` selector card view and `<noscript>` fallback).
+- Root `index.html` renders the lightweight Observatory Homepage at `/` and `/?hub`, while `?sim=<alias>` redirects via `./shared/simRegistry.js` (forwarding query params such as `?backend=webgpu`, or falling back to `./blackhole-sim/` for unknown aliases).
 - Cross-sim navigation (`nav[aria-label="Simulation switcher"]`) is mounted dynamically from `shared/ui/simSwitcher.js` and `shared/simRegistry.js` using relative `../<sim>/` links and canonical `#sim-switch-<id>` IDs; local HTTP servers **must serve the repository root**, not an individual simulator folder.
 
 ## Local Launch (`./launch.sh`)
@@ -25,10 +25,11 @@ Static, zero-dependency, dual-backend (**WebGL2 + WebGPU**) relativistic GPU ray
 Serves the repo root via `python3 -m http.server` on the first free port in `127.0.0.1:8080..8179` and launches Chrome or Firefox with NVIDIA PRIME/Vulkan offload, or launches the native Rust `desktop/` app:
 
 ```bash
-# Default: blackhole-sim, WebGL2, headed X11 Google Chrome (dark mode)
+# Default: Observatory Homepage (index.html), headed X11 Google Chrome (dark mode)
 ./launch.sh
 
 # Select simulator (--blackhole | --wormhole | --binary | --warp | --supernova | --pulsar | --starflight | --sim <name>)
+./launch.sh --blackhole
 ./launch.sh --wormhole
 ./launch.sh --binary
 ./launch.sh --warp
@@ -43,7 +44,8 @@ Serves the repo root via `python3 -m http.server` on the first free port in `127
 # Launch in headed Wayland Firefox (NVIDIA WebGL2 + WebGPU readback prefs)
 ./launch.sh --firefox --warp
 
-# Launch native Rust desktop simulator (desktop/run.sh --sim <target>)
+# Launch native Rust desktop app (Observatory Homepage by default, or pass --<sim>)
+./launch.sh --desktop
 ./launch.sh --desktop --pulsar
 ```
 
@@ -85,7 +87,7 @@ node <sim>/tests/firefox_qa.mjs
   git config core.hooksPath .githooks
   ```
   `pre-commit` runs `<sim>/tests/physics_check.mjs` for staged `<sim>/src/(engine|shaders)/`, `scripts/run-tests.mjs --physics` for `shared/`/`scripts/`, and `cargo test` for `desktop/`/`shared/assets/milkyway_4k.jpg`. `pre-push` covers changed `<sim>/`, `shared/`/`scripts/`/`index.html`, and `desktop/` (set `RUN_BROWSER_QA=1 git push` to also run Chrome & Firefox QA for changed sims).
-- **GitHub Actions CI**: `.github/workflows/web-ci.yml` runs `node scripts/run-tests.mjs --physics` on `main` pushes/PRs; `.github/workflows/build-macos.yml` tests and packages `desktop/` (rebuilding when `desktop/**` or `shared/assets/milkyway_4k.jpg` changes).
+- **GitHub Actions CI**: `.github/workflows/web-ci.yml` runs `node scripts/run-tests.mjs --physics` on `main` pushes/PRs; `.github/workflows/build-macos.yml` tests and packages `desktop/` (rebuilding when `desktop/**`, `home/previews/**`, or `shared/assets/milkyway_4k.jpg` changes).
 
 ## Hard Invariants
 
