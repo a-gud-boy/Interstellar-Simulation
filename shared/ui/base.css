@@ -280,6 +280,7 @@ canvas[id$="-canvas"] {
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
+  block-size: 36px;
   gap: 2px;
   padding: 3px;
   border-radius: var(--radius-pill);
@@ -288,15 +289,18 @@ canvas[id$="-canvas"] {
 .sim-switch-item {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4.5px;
-  min-block-size: 29px;
-  padding: 4px 8.5px;
+  block-size: 28px;
+  min-block-size: 28px;
+  padding: 0 8.5px;
   border-radius: var(--radius-pill);
   border: 1px solid transparent;
   color: var(--text-secondary);
   text-decoration: none;
   font-size: 11px;
   font-weight: 500;
+  line-height: 1;
   letter-spacing: 0.02em;
   white-space: nowrap;
   flex-shrink: 0;
@@ -317,8 +321,10 @@ canvas[id$="-canvas"] {
 
 .sim-switch-item.sim-switch-home {
   justify-content: center;
-  min-inline-size: 35px;
-  min-block-size: 35px;
+  inline-size: 36px;
+  block-size: 36px;
+  min-inline-size: 36px;
+  min-block-size: 36px;
   padding: 0;
   color: var(--text-secondary);
 }
@@ -352,14 +358,17 @@ canvas[id$="-canvas"] {
 .pill-button {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
-  min-block-size: 35px;
-  padding: 6px 11px;
+  block-size: 36px;
+  min-block-size: 36px;
+  padding: 0 11px;
   border-radius: var(--radius-pill);
   color: var(--text-primary);
   font-family: inherit;
   font-size: 11.5px;
   font-weight: 500;
+  line-height: 1;
   letter-spacing: 0.02em;
   white-space: nowrap;
   flex-shrink: 0;
@@ -1019,14 +1028,14 @@ input[type="range"].hud-slider:focus-visible {
 
 @media (max-width: 1520px) {
   .sim-switch-item {
-    padding: 4px 7px;
+    padding: 0 7px;
     font-size: 11px;
   }
   .sim-switch-item.sim-switch-home {
     padding: 0;
   }
   .pill-button {
-    padding: 6px 10px;
+    padding: 0 10px;
     gap: 5px;
   }
   .hud-top-left {
@@ -1039,13 +1048,26 @@ input[type="range"].hud-slider:focus-visible {
     grid-template-columns: repeat(3, minmax(max-content, 1fr));
   }
   .sim-switch-item {
-    padding: 4px 6.5px;
+    padding: 0 6.5px;
     font-size: 10.5px;
   }
   .sim-switch-item.sim-switch-home {
-    min-inline-size: 33px;
-    min-block-size: 33px;
+    inline-size: 34px;
+    block-size: 34px;
+    min-inline-size: 34px;
+    min-block-size: 34px;
     padding: 0;
+  }
+  .sim-switcher {
+    block-size: 34px;
+  }
+  .sim-switcher .sim-switch-item {
+    block-size: 26px;
+    min-block-size: 26px;
+  }
+  .pill-button {
+    block-size: 34px;
+    min-block-size: 34px;
   }
   .hud-top-left {
     max-inline-size: var(--hud-top-left-max-w-1380);
@@ -1116,6 +1138,7 @@ input[type="range"].hud-slider:focus-visible {
   .sim-switcher {
     flex: 1 1 100%;
     flex-wrap: wrap;
+    block-size: auto;
     justify-content: space-between;
   }
   .sim-switch-item {
@@ -1126,7 +1149,10 @@ input[type="range"].hud-slider:focus-visible {
   }
   .hud-top-right > .sim-switch-item.sim-switch-home {
     flex: 0 0 auto;
+    inline-size: 35px;
+    block-size: 35px;
     min-inline-size: 35px;
+    min-block-size: 35px;
     padding: 0;
   }
   .hud-top-right > .pill-button {

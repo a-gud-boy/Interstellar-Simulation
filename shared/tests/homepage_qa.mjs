@@ -156,11 +156,11 @@ async function main() {
     await cdp.send('Page.navigate', { url: homeUrl });
 
     await waitForCondition(
-      `document.readyState === 'complete' && document.querySelectorAll('#catalog-grid .sim-card').length === 7 && document.getElementById('hero-preview-img')?.complete && document.getElementById('hero-preview-img')?.naturalWidth > 0`
+      `document.readyState === 'complete' && document.querySelectorAll('#catalog-grid .sim-card').length === 7 && document.getElementById('stage-bg-img')?.complete && document.getElementById('stage-bg-img')?.naturalWidth > 0`
     );
     await sleep(300);
 
-    // Capture above-the-fold Hero screenshot before scrolling
+    // Capture full-bleed Observatory Hero screenshot
     const shotDesktopHero = await captureShot('01_desktop_hero.png');
     console.log('Captured 01_desktop_hero.png');
 
@@ -184,48 +184,12 @@ async function main() {
           scrollWidth: document.documentElement.scrollWidth,
           innerWidth: window.innerWidth,
           overflowPx: document.documentElement.scrollWidth - window.innerWidth,
+          scrollHeight: document.documentElement.scrollHeight,
+          innerHeight: window.innerHeight,
         };
       })()`,
       true
     );
-
-    // Scroll down progressively so lazy-loaded catalog images decode and we capture key sections
-    await evalJS(`document.getElementById('simulators')?.scrollIntoView({ behavior: 'instant', block: 'start' })`);
-    await sleep(350);
-    const shotDesktopCatalogTop = await captureShot('02_desktop_catalog_top.png');
-    console.log('Captured 02_desktop_catalog_top.png');
-
-    await evalJS(`(() => {
-      const cards = document.querySelectorAll('#catalog-grid .sim-card');
-      if (cards[1]) {
-        const y = cards[1].getBoundingClientRect().top + window.scrollY - 78;
-        window.scrollTo({ top: Math.max(0, y), behavior: 'instant' });
-      }
-    })()`);
-    await sleep(350);
-    const shotDesktopCatalogGrid = await captureShot('03_desktop_catalog_grid.png');
-    console.log('Captured 03_desktop_catalog_grid.png');
-
-    await evalJS(`document.getElementById('architecture')?.scrollIntoView({ behavior: 'instant', block: 'start' })`);
-    await sleep(300);
-    const shotDesktopArch = await captureShot('04_desktop_architecture.png');
-    console.log('Captured 04_desktop_architecture.png');
-
-    await evalJS(`document.getElementById('controls')?.scrollIntoView({ behavior: 'instant', block: 'start' })`);
-    await sleep(300);
-    const shotDesktopControls = await captureShot('05_desktop_controls_footer.png');
-    console.log('Captured 05_desktop_controls_footer.png');
-
-    // Ensure every card image has been scrolled into view & decoded
-    await evalJS(`(async () => {
-      const imgs = Array.from(document.querySelectorAll('img'));
-      for (const img of imgs) {
-        img.scrollIntoView({ behavior: 'instant', block: 'center' });
-        await new Promise((r) => setTimeout(r, 60));
-      }
-      window.scrollTo({ top: 0, behavior: 'instant' });
-    })()`, true);
-    await sleep(350);
 
     const loadStats = await evalJS(`(() => {
       const cards = Array.from(document.querySelectorAll('#catalog-grid .sim-card'));
@@ -261,50 +225,61 @@ async function main() {
     // =========================================================================
     // TEST 3: Interactive UX Flows
     // =========================================================================
-    console.log('3. Testing interactive UX flows (Spotlight, Filters, Backend Toggle, Dossier, Navigation E2E)...');
+    console.log('3. Testing interactive UX flows (Filmstrip Switcher, Filters, Backend Toggle, Dossier, Controls, Navigation E2E)...');
 
-    // 3a. Hero spotlight switcher
+    // 3a. Bottom filmstrip spotlight switcher (Black Hole -> Wormhole)
     const heroBefore = await evalJS(`({
       title: document.getElementById('hero-sim-title')?.textContent?.trim(),
-      imgSrc: document.getElementById('hero-preview-img')?.getAttribute('src'),
+      imgSrc: document.getElementById('stage-bg-img')?.getAttribute('src'),
       launchHref: document.getElementById('hero-launch-btn')?.getAttribute('href'),
     })`);
 
-    await evalJS(`document.querySelector('#spotlight-tablist .spotlight-pill[data-sim-id="wormhole"]')?.click()`);
+    await evalJS(`document.querySelector('#catalog-grid .sim-card[data-sim-id="wormhole"] .sim-card-select')?.click()`);
     await waitForCondition(
-      `document.getElementById('hero-preview-img')?.getAttribute('src')?.includes('wormhole.webp') && document.getElementById('hero-preview-img')?.complete && document.getElementById('hero-preview-img')?.naturalWidth > 0`
+      `document.getElementById('stage-bg-img')?.getAttribute('src')?.includes('wormhole.webp') && document.getElementById('stage-bg-img')?.complete && document.getElementById('stage-bg-img')?.naturalWidth > 0`
     );
-    await sleep(180);
+    await sleep(220);
+
+    const shotWormholeSpotlight = await captureShot('02_desktop_wormhole_spotlight.png');
+    console.log('Captured 02_desktop_wormhole_spotlight.png');
 
     const heroAfter = await evalJS(`({
       title: document.getElementById('hero-sim-title')?.textContent?.trim(),
-      imgSrc: document.getElementById('hero-preview-img')?.getAttribute('src'),
-      imgWidth: document.getElementById('hero-preview-img')?.naturalWidth,
+      imgSrc: document.getElementById('stage-bg-img')?.getAttribute('src'),
+      imgWidth: document.getElementById('stage-bg-img')?.naturalWidth,
       launchHref: document.getElementById('hero-launch-btn')?.getAttribute('href'),
-      frameLaunchHref: document.getElementById('hero-frame-launch')?.getAttribute('href'),
-      tabSelected: document.querySelector('#spotlight-tablist .spotlight-pill[data-sim-id="wormhole"]')?.getAttribute('aria-selected'),
+      activeCardId: document.querySelector('#catalog-grid .sim-card.is-active')?.getAttribute('data-sim-id'),
+      cardBtnPressed: document.querySelector('#catalog-grid .sim-card[data-sim-id="wormhole"] .sim-card-select')?.getAttribute('aria-pressed'),
     })`);
 
-    // Switch hero spotlight back to blackhole for clean baseline
-    await evalJS(`document.querySelector('#spotlight-tablist .spotlight-pill[data-sim-id="blackhole"]')?.click()`);
-    await sleep(150);
+    // Switch back to blackhole for clean baseline
+    await evalJS(`document.querySelector('#catalog-grid .sim-card[data-sim-id="blackhole"] .sim-card-select')?.click()`);
+    await waitForCondition(`document.getElementById('stage-bg-img')?.getAttribute('src')?.includes('blackhole.webp')`);
+    await sleep(160);
 
-    // 3b. Category filter pills
+    // 3b. Category filter pills (General Relativity -> 2 cards; All -> 7 cards)
     await evalJS(`document.querySelector('#category-filter-bar button[data-category="gr"]')?.click()`);
-    await sleep(120);
-    const filterGR = await evalJS(`({
-      count: document.querySelectorAll('#catalog-grid .sim-card').length,
-      ids: Array.from(document.querySelectorAll('#catalog-grid .sim-card')).map((c) => c.dataset.simId),
-      pressed: document.querySelector('#category-filter-bar button[data-category="gr"]')?.getAttribute('aria-pressed'),
-    })`);
+    await sleep(150);
+    const filterGR = await evalJS(`(() => {
+      const visible = Array.from(document.querySelectorAll('#catalog-grid .sim-card')).filter((c) => !c.hidden);
+      return {
+        count: visible.length,
+        ids: visible.map((c) => c.dataset.simId),
+        selected: document.querySelector('#category-filter-bar button[data-category="gr"]')?.getAttribute('aria-selected'),
+      };
+    })()`);
+    const shotFilteredGR = await captureShot('03_desktop_filtered_gr.png');
+    console.log('Captured 03_desktop_filtered_gr.png');
 
     await evalJS(`document.querySelector('#category-filter-bar button[data-category="all"]')?.click()`);
     await sleep(150);
-    const filterAll = await evalJS(`({
-      count: document.querySelectorAll('#catalog-grid .sim-card').length,
-      ids: Array.from(document.querySelectorAll('#catalog-grid .sim-card')).map((c) => c.dataset.simId),
-      featuredLayout: document.getElementById('catalog-grid')?.classList.contains('is-featured-layout'),
-    })`);
+    const filterAll = await evalJS(`(() => {
+      const visible = Array.from(document.querySelectorAll('#catalog-grid .sim-card')).filter((c) => !c.hidden);
+      return {
+        count: visible.length,
+        ids: visible.map((c) => c.dataset.simId),
+      };
+    })()`);
 
     // 3c. Global Backend toggle (WebGL2 -> WebGPU)
     await evalJS(`document.querySelector('#backend-radiogroup button[data-backend="webgpu"]')?.click()`);
@@ -312,45 +287,37 @@ async function main() {
     const backendToggleCheck = await evalJS(`(() => {
       const glChecked = document.querySelector('#backend-radiogroup button[data-backend="webgl2"]')?.getAttribute('aria-checked');
       const gpuChecked = document.querySelector('#backend-radiogroup button[data-backend="webgpu"]')?.getAttribute('aria-checked');
-      const heroPill = document.getElementById('hero-backend-pill')?.textContent?.trim();
-      const allLaunchLinks = Array.from(document.querySelectorAll('a[data-sim-launch]')).map((a) => ({
-        sim: a.getAttribute('data-sim-launch'),
-        href: a.getAttribute('href'),
-      }));
+      const dynamicLinks = Array.from(document.querySelectorAll('a[data-sim-launch]')).filter((a) => a.id !== 'dossier-launch-webgl2');
       return {
         glChecked,
         gpuChecked,
-        heroPill,
-        launchCount: allLaunchLinks.length,
-        allHaveWebGPU: allLaunchLinks.length >= 16 && allLaunchLinks.every((l) => l.href?.includes('?backend=webgpu')),
-        sampleHrefs: allLaunchLinks.slice(0, 4),
+        launchCount: dynamicLinks.length,
+        allHaveWebGPU: dynamicLinks.length >= 8 && dynamicLinks.every((l) => l.getAttribute('href')?.includes('backend=webgpu')),
+        sampleHrefs: dynamicLinks.slice(0, 4).map((a) => ({ id: a.id || a.dataset.simLaunch, href: a.getAttribute('href') })),
       };
     })()`);
 
-    // 3d. Quick-Inspect <dialog> dossier (Details button -> verify 6 presets & equation -> screenshot -> close button -> Escape)
-    await evalJS(`document.querySelector('#catalog-grid .sim-card[data-sim-id="blackhole"] .card-btn-details')?.click()`);
-    await waitForCondition(
-      `document.getElementById('sim-dossier')?.open === true && document.getElementById('dossier-img')?.complete && document.getElementById('dossier-img')?.naturalWidth > 0`
-    );
-    await sleep(220);
+    // 3d. Quick-Inspect <dialog> dossier (Hero inspect button -> 6 presets & equation -> close -> Escape)
+    await evalJS(`document.getElementById('hero-inspect-btn')?.click()`);
+    await waitForCondition(`document.getElementById('sim-dossier')?.open === true`);
+    await sleep(200);
 
     const dossierOpenCheck = await evalJS(`({
       open: document.getElementById('sim-dossier')?.open === true,
       title: document.getElementById('dossier-title')?.textContent?.trim(),
       equation: document.getElementById('dossier-equation')?.textContent?.trim(),
-      presetCount: document.querySelectorAll('#dossier-presets li').length,
-      specCount: document.querySelectorAll('#dossier-specs .dossier-spec').length,
-      imgWidth: document.getElementById('dossier-img')?.naturalWidth || 0,
+      presetCount: document.querySelectorAll('#dossier-presets .preset-launch-chip').length,
+      specCount: document.querySelectorAll('#dossier-specs .dossier-spec-item').length,
       cliCmd: document.getElementById('dossier-cli-cmd')?.textContent?.trim(),
       webglHref: document.getElementById('dossier-launch-webgl2')?.getAttribute('href'),
       webgpuHref: document.getElementById('dossier-launch-webgpu')?.getAttribute('href'),
     })`);
 
-    const shotDesktopDossier = await captureShot('06_desktop_dossier_open.png');
-    console.log('Captured 06_desktop_dossier_open.png');
+    const shotDesktopDossier = await captureShot('04_desktop_dossier_open.png');
+    console.log('Captured 04_desktop_dossier_open.png');
 
-    await evalJS(`document.getElementById('dossier-close-btn')?.click()`);
-    await sleep(150);
+    await evalJS(`document.querySelector('#sim-dossier [data-close-dialog="sim-dossier"]')?.click()`);
+    await sleep(140);
     const closedViaButton = await evalJS(`document.getElementById('sim-dossier')?.open === false`);
 
     // Re-open via Hero Inspect button and verify Escape closes cleanly
@@ -360,7 +327,16 @@ async function main() {
     await pressKey('Escape', 'Escape', 27);
     const closedViaEscape = await evalJS(`document.getElementById('sim-dossier')?.open === false`);
 
-    // 3e. Navigation E2E: Launch simulator with ?backend=webgpu -> return via #sim-switch-home preserving ?backend=webgpu
+    // 3e. Controls <dialog> (Topbar Controls button -> screenshot -> Escape)
+    await evalJS(`document.getElementById('open-controls-btn')?.click()`);
+    await waitForCondition(`document.getElementById('controls-dialog')?.open === true`);
+    await sleep(180);
+    const shotDesktopControls = await captureShot('05_desktop_controls_dialog.png');
+    console.log('Captured 05_desktop_controls_dialog.png');
+    await pressKey('Escape', 'Escape', 27);
+    const controlsClosedViaEscape = await evalJS(`document.getElementById('controls-dialog')?.open === false`);
+
+    // 3f. Navigation E2E: Launch simulator with ?backend=webgpu -> return via #sim-switch-home preserving ?backend=webgpu
     currentStep = '4a_launch_blackhole';
     console.log('4. Testing Navigation E2E (Homepage -> blackhole-sim ?backend=webgpu -> #sim-switch-home -> Homepage)...');
     await evalJS(`document.getElementById('hero-launch-btn')?.click()`);
@@ -445,7 +421,7 @@ async function main() {
     });
     await cdp.send('Page.navigate', { url: `http://127.0.0.1:${port}/` });
     await waitForCondition(
-      `document.readyState === 'complete' && document.querySelectorAll('#catalog-grid .sim-card').length === 7 && document.getElementById('hero-preview-img')?.complete && document.getElementById('hero-preview-img')?.naturalWidth > 0`
+      `document.readyState === 'complete' && document.querySelectorAll('#catalog-grid .sim-card').length === 7 && document.getElementById('stage-bg-img')?.complete && document.getElementById('stage-bg-img')?.naturalWidth > 0`
     );
     await sleep(300);
 
@@ -454,18 +430,18 @@ async function main() {
       innerWidth: window.innerWidth,
       overflowPx: document.documentElement.scrollWidth - window.innerWidth,
     })`);
-    const shotMobileHero = await captureShot('07_mobile_hero.png');
-    console.log('Captured 07_mobile_hero.png');
+    const shotMobileHero = await captureShot('06_mobile_top.png');
+    console.log('Captured 06_mobile_top.png');
 
-    await evalJS(`document.getElementById('simulators')?.scrollIntoView({ behavior: 'instant', block: 'start' })`);
+    await evalJS(`document.getElementById('catalog-grid')?.scrollIntoView({ behavior: 'instant', block: 'center' })`);
     await sleep(350);
     const mobileCatalogOverflow = await evalJS(`({
       scrollWidth: document.documentElement.scrollWidth,
       innerWidth: window.innerWidth,
       overflowPx: document.documentElement.scrollWidth - window.innerWidth,
     })`);
-    const shotMobileCatalog = await captureShot('08_mobile_catalog.png');
-    console.log('Captured 08_mobile_catalog.png');
+    const shotMobileCatalog = await captureShot('07_mobile_filmstrip.png');
+    console.log('Captured 07_mobile_filmstrip.png');
 
     // =========================================================================
     // Report & Assertions
@@ -490,6 +466,7 @@ async function main() {
         dossierOpenCheck,
         closedViaButton,
         closedViaEscape,
+        controlsClosedViaEscape,
         simLaunchDiag,
         returnedHomeCheck,
       },
@@ -503,13 +480,12 @@ async function main() {
       },
       screenshots: {
         desktopHero: shotDesktopHero,
-        desktopCatalogTop: shotDesktopCatalogTop,
-        desktopCatalogGrid: shotDesktopCatalogGrid,
-        desktopArch: shotDesktopArch,
-        desktopControls: shotDesktopControls,
+        desktopWormholeSpotlight: shotWormholeSpotlight,
+        desktopFilteredGR: shotFilteredGR,
         desktopDossier: shotDesktopDossier,
-        mobileHero: shotMobileHero,
-        mobileCatalog: shotMobileCatalog,
+        desktopControls: shotDesktopControls,
+        mobileTop: shotMobileHero,
+        mobileFilmstrip: shotMobileCatalog,
       },
       errors: { consoleErrors, consoleWarnings, exceptions, failedRequests },
     };
@@ -530,16 +506,18 @@ async function main() {
     check(exceptions.length === 0, 'Zero uncaught runtime exceptions', exceptions.join(' | '));
     check(failedRequests.length === 0, 'Zero failed HTTP/network requests', failedRequests.join(' | '));
 
-    check(loadStats.cardCount === 7, 'All 7 simulator cards rendered', loadStats.cardIds.join(', '));
+    check(loadStats.cardCount === 7, 'All 7 simulator filmstrip cards rendered', loadStats.cardIds.join(', '));
     check(
       loadStats.allImgsLoaded === true,
       'All homepage preview <img> elements decoded cleanly (complete && naturalWidth > 0)',
       `${loadStats.imgCount} images`
     );
     check(
-      idleAudit.scrollWidth <= idleAudit.innerWidth && loadStats.scrollWidth <= loadStats.innerWidth,
-      'Zero horizontal overflow at desktop 1440x810',
-      `scrollWidth=${idleAudit.scrollWidth}, innerWidth=${idleAudit.innerWidth}`
+      idleAudit.scrollWidth <= idleAudit.innerWidth &&
+        loadStats.scrollWidth <= loadStats.innerWidth &&
+        idleAudit.scrollHeight <= idleAudit.innerHeight + 1,
+      'Single-viewport desktop fit (zero horizontal or vertical overflow at 1440x810)',
+      `w=${idleAudit.scrollWidth}/${idleAudit.innerWidth}, h=${idleAudit.scrollHeight}/${idleAudit.innerHeight}`
     );
 
     check(idleAudit.canvasCount === 0, 'Zero <canvas> elements on homepage', `canvasCount=${idleAudit.canvasCount}`);
@@ -565,8 +543,9 @@ async function main() {
         heroAfter.imgSrc?.includes('wormhole.webp') &&
         heroAfter.imgWidth > 0 &&
         heroAfter.launchHref?.includes('wormhole-sim') &&
-        heroAfter.tabSelected === 'true',
-      'Hero spotlight switcher updates title, preview image, and launch href',
+        heroAfter.activeCardId === 'wormhole' &&
+        heroAfter.cardBtnPressed === 'true',
+      'Filmstrip spotlight switcher updates stage backdrop, title, active pill, and launch href',
       `${heroBefore.title} -> ${heroAfter.title}`
     );
 
@@ -574,8 +553,7 @@ async function main() {
       filterGR.count === 2 &&
         filterGR.ids.includes('blackhole') &&
         filterGR.ids.includes('binary') &&
-        filterAll.count === 7 &&
-        filterAll.featuredLayout === true,
+        filterAll.count === 7,
       'Category filter pills filter General Relativity to 2 sims (blackhole, binary) and restore all 7',
       `GR=[${filterGR.ids.join(', ')}], All=${filterAll.count}`
     );
@@ -583,9 +561,8 @@ async function main() {
     check(
       backendToggleCheck.glChecked === 'false' &&
         backendToggleCheck.gpuChecked === 'true' &&
-        backendToggleCheck.heroPill === 'WEBGPU' &&
         backendToggleCheck.allHaveWebGPU === true,
-      'Global backend toggle WebGL2 -> WebGPU updates all launch hrefs across Hero, Catalog & Footer',
+      'Global backend toggle WebGL2 -> WebGPU updates launch hrefs across Hero & Filmstrip',
       `${backendToggleCheck.launchCount} launch links synced`
     );
 
@@ -593,10 +570,10 @@ async function main() {
       dossierOpenCheck.open === true &&
         dossierOpenCheck.presetCount === 6 &&
         Boolean(dossierOpenCheck.equation) &&
-        dossierOpenCheck.imgWidth > 0 &&
         closedViaButton === true &&
-        closedViaEscape === true,
-      'Quick-Inspect <dialog> dossier displays 6 presets, equation & preview, and closes via button + Escape',
+        closedViaEscape === true &&
+        controlsClosedViaEscape === true,
+      'Quick-Inspect <dialog> dossier (6 presets + equation) and Controls <dialog> open and close cleanly',
       `presets=${dossierOpenCheck.presetCount}, eq="${dossierOpenCheck.equation}"`
     );
 
@@ -639,8 +616,8 @@ async function main() {
     check(
       mobileHeroOverflow.scrollWidth <= mobileHeroOverflow.innerWidth &&
         mobileCatalogOverflow.scrollWidth <= mobileCatalogOverflow.innerWidth,
-      'Zero horizontal overflow at mobile 390x844 (hero + catalog)',
-      `hero=${mobileHeroOverflow.scrollWidth}/${mobileHeroOverflow.innerWidth}, catalog=${mobileCatalogOverflow.scrollWidth}/${mobileCatalogOverflow.innerWidth}`
+      'Zero horizontal overflow at mobile 390x844 (top + filmstrip)',
+      `top=${mobileHeroOverflow.scrollWidth}/${mobileHeroOverflow.innerWidth}, dock=${mobileCatalogOverflow.scrollWidth}/${mobileCatalogOverflow.innerWidth}`
     );
 
     console.log(`\nHOMEPAGE QA REPORT WRITTEN: ${path.join(SHOT_DIR, 'homepage_qa_report.json')}`);

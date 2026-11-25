@@ -1,4 +1,4 @@
-pub const APP_VERSION: &str = "0.1.2 beta";
+pub const APP_VERSION: &str = "0.1.2.1 beta";
 
 pub mod assets;
 pub mod renderer;

@@ -1,8 +1,8 @@
-use egui::epaint::CornerRadius;
+use egui::epaint::{CornerRadius, Mesh};
 use egui::text::LayoutJob;
 use egui::{
-    Align, Align2, Area, Color32, Context, CursorIcon, FontId, Id, Image, Key, Order, Painter,
-    Pos2, Rect, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextFormat, Ui, Vec2,
+    Align, Area, Color32, Context, CursorIcon, FontId, Id, Key, Margin, Order, Painter, Pos2,
+    Rect, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextFormat, Ui, Vec2,
 };
 
 use crate::assets::previews::PreviewTextureCache;
@@ -29,7 +29,7 @@ impl CategoryFilter {
 
     pub fn label(self) -> &'static str {
         match self {
-            CategoryFilter::All => "All Engines",
+            CategoryFilter::All => "All 7",
             CategoryFilter::GeneralRelativity => "General Relativity",
             CategoryFilter::ExoticMetrics => "Exotic Metrics",
             CategoryFilter::Astrophysics => "Astrophysics",
@@ -73,7 +73,7 @@ pub const CATALOG: [CatalogEntry; 7] = [
         title: "Gargantua — Kerr Black Hole",
         short_title: "Gargantua",
         tagline: "Extremal Kerr black hole with volumetric accretion disk",
-        description: "3D Outgoing Kerr–Schild ray-traced accretion disk, relativistic Doppler beaming, and 128-sample cinema still mode.",
+        description: "3D Outgoing Kerr–Schild ray-traced accretion disk, relativistic Doppler beaming, photon-ring caustic, and 128-sample cinema still mode.",
         equation: "g_μν = η_μν + 2H l_μ l_ν · a/M ≤ 0.998",
         metric_name: "3D Outgoing Kerr–Schild",
         accent: Color32::from_rgb(0xf0, 0xb3, 0x5a),
@@ -313,6 +313,7 @@ pub struct HomeState {
     pub spotlight: SimId,
     pub category: CategoryFilter,
     pub inspect_sim: Option<SimId>,
+    pub controls_open: bool,
     pub previews: PreviewTextureCache,
     pub scroll_to_catalog: bool,
 }
@@ -323,6 +324,7 @@ impl Default for HomeState {
             spotlight: SimId::Blackhole,
             category: CategoryFilter::All,
             inspect_sim: None,
+            controls_open: false,
             previews: PreviewTextureCache::default(),
             scroll_to_catalog: false,
         }
@@ -330,53 +332,85 @@ impl Default for HomeState {
 }
 
 const BG_VOID: Color32 = Color32::from_rgb(0x03, 0x05, 0x0a);
-const TEXT_PRIMARY: Color32 = Color32::from_rgb(0xee, 0xf2, 0xf7);
+const TEXT_PRIMARY: Color32 = Color32::from_rgb(0xf3, 0xf6, 0xfc);
 const TEXT_SECONDARY: Color32 = Color32::from_rgb(0xa2, 0xb1, 0xc6);
-const TEXT_MUTED: Color32 = Color32::from_rgb(0x7c, 0x8b, 0xa1);
+const TEXT_MUTED: Color32 = Color32::from_rgb(0x78, 0x87, 0x9e);
+const EMERALD: Color32 = Color32::from_rgb(0x34, 0xd3, 0x99);
+const CYAN_GPU: Color32 = Color32::from_rgb(0x38, 0xbd, 0xf8);
 
 #[inline]
-fn surface_card() -> Color32 {
-    Color32::from_rgba_unmultiplied(12, 16, 26, 224)
-}
-
-#[inline]
-fn surface_subtle() -> Color32 {
-    Color32::from_rgba_unmultiplied(18, 23, 36, 175)
+fn glass_pill() -> Color32 {
+    Color32::from_rgba_unmultiplied(7, 10, 18, 178)
 }
 
 #[inline]
-fn border_hairline() -> Color32 {
-    Color32::from_rgba_unmultiplied(255, 255, 255, 24)
+fn glass_card() -> Color32 {
+    Color32::from_rgba_unmultiplied(8, 12, 22, 204)
 }
 
 #[inline]
-fn border_strong() -> Color32 {
-    Color32::from_rgba_unmultiplied(255, 255, 255, 44)
+fn dialog_surface() -> Color32 {
+    Color32::from_rgba_unmultiplied(10, 14, 24, 248)
 }
 
-fn wrapped_job(text: &str, font: FontId, color: Color32, max_w: f32) -> LayoutJob {
-    let mut job = LayoutJob::default();
-    job.wrap.max_width = max_w.max(32.0);
-    job.append(
-        text,
-        0.0,
-        TextFormat {
-            font_id: font,
-            color,
-            ..Default::default()
-        },
-    );
-    job
+#[inline]
+fn hairline() -> Color32 {
+    Color32::from_rgba_unmultiplied(255, 255, 255, 28)
 }
 
-fn draw_gargantua_mark(painter: &Painter, center: Pos2, accent: Color32, bright: Color32) {
-    painter.circle_stroke(center, 8.5, Stroke::new(1.4, with_alpha(accent, 210)));
-    let rot = -14.0_f32.to_radians();
-    let (sr, cr) = rot.sin_cos();
-    let mut pts = Vec::with_capacity(25);
-    for i in 0..=24 {
-        let a = (i as f32 / 24.0) * std::f32::consts::TAU;
-        let lx = a.cos() * 12.5;
+#[inline]
+fn hairline_soft() -> Color32 {
+    Color32::from_rgba_unmultiplied(255, 255, 255, 16)
+}
+
+fn paint_horizontal_gradient(painter: &Painter, rect: Rect, stops: &[(f32, Color32)]) {
+    if stops.len() < 2 {
+        return;
+    }
+    let mut mesh = Mesh::default();
+    let y0 = rect.top();
+    let y1 = rect.bottom();
+    for (t, col) in stops {
+        let x = rect.left() + rect.width() * t.clamp(0.0, 1.0);
+        mesh.colored_vertex(Pos2::new(x, y0), *col);
+        mesh.colored_vertex(Pos2::new(x, y1), *col);
+    }
+    for i in 0..(stops.len() - 1) {
+        let base = (i * 2) as u32;
+        mesh.add_triangle(base, base + 2, base + 3);
+        mesh.add_triangle(base, base + 3, base + 1);
+    }
+    painter.add(Shape::mesh(mesh));
+}
+
+fn paint_vertical_gradient(painter: &Painter, rect: Rect, stops: &[(f32, Color32)]) {
+    if stops.len() < 2 {
+        return;
+    }
+    let mut mesh = Mesh::default();
+    let x0 = rect.left();
+    let x1 = rect.right();
+    for (t, col) in stops {
+        let y = rect.top() + rect.height() * t.clamp(0.0, 1.0);
+        mesh.colored_vertex(Pos2::new(x0, y), *col);
+        mesh.colored_vertex(Pos2::new(x1, y), *col);
+    }
+    for i in 0..(stops.len() - 1) {
+        let base = (i * 2) as u32;
+        mesh.add_triangle(base, base + 1, base + 3);
+        mesh.add_triangle(base, base + 3, base + 2);
+    }
+    painter.add(Shape::mesh(mesh));
+}
+
+fn draw_brand_mark(painter: &Painter, center: Pos2, accent: Color32, bright: Color32) {
+    painter.circle_stroke(center, 8.6, Stroke::new(1.35, with_alpha(accent, 220)));
+    let angle = -0.24_f32;
+    let (sr, cr) = angle.sin_cos();
+    let mut pts = Vec::with_capacity(29);
+    for i in 0..=28 {
+        let a = (i as f32 / 28.0) * std::f32::consts::TAU;
+        let lx = a.cos() * 12.2;
         let ly = a.sin() * 3.1;
         pts.push(Pos2::new(
             center.x + lx * cr - ly * sr,
@@ -384,67 +418,104 @@ fn draw_gargantua_mark(painter: &Painter, center: Pos2, accent: Color32, bright:
         ));
     }
     painter.line(pts, Stroke::new(1.3, bright));
-    painter.circle_filled(center, 5.2, Color32::BLACK);
+    painter.circle_filled(center, 4.9, Color32::from_rgb(0x03, 0x05, 0x0a));
 }
 
-fn draw_observatory_backdrop(ctx: &Context, screen: Rect, accent: Color32) {
+fn draw_stage_backdrop(ctx: &Context, state: &mut HomeState, screen: Rect, entry: &CatalogEntry) {
     let painter = ctx.layer_painter(egui::LayerId::background());
     painter.rect_filled(screen, CornerRadius::ZERO, BG_VOID);
 
-    // Subtle 48px deep-space observatory coordinate grid
-    let grid_stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 7));
-    let step = 48.0;
-    let mut x = screen.left() + 24.0;
-    while x < screen.right() {
-        painter.line_segment([Pos2::new(x, screen.top()), Pos2::new(x, screen.bottom())], grid_stroke);
-        x += step;
-    }
-    let mut y = screen.top() + 24.0;
-    while y < screen.bottom() {
-        painter.line_segment([Pos2::new(screen.left(), y), Pos2::new(screen.right(), y)], grid_stroke);
-        y += step;
-    }
+    let tex_id = {
+        let tex = state.previews.get_or_load(ctx, entry.sim);
+        let size = tex.size_vec2();
+        (tex.id(), size)
+    };
+    let img_aspect = if tex_id.1.y > 1.0 {
+        tex_id.1.x / tex_id.1.y
+    } else {
+        16.0 / 9.0
+    };
+    let screen_aspect = (screen.width() / screen.height().max(1.0)).max(0.1);
 
-    // Soft ambient radial glow behind the hero viewport (pure 2D circle layers, zero GPU shaders)
-    let glow_center = Pos2::new(screen.left() + screen.width() * 0.72, screen.top() + 250.0);
-    for (radius, alpha) in [(340.0, 6), (250.0, 9), (165.0, 11)] {
-        painter.circle_filled(glow_center, radius, with_alpha(accent, alpha));
-    }
-}
-
-fn draw_badge_pill(
-    ui: &mut Ui,
-    text: &str,
-    dot: Option<Color32>,
-    bg: Color32,
-    border: Color32,
-    fg: Color32,
-    font_size: f32,
-) {
-    let font = FontId::new(font_size, semibold_family());
-    let g = ui.painter().layout_job(tracked_job(text, font, fg, 0.45));
-    let dot_w = if dot.is_some() { 11.0 } else { 0.0 };
-    let h = (font_size + 10.0).max(20.0);
-    let w = 10.0 * 2.0 + dot_w + g.size().x;
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
-    ui.painter().rect(
-        rect,
-        CornerRadius::same((h * 0.5).ceil() as u8),
-        bg,
-        Stroke::new(1.0, border),
-        StrokeKind::Inside,
+    // Overscan slightly (1.06x) and nudge focal framing toward the right stage so
+    // the left editorial brief never obscures the center of the celestial phenomenon.
+    let (cover_w, cover_h) = if screen_aspect >= img_aspect {
+        let w = screen.width() * 1.06;
+        (w, w / img_aspect)
+    } else {
+        let h = screen.height() * 1.06;
+        (h * img_aspect, h)
+    };
+    let max_shift_x = ((cover_w - screen.width()) * 0.5).max(0.0);
+    let shift_x = (screen.width() * 0.045).min(max_shift_x);
+    let img_rect = Rect::from_center_size(
+        Pos2::new(screen.center().x + shift_x, screen.center().y - (cover_h - screen.height()) * 0.05),
+        Vec2::new(cover_w, cover_h),
     );
-    let mut x = rect.left() + 10.0;
-    let cy = rect.center().y;
-    if let Some(dot_c) = dot {
-        ui.painter().circle_filled(Pos2::new(x + 3.0, cy), 3.0, dot_c);
-        x += dot_w;
+    painter.image(
+        tex_id.0,
+        img_rect,
+        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+        Color32::from_rgba_unmultiplied(245, 248, 255, 236),
+    );
+
+    // Left editorial readability vignette
+    paint_horizontal_gradient(
+        &painter,
+        screen,
+        &[
+            (0.0, Color32::from_rgba_unmultiplied(3, 5, 10, 252)),
+            (0.28, Color32::from_rgba_unmultiplied(3, 5, 10, 234)),
+            (0.46, Color32::from_rgba_unmultiplied(3, 5, 10, 152)),
+            (0.68, Color32::from_rgba_unmultiplied(3, 5, 10, 34)),
+            (1.0, Color32::from_rgba_unmultiplied(3, 5, 10, 12)),
+        ],
+    );
+
+    // Top bar contrast vignette
+    paint_vertical_gradient(
+        &painter,
+        screen,
+        &[
+            (0.0, Color32::from_rgba_unmultiplied(3, 5, 10, 220)),
+            (0.22, Color32::from_rgba_unmultiplied(3, 5, 10, 88)),
+            (0.48, Color32::TRANSPARENT),
+        ],
+    );
+
+    // Bottom filmstrip dock vignette
+    paint_vertical_gradient(
+        &painter,
+        screen,
+        &[
+            (0.46, Color32::TRANSPARENT),
+            (0.66, Color32::from_rgba_unmultiplied(3, 5, 10, 128)),
+            (0.84, Color32::from_rgba_unmultiplied(3, 5, 10, 238)),
+            (1.0, Color32::from_rgba_unmultiplied(3, 5, 10, 254)),
+        ],
+    );
+
+    // Smooth radial ambient accent glow behind the focal phenomenon (zero discrete rings)
+    let glow_center = Pos2::new(
+        screen.left() + screen.width() * 0.68,
+        screen.top() + screen.height() * 0.44,
+    );
+    let glow_radius = screen.height().max(720.0) * 0.46;
+    let mut glow = Mesh::default();
+    glow.colored_vertex(glow_center, with_alpha(entry.accent, 24));
+    const STEPS: usize = 36;
+    for i in 0..=STEPS {
+        let theta = (i as f32 / STEPS as f32) * std::f32::consts::TAU;
+        let p = glow_center + Vec2::new(theta.cos(), theta.sin()) * glow_radius;
+        glow.colored_vertex(p, Color32::TRANSPARENT);
     }
-    ui.painter()
-        .galley(Pos2::new(x, cy - g.size().y * 0.5), g, fg);
+    for i in 1..=STEPS as u32 {
+        glow.add_triangle(0, i, i + 1);
+    }
+    painter.add(Shape::mesh(glow));
 }
 
-fn draw_accent_button(
+fn draw_accent_pill_button(
     ui: &mut Ui,
     label: &str,
     accent: Color32,
@@ -453,9 +524,13 @@ fn draw_accent_button(
     pad_x: f32,
     font_size: f32,
 ) -> egui::Response {
-    let font = FontId::new(font_size, semibold_family());
-    let dark_fg = Color32::from_rgb(0x06, 0x08, 0x0f);
-    let g = ui.painter().layout_job(tracked_job(label, font, dark_fg, 0.2));
+    let dark_fg = Color32::from_rgb(0x05, 0x07, 0x0e);
+    let g = ui.painter().layout_job(tracked_job(
+        label,
+        FontId::new(font_size, semibold_family()),
+        dark_fg,
+        0.2,
+    ));
     let w = pad_x * 2.0 + g.size().x;
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, height), Sense::click());
     if resp.hovered() {
@@ -463,10 +538,12 @@ fn draw_accent_button(
     }
     let fill = if resp.hovered() { bright } else { accent };
     ui.painter().rect_filled(
-        rect,
-        CornerRadius::same((height * 0.5).ceil() as u8),
-        fill,
+        rect.expand(1.5),
+        CornerRadius::same(((height * 0.5) + 2.0).ceil() as u8),
+        with_alpha(accent, if resp.hovered() { 70 } else { 42 }),
     );
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same((height * 0.5).ceil() as u8), fill);
     ui.painter().galley(
         Pos2::new(
             rect.center().x - g.size().x * 0.5,
@@ -478,28 +555,38 @@ fn draw_accent_button(
     resp
 }
 
-fn draw_ghost_button(
+fn draw_glass_pill_button(
     ui: &mut Ui,
     label: &str,
-    accent_border: Color32,
     height: f32,
     pad_x: f32,
     font_size: f32,
+    border_override: Option<Color32>,
 ) -> egui::Response {
-    let font = FontId::new(font_size, semibold_family());
-    let g = ui
-        .painter()
-        .layout_job(tracked_job(label, font, TEXT_PRIMARY, 0.2));
+    let fg = TEXT_PRIMARY;
+    let g = ui.painter().layout_job(tracked_job(
+        label,
+        FontId::new(font_size, semibold_family()),
+        fg,
+        0.2,
+    ));
     let w = pad_x * 2.0 + g.size().x;
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, height), Sense::click());
     if resp.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
-    let (fill, border) = if resp.hovered() {
-        (Color32::from_rgba_unmultiplied(28, 34, 52, 230), accent_border)
+    let fill = if resp.hovered() {
+        Color32::from_rgba_unmultiplied(255, 255, 255, 24)
     } else {
-        (surface_subtle(), border_strong())
+        Color32::from_rgba_unmultiplied(10, 14, 24, 184)
     };
+    let border = border_override.unwrap_or_else(|| {
+        if resp.hovered() {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 76)
+        } else {
+            hairline()
+        }
+    });
     ui.painter().rect(
         rect,
         CornerRadius::same((height * 0.5).ceil() as u8),
@@ -513,817 +600,616 @@ fn draw_ghost_button(
             rect.center().y - g.size().y * 0.5,
         ),
         g,
-        TEXT_PRIMARY,
+        fg,
     );
     resp
 }
 
-fn draw_top_bar(
+fn draw_floating_topbar(
     ctx: &Context,
     screen: Rect,
+    pad_x: f32,
     state: &mut HomeState,
-    spot: &CatalogEntry,
-    adapter_label: &str,
+    active: &CatalogEntry,
 ) {
-    let bar_h = 54.0;
-    let bar_rect = Rect::from_min_size(screen.min, Vec2::new(screen.width(), bar_h));
-    Area::new(Id::unique("home_top_bar"))
+    let bar_w = (screen.width() - pad_x * 2.0).max(320.0);
+    let bar_h = 46.0;
+    let bar_rect = Rect::from_min_size(Pos2::new(screen.left() + pad_x, screen.top() + 16.0), Vec2::new(bar_w, bar_h));
+
+    Area::new(Id::unique("home_topbar_area"))
         .fixed_pos(bar_rect.min)
-        .order(Order::Foreground)
+        .order(Order::Middle)
         .fade_in(false)
+        .interactable(!state.controls_open && state.inspect_sim.is_none())
         .show(ctx, |ui| {
             ui.set_min_size(bar_rect.size());
             ui.set_max_size(bar_rect.size());
-            ui.painter().rect_filled(
+
+            ui.painter().rect(
                 bar_rect,
-                CornerRadius::ZERO,
-                Color32::from_rgba_unmultiplied(6, 9, 17, 238),
-            );
-            ui.painter().line_segment(
-                [bar_rect.left_bottom(), bar_rect.right_bottom()],
-                Stroke::new(1.0, border_hairline()),
+                CornerRadius::same(23),
+                glass_pill(),
+                Stroke::new(1.0, hairline()),
+                StrokeKind::Inside,
             );
 
-            let pad_x = ((screen.width() - 1140.0) * 0.5).max(20.0);
-            let inner = Rect::from_min_max(
-                Pos2::new(bar_rect.left() + pad_x, bar_rect.top()),
-                Pos2::new(bar_rect.right() - pad_x, bar_rect.bottom()),
-            );
-
-            ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.spacing_mut().item_spacing.x = 10.0;
-
-                    let (mark_r, _) = ui.allocate_exact_size(Vec2::new(26.0, 26.0), Sense::hover());
-                    draw_gargantua_mark(ui.painter(), mark_r.center(), spot.accent, spot.accent_bright);
-
-                    let brand_g = ui.painter().layout_job(tracked_job(
-                        "INTERSTELLAR",
-                        FontId::new(13.0, semibold_family()),
-                        TEXT_PRIMARY,
-                        2.1,
-                    ));
-                    let (brand_r, _) =
-                        ui.allocate_exact_size(Vec2::new(brand_g.size().x + 2.0, 22.0), Sense::hover());
-                    ui.painter().galley(
-                        Pos2::new(brand_r.left(), brand_r.center().y - brand_g.size().y * 0.5),
-                        brand_g,
-                        TEXT_PRIMARY,
-                    );
-
-                    draw_badge_pill(
-                        ui,
-                        "7 ENGINES",
-                        None,
-                        with_alpha(spot.accent, 28),
-                        with_alpha(spot.accent, 115),
-                        spot.accent_bright,
-                        10.0,
-                    );
-
-                    let ver_txt = format!("v{}", crate::APP_VERSION);
-                    draw_badge_pill(
-                        ui,
-                        &ver_txt,
-                        None,
-                        Color32::from_rgba_unmultiplied(255, 255, 255, 10),
-                        border_hairline(),
-                        TEXT_SECONDARY,
-                        10.0,
-                    );
-
-                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+            egui::Frame::NONE
+                .inner_margin(Margin::symmetric(14, 0))
+                .show(ui, |ui| {
+                    ui.set_width((bar_w - 28.0).max(120.0));
+                    ui.set_height(bar_h);
+                    ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
 
-                        draw_badge_pill(
-                            ui,
-                            adapter_label,
-                            Some(Color32::from_rgb(0x34, 0xd3, 0x99)),
-                            Color32::from_rgba_unmultiplied(15, 22, 34, 210),
-                            border_hairline(),
-                            TEXT_SECONDARY,
-                            10.0,
-                        );
+                        // Brand lockup
+                        let (mark_rect, _) = ui.allocate_exact_size(Vec2::new(26.0, 26.0), Sense::hover());
+                        draw_brand_mark(ui.painter(), mark_rect.center(), active.accent, active.accent_bright);
 
-                        if inner.width() >= 780.0
-                            && ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new("Browse Engines")
-                                            .size(11.5)
-                                            .color(TEXT_SECONDARY),
-                                    )
-                                    .frame(false),
-                                )
-                                .on_hover_cursor(CursorIcon::PointingHand)
-                                .clicked()
-                        {
-                            state.scroll_to_catalog = true;
-                        }
-                    });
-                });
-            });
-        });
-}
-
-fn draw_hero_viewport(
-    ui: &mut Ui,
-    state: &mut HomeState,
-    spot: &CatalogEntry,
-    width: f32,
-    action: &mut Option<HomeAction>,
-) {
-    let tex_id = state.previews.get_or_load(ui.ctx(), spot.sim).id();
-    let img_h = (width * 9.0 / 16.0).round();
-    let (frame_rect, frame_resp) =
-        ui.allocate_exact_size(Vec2::new(width, img_h), Sense::click());
-    if frame_resp.hovered() {
-        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-    }
-
-    // Outer Observatory Glass frame
-    ui.painter().rect(
-        frame_rect,
-        CornerRadius::same(14),
-        Color32::from_rgb(7, 10, 18),
-        Stroke::new(1.0, with_alpha(spot.accent, 110)),
-        StrokeKind::Outside,
-    );
-
-    // Rounded preview image inside frame
-    ui.scope_builder(egui::UiBuilder::new().max_rect(frame_rect), |ui| {
-        ui.add(
-            Image::new((tex_id, frame_rect.size()))
-                .fit_to_exact_size(frame_rect.size())
-                .corner_radius(CornerRadius::same(14)),
-        );
-    });
-
-    // Subtle dark gradient scrim along bottom edge for guaranteed caption contrast
-    let scrim_rect = Rect::from_min_max(
-        Pos2::new(frame_rect.left(), (frame_rect.bottom() - 82.0).max(frame_rect.top())),
-        frame_rect.max,
-    );
-    ui.painter().rect_filled(
-        scrim_rect,
-        CornerRadius {
-            nw: 0,
-            ne: 0,
-            sw: 14,
-            se: 14,
-        },
-        Color32::from_rgba_unmultiplied(4, 6, 12, 212),
-    );
-
-    // Corner reticle brackets
-    let ret_stroke = Stroke::new(1.2, with_alpha(spot.accent_bright, 145));
-    let arm = 12.0;
-    let ins = 10.0;
-    for (cx, cy, dx, dy) in [
-        (frame_rect.left() + ins, frame_rect.top() + ins, 1.0, 1.0),
-        (frame_rect.right() - ins, frame_rect.top() + ins, -1.0, 1.0),
-    ] {
-        ui.painter()
-            .line_segment([Pos2::new(cx, cy), Pos2::new(cx + dx * arm, cy)], ret_stroke);
-        ui.painter()
-            .line_segment([Pos2::new(cx, cy), Pos2::new(cx, cy + dy * arm)], ret_stroke);
-    }
-
-    // Top-left index + metric badge & top-right NATIVE WGPU pill
-    let top_row = Rect::from_min_max(
-        Pos2::new(frame_rect.left() + 14.0, frame_rect.top() + 14.0),
-        Pos2::new(frame_rect.right() - 14.0, frame_rect.top() + 40.0),
-    );
-    ui.scope_builder(egui::UiBuilder::new().max_rect(top_row), |ui| {
-        ui.horizontal(|ui| {
-            let tag = format!("{}  ·  {}", spot.index, spot.metric_name);
-            draw_badge_pill(
-                ui,
-                &tag,
-                Some(spot.accent),
-                Color32::from_rgba_unmultiplied(7, 10, 18, 215),
-                border_strong(),
-                TEXT_PRIMARY,
-                10.5,
-            );
-            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                draw_badge_pill(
-                    ui,
-                    "NATIVE WGPU",
-                    None,
-                    Color32::from_rgba_unmultiplied(7, 10, 18, 215),
-                    with_alpha(spot.accent, 115),
-                    spot.accent_bright,
-                    10.0,
-                );
-            });
-        });
-    });
-
-    // Bottom caption + Inspect / Launch buttons
-    let cap_rect = Rect::from_min_max(
-        Pos2::new(scrim_rect.left() + 16.0, scrim_rect.top() + 12.0),
-        Pos2::new(scrim_rect.right() - 16.0, scrim_rect.bottom() - 12.0),
-    );
-    let mut clicked_button = false;
-    ui.scope_builder(egui::UiBuilder::new().max_rect(cap_rect), |ui| {
-        ui.horizontal(|ui| {
-            let text_w = (cap_rect.width() - 185.0).max(140.0);
-            ui.vertical(|ui| {
-                ui.set_max_width(text_w);
-                ui.spacing_mut().item_spacing.y = 3.0;
-                ui.label(
-                    egui::RichText::new(spot.title)
-                        .font(FontId::new(14.5, semibold_family()))
-                        .color(TEXT_PRIMARY),
-                );
-                ui.label(
-                    egui::RichText::new(spot.equation)
-                        .font(FontId::monospace(10.8))
-                        .color(TEXT_SECONDARY),
-                );
-            });
-            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                if draw_accent_button(ui, "Launch ->", spot.accent, spot.accent_bright, 30.0, 13.0, 11.5)
-                    .clicked()
-                {
-                    clicked_button = true;
-                    *action = Some(HomeAction::LaunchSim {
-                        sim: spot.sim,
-                        preset: None,
-                    });
-                }
-                if draw_ghost_button(ui, "Inspect", with_alpha(spot.accent, 140), 30.0, 12.0, 11.5)
-                    .clicked()
-                {
-                    clicked_button = true;
-                    state.inspect_sim = Some(spot.sim);
-                }
-            });
-        });
-    });
-
-    if frame_resp.clicked() && !clicked_button {
-        *action = Some(HomeAction::LaunchSim {
-            sim: spot.sim,
-            preset: None,
-        });
-    }
-
-    ui.add_space(10.0);
-
-    // 7-engine spotlight selector pills
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(5.0, 5.0);
-        for entry in &CATALOG {
-            let is_active = entry.sim == state.spotlight;
-            let font = FontId::new(10.5, semibold_family());
-            let fg = if is_active { TEXT_PRIMARY } else { TEXT_SECONDARY };
-            let g = ui.painter().layout_job(tracked_job(
-                entry.sim.switch_label(),
-                font.clone(),
-                fg,
-                0.1,
-            ));
-            let w = 8.0 * 2.0 + 10.0 + g.size().x;
-            let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, 26.0), Sense::click());
-            if resp.hovered() {
-                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-            }
-            let (fill, border, text_c) = if is_active {
-                (
-                    with_alpha(entry.accent, 38),
-                    with_alpha(entry.accent, 150),
-                    entry.accent_bright,
-                )
-            } else if resp.hovered() {
-                (
-                    Color32::from_rgba_unmultiplied(255, 255, 255, 16),
-                    border_strong(),
-                    TEXT_PRIMARY,
-                )
-            } else {
-                (surface_subtle(), border_hairline(), TEXT_SECONDARY)
-            };
-            ui.painter().rect(
-                rect,
-                CornerRadius::same(13),
-                fill,
-                Stroke::new(1.0, border),
-                StrokeKind::Inside,
-            );
-            let cy = rect.center().y;
-            ui.painter()
-                .circle_filled(Pos2::new(rect.left() + 10.5, cy), 2.8, entry.accent);
-            let tg = ui
-                .painter()
-                .layout_job(tracked_job(entry.sim.switch_label(), font, text_c, 0.1));
-            ui.painter().galley(
-                Pos2::new(rect.left() + 17.5, cy - tg.size().y * 0.5),
-                tg,
-                text_c,
-            );
-            if resp.clicked() {
-                state.spotlight = entry.sim;
-            }
-        }
-    });
-}
-
-fn draw_flagship_card(
-    ui: &mut Ui,
-    entry: &CatalogEntry,
-    state: &mut HomeState,
-    width: f32,
-    action: &mut Option<HomeAction>,
-) {
-    let tex_id = state.previews.get_or_load(ui.ctx(), entry.sim).id();
-    let pad = 18.0;
-    let gap = 22.0;
-    let img_w = ((width - pad * 2.0 - gap) * 0.50).floor();
-    let img_h = (img_w * 9.0 / 16.0).round();
-    let right_w = width - pad * 2.0 - gap - img_w;
-
-    let bg_slot = ui.painter().add(Shape::Noop);
-    let inner = ui.scope(|ui| {
-        ui.set_min_width(width);
-        ui.set_max_width(width);
-        ui.add_space(pad);
-        ui.horizontal(|ui| {
-            ui.add_space(pad);
-            // Left: 16:9 preview image + badges
-            let (img_rect, img_resp) =
-                ui.allocate_exact_size(Vec2::new(img_w, img_h), Sense::click());
-            if img_resp.hovered() {
-                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-            }
-            ui.scope_builder(egui::UiBuilder::new().max_rect(img_rect), |ui| {
-                ui.add(
-                    Image::new((tex_id, img_rect.size()))
-                        .fit_to_exact_size(img_rect.size())
-                        .corner_radius(CornerRadius::same(11)),
-                );
-            });
-            ui.painter().rect_stroke(
-                img_rect,
-                CornerRadius::same(11),
-                Stroke::new(1.0, border_hairline()),
-                StrokeKind::Inside,
-            );
-
-            let top_overlay = Rect::from_min_max(
-                Pos2::new(img_rect.left() + 12.0, img_rect.top() + 12.0),
-                Pos2::new(img_rect.right() - 12.0, img_rect.top() + 36.0),
-            );
-            ui.scope_builder(egui::UiBuilder::new().max_rect(top_overlay), |ui| {
-                ui.horizontal(|ui| {
-                    let cat_txt = format!("{}  {}", entry.index, entry.category_label);
-                    draw_badge_pill(
-                        ui,
-                        &cat_txt,
-                        None,
-                        Color32::from_rgba_unmultiplied(7, 10, 18, 215),
-                        border_strong(),
-                        TEXT_PRIMARY,
-                        10.0,
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        draw_badge_pill(
-                            ui,
-                            "FLAGSHIP ENGINE",
-                            None,
-                            Color32::from_rgba_unmultiplied(16, 14, 10, 220),
-                            with_alpha(entry.accent, 140),
-                            entry.accent_bright,
-                            9.5,
-                        );
-                    });
-                });
-            });
-
-            if img_resp.clicked() {
-                *action = Some(HomeAction::LaunchSim {
-                    sim: entry.sim,
-                    preset: None,
-                });
-            }
-
-            ui.add_space(gap);
-
-            // Right: details, equation, specs, chips, actions
-            ui.vertical(|ui| {
-                ui.set_min_width(right_w);
-                ui.set_max_width(right_w);
-                ui.spacing_mut().item_spacing.y = 8.0;
-
-                ui.label(
-                    egui::RichText::new(entry.tagline.to_ascii_uppercase())
-                        .font(FontId::new(10.0, semibold_family()))
-                        .color(entry.accent),
-                );
-                ui.label(
-                    egui::RichText::new(entry.title)
-                        .font(FontId::new(20.0, semibold_family()))
-                        .color(TEXT_PRIMARY),
-                );
-                ui.label(wrapped_job(
-                    entry.description,
-                    FontId::proportional(12.5),
-                    TEXT_SECONDARY,
-                    right_w,
-                ));
-
-                // Equation box
-                let eq_w = right_w;
-                let (eq_rect, _) = ui.allocate_exact_size(Vec2::new(eq_w, 30.0), Sense::hover());
-                ui.painter().rect(
-                    eq_rect,
-                    CornerRadius::same(8),
-                    Color32::from_rgba_unmultiplied(6, 9, 16, 220),
-                    Stroke::new(1.0, border_hairline()),
-                    StrokeKind::Inside,
-                );
-                let eq_g = ui.painter().layout_job(tracked_job(
-                    entry.equation,
-                    FontId::monospace(11.0),
-                    TEXT_PRIMARY,
-                    0.0,
-                ));
-                ui.painter().galley(
-                    Pos2::new(eq_rect.left() + 10.0, eq_rect.center().y - eq_g.size().y * 0.5),
-                    eq_g,
-                    TEXT_PRIMARY,
-                );
-
-                // 3 Spec cells
-                let cell_gap = 8.0;
-                let cell_w = ((right_w - cell_gap * 2.0) / 3.0).floor();
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = cell_gap;
-                    for (lbl, val) in entry.specs {
-                        let (c_rect, _) =
-                            ui.allocate_exact_size(Vec2::new(cell_w, 46.0), Sense::hover());
-                        ui.painter().rect(
-                            c_rect,
-                            CornerRadius::same(8),
-                            Color32::from_rgba_unmultiplied(255, 255, 255, 7),
-                            Stroke::new(1.0, border_hairline()),
-                            StrokeKind::Inside,
-                        );
-                        let l_g = ui.painter().layout_job(tracked_job(
-                            &lbl.to_ascii_uppercase(),
-                            FontId::new(9.0, semibold_family()),
-                            TEXT_MUTED,
-                            0.5,
-                        ));
-                        let v_g = ui.painter().layout_job(tracked_job(
-                            val,
-                            FontId::new(11.5, semibold_family()),
-                            TEXT_PRIMARY,
+                        let mut wordmark = LayoutJob::default();
+                        wordmark.append(
+                            "INTERSTELLAR  ",
                             0.0,
-                        ));
-                        ui.painter().galley(
-                            Pos2::new(c_rect.left() + 10.0, c_rect.top() + 8.0),
-                            l_g,
-                            TEXT_MUTED,
+                            TextFormat {
+                                font_id: FontId::new(12.0, semibold_family()),
+                                color: TEXT_PRIMARY,
+                                extra_letter_spacing: 1.4,
+                                ..Default::default()
+                            },
                         );
-                        ui.painter().galley(
-                            Pos2::new(c_rect.left() + 10.0, c_rect.top() + 23.0),
-                            v_g,
-                            TEXT_PRIMARY,
+                        wordmark.append(
+                            "OBSERVATORY",
+                            0.0,
+                            TextFormat {
+                                font_id: FontId::new(12.0, semibold_family()),
+                                color: active.accent_bright,
+                                extra_letter_spacing: 1.4,
+                                ..Default::default()
+                            },
                         );
-                    }
-                });
+                        ui.label(wordmark);
 
-                // 3 Physics chips
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
-                    for chip in entry.highlights {
-                        draw_badge_pill(
-                            ui,
-                            chip,
-                            None,
-                            Color32::from_rgba_unmultiplied(255, 255, 255, 8),
-                            border_hairline(),
-                            TEXT_SECONDARY,
-                            10.0,
-                        );
-                    }
-                });
-
-                ui.add_space(2.0);
-                ui.horizontal(|ui| {
-                    if draw_ghost_button(ui, "Details", with_alpha(entry.accent, 140), 32.0, 14.0, 12.0)
-                        .clicked()
-                    {
-                        state.inspect_sim = Some(entry.sim);
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        if draw_accent_button(
-                            ui,
-                            "Launch ->",
-                            entry.accent,
-                            entry.accent_bright,
-                            32.0,
-                            16.0,
-                            12.0,
-                        )
-                        .clicked()
-                        {
-                            *action = Some(HomeAction::LaunchSim {
-                                sim: entry.sim,
-                                preset: None,
-                            });
+                        if screen.width() >= 1180.0 {
+                            let sep = ui.allocate_exact_size(Vec2::new(1.0, 14.0), Sense::hover()).0;
+                            ui.painter().rect_filled(sep, CornerRadius::ZERO, hairline());
+                            ui.label(tracked_job(
+                                "v0.1.2.1 · 7 ENGINES",
+                                FontId::new(10.5, egui::FontFamily::Monospace),
+                                TEXT_SECONDARY,
+                                0.5,
+                            ));
                         }
+
+                        // Centered Category Filter Pills
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+
+                            // Native GPU indicator pill (far right)
+                            let gpu_label = "Native wgpu";
+                            let gpu_font = FontId::new(10.5, egui::FontFamily::Monospace);
+                            let gpu_g = ui.painter().layout_job(tracked_job(gpu_label, gpu_font, CYAN_GPU, 0.3));
+                            let gpu_w = 24.0 + gpu_g.size().x;
+                            let (gpu_rect, _) = ui.allocate_exact_size(Vec2::new(gpu_w, 28.0), Sense::hover());
+                            ui.painter().rect(
+                                gpu_rect,
+                                CornerRadius::same(14),
+                                Color32::from_rgba_unmultiplied(56, 189, 248, 28),
+                                Stroke::new(1.0, Color32::from_rgba_unmultiplied(56, 189, 248, 120)),
+                                StrokeKind::Inside,
+                            );
+                            ui.painter().circle_filled(
+                                Pos2::new(gpu_rect.left() + 10.0, gpu_rect.center().y),
+                                3.0,
+                                CYAN_GPU,
+                            );
+                            ui.painter().galley(
+                                Pos2::new(gpu_rect.left() + 16.0, gpu_rect.center().y - gpu_g.size().y * 0.5),
+                                gpu_g,
+                                CYAN_GPU,
+                            );
+
+                            // Controls modal pill
+                            if draw_glass_pill_button(ui, "Controls", 28.0, 12.0, 11.5, None).clicked() {
+                                state.controls_open = true;
+                            }
+
+                            // Category filter bar sitting nicely in the middle-right area
+                            if screen.width() >= 920.0 {
+                                ui.add_space(6.0);
+                                for cat in CategoryFilter::ALL.iter().rev() {
+                                    let is_selected = state.category == *cat;
+                                    let fg = if is_selected { TEXT_PRIMARY } else { TEXT_SECONDARY };
+                                    let g = ui.painter().layout_job(tracked_job(
+                                        cat.label(),
+                                        FontId::new(11.0, semibold_family()),
+                                        fg,
+                                        0.15,
+                                    ));
+                                    let pill_w = 18.0 + g.size().x;
+                                    let (p_rect, p_resp) =
+                                        ui.allocate_exact_size(Vec2::new(pill_w, 28.0), Sense::click());
+                                    if p_resp.hovered() {
+                                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                                    }
+                                    if is_selected {
+                                        ui.painter().rect(
+                                            p_rect,
+                                            CornerRadius::same(14),
+                                            with_alpha(active.accent, 38),
+                                            Stroke::new(1.0, with_alpha(active.accent, 145)),
+                                            StrokeKind::Inside,
+                                        );
+                                    } else if p_resp.hovered() {
+                                        ui.painter().rect_filled(
+                                            p_rect,
+                                            CornerRadius::same(14),
+                                            Color32::from_rgba_unmultiplied(255, 255, 255, 16),
+                                        );
+                                    }
+                                    ui.painter().galley(
+                                        Pos2::new(p_rect.center().x - g.size().x * 0.5, p_rect.center().y - g.size().y * 0.5),
+                                        g,
+                                        fg,
+                                    );
+                                    if p_resp.clicked() {
+                                        state.category = *cat;
+                                        let visible: Vec<&CatalogEntry> = CATALOG
+                                            .iter()
+                                            .filter(|e| *cat == CategoryFilter::All || e.category == *cat)
+                                            .collect();
+                                        if let Some(first) = visible.first() {
+                                            if !visible.iter().any(|e| e.sim == state.spotlight) {
+                                                state.spotlight = first.sim;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
                     });
                 });
-            });
-            ui.add_space(pad);
         });
-        ui.add_space(pad);
-    });
-
-    ui.painter().set(
-        bg_slot,
-        Shape::Rect(egui::epaint::RectShape::new(
-            inner.response.rect,
-            CornerRadius::same(14),
-            surface_card(),
-            Stroke::new(1.0, border_hairline()),
-            StrokeKind::Inside,
-        )),
-    );
 }
 
-fn draw_engine_card(
-    ui: &mut Ui,
-    entry: &CatalogEntry,
+fn draw_mission_brief(
+    ctx: &Context,
+    screen: Rect,
+    pad_x: f32,
+    dock_top_y: f32,
     state: &mut HomeState,
-    width: f32,
-    min_height: f32,
+    entry: &CatalogEntry,
     action: &mut Option<HomeAction>,
 ) {
-    let tex_id = state.previews.get_or_load(ui.ctx(), entry.sim).id();
-    let pad = 14.0;
-    let inner_w = width - pad * 2.0;
-    let img_h = (inner_w * 9.0 / 16.0).round();
+    let stage_top = screen.top() + 74.0;
+    let stage_bottom = (dock_top_y - 14.0).max(stage_top + 260.0);
+    let brief_w = (screen.width() * 0.45).clamp(430.0, 560.0);
+    let est_h = 330.0;
+    let brief_y = ((stage_top + stage_bottom - est_h) * 0.5).max(stage_top);
 
-    let bg_slot = ui.painter().add(Shape::Noop);
-    let inner = ui.scope(|ui| {
-        ui.set_min_width(width);
-        ui.set_max_width(width);
-        ui.set_min_height(min_height);
-        ui.add_space(pad);
-        ui.horizontal(|ui| {
-            ui.add_space(pad);
-            ui.vertical(|ui| {
-                ui.set_min_width(inner_w);
-                ui.set_max_width(inner_w);
-                ui.spacing_mut().item_spacing.y = 8.0;
+    Area::new(Id::unique("home_mission_brief"))
+        .fixed_pos(Pos2::new(screen.left() + pad_x, brief_y))
+        .order(Order::Middle)
+        .fade_in(false)
+        .interactable(!state.controls_open && state.inspect_sim.is_none())
+        .show(ctx, |ui| {
+            ui.set_max_width(brief_w);
+            ui.spacing_mut().item_spacing.y = 9.0;
 
-                // 16:9 Preview thumbnail
-                let (img_rect, img_resp) =
-                    ui.allocate_exact_size(Vec2::new(inner_w, img_h), Sense::click());
-                if img_resp.hovered() {
-                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            // Eyebrow with glowing accent dot
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let (dot_rect, _) = ui.allocate_exact_size(Vec2::new(10.0, 14.0), Sense::hover());
+                let dc = dot_rect.center();
+                ui.painter().circle_filled(dc, 6.5, with_alpha(entry.accent, 65));
+                ui.painter().circle_filled(dc, 3.2, entry.accent_bright);
+
+                let eyebrow = format!(
+                    "{} / 07 · {}",
+                    entry.index,
+                    entry.category_label.to_uppercase()
+                );
+                ui.label(tracked_job(
+                    &eyebrow,
+                    FontId::new(11.0, egui::FontFamily::Monospace),
+                    entry.accent_bright,
+                    1.2,
+                ));
+            });
+
+            // Display Title
+            ui.label(
+                egui::RichText::new(entry.short_title)
+                    .size(44.0)
+                    .family(semibold_family())
+                    .color(Color32::WHITE),
+            );
+
+            // Subtitle
+            let subtitle = format!("{} · {}", entry.title, entry.metric_name);
+            ui.label(tracked_job(
+                &subtitle,
+                FontId::new(12.0, egui::FontFamily::Monospace),
+                with_alpha(entry.accent_bright, 232),
+                0.35,
+            ));
+
+            // Concise Editorial Copy
+            ui.label(
+                egui::RichText::new(entry.description)
+                    .size(14.0)
+                    .color(Color32::from_rgb(0xc7, 0xd2, 0xe1)),
+            );
+
+            // Metric Equation Ribbon
+            egui::Frame::NONE
+                .fill(Color32::from_rgba_unmultiplied(7, 10, 18, 178))
+                .stroke(Stroke::new(1.0, hairline()))
+                .corner_radius(CornerRadius::same(9))
+                .inner_margin(Margin::symmetric(12, 7))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 10.0;
+                        ui.label(tracked_job(
+                            "METRIC",
+                            FontId::new(9.5, egui::FontFamily::Monospace),
+                            TEXT_MUTED,
+                            1.1,
+                        ));
+                        ui.label(
+                            egui::RichText::new(entry.equation)
+                                .size(12.0)
+                                .monospace()
+                                .color(TEXT_PRIMARY),
+                        );
+                    });
+                });
+
+            // 3 Hairline Telemetry Columns (no outer boxes, only top/bottom & inner vertical hairlines)
+            let specs_w = brief_w;
+            let specs_h = 46.0;
+            let (specs_rect, _) = ui.allocate_exact_size(Vec2::new(specs_w, specs_h), Sense::hover());
+            let sp = ui.painter();
+            sp.line_segment(
+                [Pos2::new(specs_rect.left(), specs_rect.top()), Pos2::new(specs_rect.right(), specs_rect.top())],
+                Stroke::new(1.0, hairline()),
+            );
+            sp.line_segment(
+                [Pos2::new(specs_rect.left(), specs_rect.bottom()), Pos2::new(specs_rect.right(), specs_rect.bottom())],
+                Stroke::new(1.0, hairline()),
+            );
+            let col_w = specs_w / 3.0;
+            for (i, (k, v)) in entry.specs.iter().enumerate() {
+                let x0 = specs_rect.left() + col_w * i as f32;
+                let pad_l = if i == 0 { 0.0 } else { 12.0 };
+                if i > 0 {
+                    sp.line_segment(
+                        [Pos2::new(x0, specs_rect.top() + 8.0), Pos2::new(x0, specs_rect.bottom() - 8.0)],
+                        Stroke::new(1.0, hairline_soft()),
+                    );
                 }
-                ui.scope_builder(egui::UiBuilder::new().max_rect(img_rect), |ui| {
-                    ui.add(
-                        Image::new((tex_id, img_rect.size()))
-                            .fit_to_exact_size(img_rect.size())
-                            .corner_radius(CornerRadius::same(10)),
-                    );
-                });
-                ui.painter().rect_stroke(
-                    img_rect,
-                    CornerRadius::same(10),
-                    Stroke::new(1.0, border_hairline()),
-                    StrokeKind::Inside,
-                );
-                let ov_rect = Rect::from_min_max(
-                    Pos2::new(img_rect.left() + 10.0, img_rect.top() + 10.0),
-                    Pos2::new(img_rect.right() - 10.0, img_rect.top() + 34.0),
-                );
-                ui.scope_builder(egui::UiBuilder::new().max_rect(ov_rect), |ui| {
-                    let cat_txt = format!("{}  {}", entry.index, entry.category_label);
-                    draw_badge_pill(
-                        ui,
-                        &cat_txt,
-                        None,
-                        Color32::from_rgba_unmultiplied(7, 10, 18, 215),
-                        border_strong(),
-                        TEXT_PRIMARY,
-                        10.0,
-                    );
-                });
-                if img_resp.clicked() {
+                let kg = sp.layout_job(tracked_job(
+                    &k.to_uppercase(),
+                    FontId::new(9.5, egui::FontFamily::Monospace),
+                    TEXT_MUTED,
+                    0.9,
+                ));
+                let vg = sp.layout_job(tracked_job(
+                    v,
+                    FontId::new(13.0, semibold_family()),
+                    TEXT_PRIMARY,
+                    0.1,
+                ));
+                sp.galley(Pos2::new(x0 + pad_l, specs_rect.top() + 7.0), kg, TEXT_MUTED);
+                sp.galley(Pos2::new(x0 + pad_l, specs_rect.top() + 22.0), vg, TEXT_PRIMARY);
+            }
+
+            ui.add_space(2.0);
+
+            // Primary Actions Row
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                if draw_accent_pill_button(
+                    ui,
+                    "Enter Simulation  →",
+                    entry.accent,
+                    entry.accent_bright,
+                    38.0,
+                    18.0,
+                    13.0,
+                )
+                .clicked()
+                {
                     *action = Some(HomeAction::LaunchSim {
                         sim: entry.sim,
                         preset: None,
                     });
                 }
 
-                ui.label(
-                    egui::RichText::new(entry.tagline.to_ascii_uppercase())
-                        .font(FontId::new(9.5, semibold_family()))
-                        .color(entry.accent),
-                );
-                ui.label(
-                    egui::RichText::new(entry.title)
-                        .font(FontId::new(15.5, semibold_family()))
-                        .color(TEXT_PRIMARY),
-                );
-                ui.label(wrapped_job(
-                    entry.description,
-                    FontId::proportional(12.0),
-                    TEXT_SECONDARY,
-                    inner_w,
-                ));
+                if draw_glass_pill_button(ui, "Presets & Dossier", 38.0, 16.0, 12.5, None).clicked() {
+                    state.inspect_sim = Some(entry.sim);
+                }
 
-                // Monospace equation bar
-                let (eq_rect, _) = ui.allocate_exact_size(Vec2::new(inner_w, 28.0), Sense::hover());
+                // Zero idle GPU readout pill
+                let status_txt = "0% Idle GPU · 42 Presets";
+                let sg = ui.painter().layout_job(tracked_job(
+                    status_txt,
+                    FontId::new(10.5, egui::FontFamily::Monospace),
+                    TEXT_SECONDARY,
+                    0.2,
+                ));
+                let sw = 28.0 + sg.size().x;
+                let (s_rect, _) = ui.allocate_exact_size(Vec2::new(sw, 32.0), Sense::hover());
                 ui.painter().rect(
-                    eq_rect,
-                    CornerRadius::same(7),
-                    Color32::from_rgba_unmultiplied(6, 9, 16, 220),
-                    Stroke::new(1.0, border_hairline()),
+                    s_rect,
+                    CornerRadius::same(16),
+                    Color32::from_rgba_unmultiplied(7, 10, 18, 165),
+                    Stroke::new(1.0, hairline_soft()),
                     StrokeKind::Inside,
                 );
-                let mut eq_job = tracked_job(
-                    entry.equation,
-                    FontId::monospace(10.2),
-                    TEXT_PRIMARY,
-                    0.0,
+                ui.painter().circle_filled(
+                    Pos2::new(s_rect.left() + 12.0, s_rect.center().y),
+                    3.0,
+                    EMERALD,
                 );
-                eq_job.wrap.max_width = (inner_w - 18.0).max(40.0);
-                eq_job.wrap.max_rows = 1;
-                let eq_g = ui.painter().layout_job(eq_job);
                 ui.painter().galley(
-                    Pos2::new(eq_rect.left() + 9.0, eq_rect.center().y - eq_g.size().y * 0.5),
-                    eq_g,
-                    TEXT_PRIMARY,
+                    Pos2::new(s_rect.left() + 20.0, s_rect.center().y - sg.size().y * 0.5),
+                    sg,
+                    TEXT_SECONDARY,
                 );
-
-                // 3 Highlight chips
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = Vec2::new(5.0, 5.0);
-                    for chip in entry.highlights {
-                        draw_badge_pill(
-                            ui,
-                            chip,
-                            None,
-                            Color32::from_rgba_unmultiplied(255, 255, 255, 8),
-                            border_hairline(),
-                            TEXT_SECONDARY,
-                            9.8,
-                        );
-                    }
-                });
-
-                ui.add_space(2.0);
-                ui.horizontal(|ui| {
-                    if draw_ghost_button(ui, "Details", with_alpha(entry.accent, 140), 30.0, 12.0, 11.5)
-                        .clicked()
-                    {
-                        state.inspect_sim = Some(entry.sim);
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        if draw_accent_button(
-                            ui,
-                            "Launch ->",
-                            entry.accent,
-                            entry.accent_bright,
-                            30.0,
-                            14.0,
-                            11.5,
-                        )
-                        .clicked()
-                        {
-                            *action = Some(HomeAction::LaunchSim {
-                                sim: entry.sim,
-                                preset: None,
-                            });
-                        }
-                    });
-                });
             });
-            ui.add_space(pad);
         });
-        ui.add_space(pad);
-    });
-
-    ui.painter().set(
-        bg_slot,
-        Shape::Rect(egui::epaint::RectShape::new(
-            inner.response.rect,
-            CornerRadius::same(14),
-            surface_card(),
-            Stroke::new(1.0, border_hairline()),
-            StrokeKind::Inside,
-        )),
-    );
 }
 
-fn draw_controls_section(ui: &mut Ui, width: f32) {
-    ui.label(
-        egui::RichText::new("UNIVERSAL CONTROLS")
-            .font(FontId::new(10.5, semibold_family()))
-            .color(Color32::from_rgb(0xf0, 0xb3, 0x5a)),
-    );
-    ui.add_space(4.0);
-    ui.label(
-        egui::RichText::new("Consistent Flight & Capture Keys")
-            .font(FontId::new(22.0, semibold_family()))
-            .color(TEXT_PRIMARY),
-    );
-    ui.add_space(4.0);
-    ui.label(wrapped_job(
-        "Every native simulator shares the same Observatory Glass HUD, camera flight bindings, and 128-sample cinema still capture.",
-        FontId::proportional(13.0),
-        TEXT_SECONDARY,
-        width.min(620.0),
-    ));
-    ui.add_space(14.0);
+fn draw_filmstrip_dock(
+    ctx: &Context,
+    screen: Rect,
+    pad_x: f32,
+    dock_top_y: f32,
+    card_w: f32,
+    card_h: f32,
+    state: &mut HomeState,
+    action: &mut Option<HomeAction>,
+) {
+    let dock_w = (screen.width() - pad_x * 2.0).max(320.0);
 
-    let items: [(&str, &str); 9] = [
-        ("Drag", "Orbit / Look"),
-        ("Scroll / W S", "Zoom / Fly"),
-        ("1 – 6", "Physics Presets"),
-        ("Space", "128× Cinema Still"),
-        ("O", "Auto-Orbit"),
-        ("T", "Traverse / Bridge / Aft"),
-        ("C", "Controls Drawer"),
-        ("P", "PNG Screenshot"),
-        ("H", "Hide / Restore HUD"),
-    ];
+    Area::new(Id::unique("home_filmstrip_dock"))
+        .fixed_pos(Pos2::new(screen.left() + pad_x, dock_top_y))
+        .order(Order::Middle)
+        .fade_in(false)
+        .interactable(!state.controls_open && state.inspect_sim.is_none())
+        .show(ctx, |ui| {
+            ui.set_min_width(dock_w);
+            ui.set_max_width(dock_w);
+            ui.spacing_mut().item_spacing.y = 7.0;
 
-    let cols = if width >= 820.0 {
-        3
-    } else if width >= 540.0 {
-        2
-    } else {
-        1
-    };
-    let gap = 10.0;
-    let cell_w = ((width - gap * (cols as f32 - 1.0)) / cols as f32).floor();
-
-    for row in items.chunks(cols) {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            for (key_txt, desc) in row {
-                let (rect, _) = ui.allocate_exact_size(Vec2::new(cell_w, 42.0), Sense::hover());
-                ui.painter().rect(
-                    rect,
-                    CornerRadius::same(10),
-                    surface_card(),
-                    Stroke::new(1.0, border_hairline()),
-                    StrokeKind::Inside,
-                );
-                let kg = ui.painter().layout_job(tracked_job(
-                    key_txt,
-                    FontId::monospace(10.8),
-                    TEXT_PRIMARY,
-                    0.0,
-                ));
-                let k_rect = Rect::from_min_size(
-                    Pos2::new(rect.left() + 12.0, rect.center().y - 11.0),
-                    Vec2::new(kg.size().x + 14.0, 22.0),
-                );
-                ui.painter().rect(
-                    k_rect,
-                    CornerRadius::same(6),
-                    Color32::from_rgba_unmultiplied(255, 255, 255, 14),
-                    Stroke::new(1.0, border_strong()),
-                    StrokeKind::Inside,
-                );
-                ui.painter().galley(
-                    Pos2::new(
-                        k_rect.center().x - kg.size().x * 0.5,
-                        k_rect.center().y - kg.size().y * 0.5,
-                    ),
-                    kg,
-                    TEXT_PRIMARY,
-                );
-
-                let dg = ui.painter().layout_job(tracked_job(
-                    desc,
-                    FontId::proportional(12.0),
+            // Micro dock header
+            ui.horizontal(|ui| {
+                ui.set_width(dock_w);
+                ui.label(tracked_job(
+                    "SIMULATION ENGINES · SECTOR ARCHIVE",
+                    FontId::new(10.0, egui::FontFamily::Monospace),
                     TEXT_SECONDARY,
-                    0.0,
+                    1.2,
                 ));
-                ui.painter().galley(
-                    Pos2::new(
-                        (rect.right() - 14.0 - dg.size().x).max(k_rect.right() + 10.0),
-                        rect.center().y - dg.size().y * 0.5,
-                    ),
-                    dg,
-                    TEXT_SECONDARY,
-                );
-            }
+                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(tracked_job(
+                        "Click to preview · Double-click or ↗ to launch · ← / → · Enter",
+                        FontId::new(10.0, egui::FontFamily::Monospace),
+                        TEXT_MUTED,
+                        0.4,
+                    ));
+                });
+            });
+
+            // Single-row 16:9 horizontal filmstrip cards
+            let filtered: Vec<&CatalogEntry> = CATALOG
+                .iter()
+                .filter(|e| state.category == CategoryFilter::All || e.category == state.category)
+                .collect();
+
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                for item in filtered {
+                    let is_active = item.sim == state.spotlight;
+                    let (card_rect, card_resp) =
+                        ui.allocate_exact_size(Vec2::new(card_w, card_h), Sense::click());
+                    if card_resp.hovered() {
+                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    }
+
+                    // Card container + thumbnail image
+                    let radius = CornerRadius::same(10);
+                    let border_col = if is_active {
+                        with_alpha(item.accent, 235)
+                    } else if card_resp.hovered() {
+                        Color32::from_rgba_unmultiplied(255, 255, 255, 86)
+                    } else {
+                        Color32::from_rgba_unmultiplied(255, 255, 255, 34)
+                    };
+                    let border_w = if is_active { 1.6 } else { 1.0 };
+
+                    if is_active {
+                        ui.painter().rect_filled(
+                            card_rect.expand(2.0),
+                            CornerRadius::same(12),
+                            with_alpha(item.accent, 32),
+                        );
+                    }
+                    ui.painter().rect_filled(card_rect, radius, glass_card());
+
+                    // Thumbnail
+                    let tex = state.previews.get_or_load(ctx, item.sim);
+                    let tint = if is_active || card_resp.hovered() {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_rgba_unmultiplied(210, 218, 230, 200)
+                    };
+                    let inner_rect = card_rect.shrink(1.0);
+                    ui.painter().image(
+                        tex.id(),
+                        inner_rect,
+                        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                        tint,
+                    );
+
+                    // Top + bottom thumbnail legibility gradient
+                    paint_vertical_gradient(
+                        ui.painter(),
+                        inner_rect,
+                        &[
+                            (0.0, Color32::from_rgba_unmultiplied(3, 5, 10, 148)),
+                            (0.42, Color32::from_rgba_unmultiplied(3, 5, 10, 22)),
+                            (1.0, Color32::from_rgba_unmultiplied(3, 5, 10, 232)),
+                        ],
+                    );
+
+                    // Outer rounded stroke + active top accent bar
+                    ui.painter().rect_stroke(
+                        card_rect,
+                        radius,
+                        Stroke::new(border_w, border_col),
+                        StrokeKind::Inside,
+                    );
+                    if is_active {
+                        let bar = Rect::from_min_max(
+                            Pos2::new(card_rect.left() + 10.0, card_rect.top() + 1.0),
+                            Pos2::new(card_rect.right() - 10.0, card_rect.top() + 3.8),
+                        );
+                        ui.painter().rect_filled(bar, CornerRadius::same(2), item.accent_bright);
+                    }
+
+                    // Index badge (top-left) + ACTIVE chip (top-right)
+                    let idx_g = ui.painter().layout_job(tracked_job(
+                        item.index,
+                        FontId::new(9.5, egui::FontFamily::Monospace),
+                        Color32::from_rgba_unmultiplied(243, 246, 252, 200),
+                        0.4,
+                    ));
+                    ui.painter().galley(
+                        Pos2::new(card_rect.left() + 9.0, card_rect.top() + 7.0),
+                        idx_g,
+                        TEXT_PRIMARY,
+                    );
+
+                    if is_active {
+                        let act_g = ui.painter().layout_job(tracked_job(
+                            "ACTIVE",
+                            FontId::new(8.0, egui::FontFamily::Monospace),
+                            item.accent_bright,
+                            0.8,
+                        ));
+                        let aw = act_g.size().x + 10.0;
+                        let a_rect = Rect::from_min_size(
+                            Pos2::new(card_rect.right() - 8.0 - aw, card_rect.top() + 6.0),
+                            Vec2::new(aw, 15.0),
+                        );
+                        ui.painter().rect(
+                            a_rect,
+                            CornerRadius::same(8),
+                            with_alpha(item.accent, 52),
+                            Stroke::new(1.0, with_alpha(item.accent, 175)),
+                            StrokeKind::Inside,
+                        );
+                        ui.painter().galley(
+                            Pos2::new(a_rect.left() + 5.0, a_rect.center().y - act_g.size().y * 0.5),
+                            act_g,
+                            item.accent_bright,
+                        );
+                    }
+
+                    // Launch circle indicator bottom-right
+                    let go_center = Pos2::new(card_rect.right() - 16.0, card_rect.bottom() - 16.0);
+                    let pointer_near_go = card_resp
+                        .hover_pos()
+                        .is_some_and(|p| p.distance(go_center) <= 12.0);
+                    ui.painter().circle(
+                        go_center,
+                        9.5,
+                        if pointer_near_go {
+                            item.accent_bright
+                        } else {
+                            Color32::from_rgba_unmultiplied(5, 7, 14, 188)
+                        },
+                        Stroke::new(
+                            1.0,
+                            if pointer_near_go {
+                                item.accent_bright
+                            } else {
+                                Color32::from_rgba_unmultiplied(255, 255, 255, 52)
+                            },
+                        ),
+                    );
+                    let arrow_fg = if pointer_near_go {
+                        Color32::from_rgb(0x05, 0x07, 0x0e)
+                    } else {
+                        TEXT_PRIMARY
+                    };
+                    let go_g = ui.painter().layout_job(tracked_job(
+                        "↗",
+                        FontId::new(10.5, semibold_family()),
+                        arrow_fg,
+                        0.0,
+                    ));
+                    ui.painter().galley(
+                        Pos2::new(go_center.x - go_g.size().x * 0.5, go_center.y - go_g.size().y * 0.5),
+                        go_g,
+                        arrow_fg,
+                    );
+
+                    // Bottom-left title + metric (clamped before the bottom-right launch button)
+                    let max_text_w = (card_rect.width() - 38.0).max(40.0);
+                    let fit_job = |text: &str, font: FontId, color: Color32, spacing: f32| {
+                        let full = ui.painter().layout_job(tracked_job(text, font.clone(), color, spacing));
+                        if full.size().x <= max_text_w {
+                            return full;
+                        }
+                        let chars: Vec<char> = text.chars().collect();
+                        let mut hi = chars.len();
+                        while hi > 1 {
+                            hi -= 1;
+                            let candidate: String = chars[..hi].iter().collect::<String>() + "…";
+                            let g = ui.painter().layout_job(tracked_job(&candidate, font.clone(), color, spacing));
+                            if g.size().x <= max_text_w {
+                                return g;
+                            }
+                        }
+                        full
+                    };
+                    let title_g = fit_job(
+                        item.short_title,
+                        FontId::new(12.0, semibold_family()),
+                        Color32::WHITE,
+                        0.1,
+                    );
+                    let metric_g = fit_job(
+                        item.metric_name,
+                        FontId::new(8.5, egui::FontFamily::Monospace),
+                        item.accent_bright,
+                        0.2,
+                    );
+                    ui.painter().galley(
+                        Pos2::new(card_rect.left() + 9.0, card_rect.bottom() - 29.0),
+                        metric_g,
+                        item.accent_bright,
+                    );
+                    ui.painter().galley(
+                        Pos2::new(card_rect.left() + 9.0, card_rect.bottom() - 18.0),
+                        title_g,
+                        Color32::WHITE,
+                    );
+
+                    if card_resp.double_clicked()
+                        || (card_resp.clicked() && pointer_near_go)
+                    {
+                        *action = Some(HomeAction::LaunchSim {
+                            sim: item.sim,
+                            preset: None,
+                        });
+                    } else if card_resp.clicked() {
+                        state.spotlight = item.sim;
+                    }
+                }
+            });
         });
-        ui.add_space(8.0);
-    }
 }
 
 fn draw_dossier_modal(
@@ -1336,388 +1222,257 @@ fn draw_dossier_modal(
         return;
     };
     let entry = catalog_entry(sim_id);
-    let mut close_modal = ctx.input(|i| i.key_pressed(Key::Escape));
 
-    // Full-screen input-blocking dimmed backdrop
-    Area::new(Id::unique("home_dossier_backdrop"))
+    // Full-screen dim backdrop
+    Area::new(Id::unique("home_dossier_scrim"))
         .fixed_pos(screen.min)
         .order(Order::Foreground)
         .fade_in(false)
         .show(ctx, |ui| {
-            let (_, bg_resp) = ui.allocate_exact_size(screen.size(), Sense::click());
+            let (bg_rect, bg_resp) = ui.allocate_exact_size(screen.size(), Sense::click());
             ui.painter().rect_filled(
-                screen,
+                bg_rect,
                 CornerRadius::ZERO,
-                Color32::from_rgba_unmultiplied(2, 4, 9, 204),
+                Color32::from_rgba_unmultiplied(2, 4, 9, 208),
             );
             if bg_resp.clicked() {
-                close_modal = true;
+                state.inspect_sim = None;
             }
         });
 
-    let modal_w = (screen.width() - 48.0).clamp(320.0, 740.0);
-    let modal_h = (screen.height() - 36.0).clamp(360.0, 680.0);
-    let banner_h = (modal_w * 0.29).clamp(155.0, 208.0);
-    let footer_h = 54.0;
-    let body_h = (modal_h - banner_h - footer_h).max(160.0);
-    let tex_id = state.previews.get_or_load(ctx, entry.sim).id();
+    let dlg_w = (screen.width() - 48.0).clamp(320.0, 660.0);
+    let dlg_h = (screen.height() - 56.0).clamp(320.0, 540.0);
+    let dlg_rect = Rect::from_center_size(screen.center(), Vec2::new(dlg_w, dlg_h));
 
-    Area::new(Id::unique("home_dossier_modal"))
-        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-        .order(Order::Tooltip)
+    Area::new(Id::unique("home_dossier_dialog"))
+        .fixed_pos(dlg_rect.min)
+        .order(Order::Foreground)
         .fade_in(false)
         .show(ctx, |ui| {
-            let modal_slot = ui.painter().add(Shape::Noop);
-            let modal = ui.scope(|ui| {
-                ui.set_min_width(modal_w);
-                ui.set_max_width(modal_w);
-                ui.set_max_height(modal_h);
+            ui.set_min_size(dlg_rect.size());
+            ui.set_max_size(dlg_rect.size());
 
-                // Top preview banner
-                let (banner_rect, _) =
-                    ui.allocate_exact_size(Vec2::new(modal_w, banner_h), Sense::hover());
-                ui.scope_builder(egui::UiBuilder::new().max_rect(banner_rect), |ui| {
-                    ui.add(
-                        Image::new((tex_id, banner_rect.size()))
-                            .fit_to_exact_size(banner_rect.size())
-                            .corner_radius(CornerRadius {
-                                nw: 14,
-                                ne: 14,
-                                sw: 0,
-                                se: 0,
-                            }),
-                    );
-                });
-                let scrim = Rect::from_min_max(
-                    Pos2::new(banner_rect.left(), banner_rect.bottom() - 88.0),
-                    banner_rect.max,
-                );
-                ui.painter().rect_filled(
-                    scrim,
-                    CornerRadius::ZERO,
-                    Color32::from_rgba_unmultiplied(7, 10, 18, 215),
-                );
+            ui.painter().rect(
+                dlg_rect,
+                CornerRadius::same(16),
+                dialog_surface(),
+                Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 42)),
+                StrokeKind::Inside,
+            );
 
-                // Top overlay bar inside banner: Category pill + Close X button
-                let top_ov = Rect::from_min_max(
-                    Pos2::new(banner_rect.left() + 18.0, banner_rect.top() + 14.0),
-                    Pos2::new(banner_rect.right() - 18.0, banner_rect.top() + 44.0),
-                );
-                ui.scope_builder(egui::UiBuilder::new().max_rect(top_ov), |ui| {
+            let mut close_now = false;
+            egui::Frame::NONE
+                .inner_margin(Margin::same(20))
+                .show(ui, |ui| {
+                    let inner_w = (dlg_w - 40.0).max(200.0);
+                    ui.set_min_width(inner_w);
+                    ui.set_max_width(inner_w);
+
+                    // Header
                     ui.horizontal(|ui| {
-                        let cat_txt = format!("{}  ·  {}", entry.index, entry.category_label);
-                        draw_badge_pill(
-                            ui,
-                            &cat_txt,
-                            Some(entry.accent),
-                            Color32::from_rgba_unmultiplied(7, 10, 18, 215),
-                            border_strong(),
-                            TEXT_PRIMARY,
-                            10.5,
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            let (x_rect, x_resp) =
-                                ui.allocate_exact_size(Vec2::new(30.0, 30.0), Sense::click());
-                            if x_resp.hovered() {
+                        ui.set_width(inner_w);
+                        ui.vertical(|ui| {
+                            ui.set_max_width(inner_w - 40.0);
+                            ui.label(tracked_job(
+                                &format!(
+                                    "{} / 07 · {} · {}",
+                                    entry.index,
+                                    entry.category_label.to_uppercase(),
+                                    entry.metric_name.to_uppercase()
+                                ),
+                                FontId::new(10.0, egui::FontFamily::Monospace),
+                                entry.accent_bright,
+                                1.0,
+                            ));
+                            ui.label(
+                                egui::RichText::new(entry.title)
+                                    .size(20.0)
+                                    .family(semibold_family())
+                                    .color(Color32::WHITE),
+                            );
+                            ui.label(
+                                egui::RichText::new(entry.tagline)
+                                    .size(12.5)
+                                    .color(TEXT_SECONDARY),
+                            );
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(Align::TOP), |ui| {
+                            let (c_rect, c_resp) = ui.allocate_exact_size(Vec2::splat(30.0), Sense::click());
+                            if c_resp.hovered() {
                                 ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
                             }
-                            ui.painter().rect(
-                                x_rect,
-                                CornerRadius::same(15),
-                                Color32::from_rgba_unmultiplied(7, 10, 18, 220),
-                                Stroke::new(
-                                    1.0,
-                                    if x_resp.hovered() {
-                                        entry.accent_bright
-                                    } else {
-                                        border_strong()
-                                    },
-                                ),
-                                StrokeKind::Inside,
+                            ui.painter().circle(
+                                c_rect.center(),
+                                15.0,
+                                Color32::from_rgba_unmultiplied(255, 255, 255, if c_resp.hovered() { 32 } else { 14 }),
+                                Stroke::new(1.0, hairline()),
                             );
-                            draw_close_icon(
-                                ui.painter(),
-                                x_rect.center(),
-                                if x_resp.hovered() {
-                                    TEXT_PRIMARY
-                                } else {
-                                    TEXT_SECONDARY
-                                },
-                            );
-                            if x_resp.clicked() {
-                                close_modal = true;
+                            draw_close_icon(ui.painter(), c_rect.center(), TEXT_PRIMARY);
+                            if c_resp.clicked() {
+                                close_now = true;
                             }
                         });
                     });
-                });
 
-                // Banner title overlay
-                let title_ov = Rect::from_min_max(
-                    Pos2::new(banner_rect.left() + 20.0, banner_rect.bottom() - 62.0),
-                    Pos2::new(banner_rect.right() - 20.0, banner_rect.bottom() - 10.0),
-                );
-                ui.scope_builder(egui::UiBuilder::new().max_rect(title_ov), |ui| {
-                    ui.spacing_mut().item_spacing.y = 3.0;
-                    ui.label(
-                        egui::RichText::new(entry.tagline.to_ascii_uppercase())
-                            .font(FontId::new(10.0, semibold_family()))
-                            .color(entry.accent),
-                    );
-                    ui.label(
-                        egui::RichText::new(entry.title)
-                            .font(FontId::new(20.0, semibold_family()))
-                            .color(TEXT_PRIMARY),
-                    );
-                });
+                    ui.add_space(10.0);
+                    let sep = ui.allocate_exact_size(Vec2::new(inner_w, 1.0), Sense::hover()).0;
+                    ui.painter().rect_filled(sep, CornerRadius::ZERO, hairline_soft());
+                    ui.add_space(10.0);
 
-                // Scrollable body
-                let pad = 20.0;
-                let inner_w = modal_w - pad * 2.0 - 8.0;
-                ScrollArea::vertical()
-                    .id_salt(("dossier_scroll", entry.sim))
-                    .max_height(body_h)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.add_space(12.0);
-                        ui.horizontal(|ui| {
-                            ui.add_space(pad);
-                            ui.vertical(|ui| {
-                                ui.set_min_width(inner_w);
-                                ui.set_max_width(inner_w);
-                                ui.spacing_mut().item_spacing.y = 10.0;
+                    ScrollArea::vertical()
+                        .max_height((dlg_h - 178.0).max(160.0))
+                        .show(ui, |ui| {
+                            ui.set_min_width(inner_w);
+                            ui.set_max_width(inner_w);
+                            ui.spacing_mut().item_spacing.y = 10.0;
+                            ui.label(
+                                egui::RichText::new(entry.description)
+                                    .size(13.0)
+                                    .color(Color32::from_rgb(0xcb, 0xd5, 0xe3)),
+                            );
 
-                                ui.label(wrapped_job(
-                                    entry.description,
-                                    FontId::proportional(12.8),
-                                    TEXT_SECONDARY,
-                                    inner_w,
-                                ));
+                            let half_w = (inner_w - 10.0) * 0.5;
 
-                                // Metric & equation strip
-                                let (eq_r, _) = ui
-                                    .allocate_exact_size(Vec2::new(inner_w, 34.0), Sense::hover());
-                                ui.painter().rect(
-                                    eq_r,
-                                    CornerRadius::same(8),
-                                    Color32::from_rgba_unmultiplied(6, 9, 16, 225),
-                                    Stroke::new(1.0, border_hairline()),
-                                    StrokeKind::Inside,
-                                );
-                                let mg = ui.painter().layout_job(tracked_job(
-                                    entry.metric_name,
-                                    FontId::new(11.5, semibold_family()),
-                                    entry.accent_bright,
-                                    0.1,
-                                ));
-                                let eg = ui.painter().layout_job(tracked_job(
-                                    entry.equation,
-                                    FontId::monospace(10.8),
-                                    TEXT_PRIMARY,
-                                    0.0,
-                                ));
-                                ui.painter().galley(
-                                    Pos2::new(eq_r.left() + 12.0, eq_r.center().y - mg.size().y * 0.5),
-                                    mg,
-                                    entry.accent_bright,
-                                );
-                                ui.painter().galley(
-                                    Pos2::new(
-                                        (eq_r.right() - 12.0 - eg.size().x).max(eq_r.left() + 190.0),
-                                        eq_r.center().y - eg.size().y * 0.5,
-                                    ),
-                                    eg,
-                                    TEXT_PRIMARY,
-                                );
+                            // Formulation & Signature control cards (fixed size + wrapped galley)
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 10.0;
+                                for (k, v, is_mono) in [
+                                    ("SPACETIME FORMULATION", entry.equation, true),
+                                    ("SIGNATURE CONTROL", entry.special_control, false),
+                                ] {
+                                    let (m_rect, _) =
+                                        ui.allocate_exact_size(Vec2::new(half_w, 58.0), Sense::hover());
+                                    ui.painter().rect(
+                                        m_rect,
+                                        CornerRadius::same(10),
+                                        Color32::from_rgba_unmultiplied(255, 255, 255, 8),
+                                        Stroke::new(1.0, hairline_soft()),
+                                        StrokeKind::Inside,
+                                    );
+                                    let kg = ui.painter().layout_job(tracked_job(
+                                        k,
+                                        FontId::new(9.5, egui::FontFamily::Monospace),
+                                        TEXT_MUTED,
+                                        0.9,
+                                    ));
+                                    ui.painter().galley(
+                                        Pos2::new(m_rect.left() + 10.0, m_rect.top() + 8.0),
+                                        kg,
+                                        TEXT_MUTED,
+                                    );
+                                    let mut v_job = LayoutJob::simple(
+                                        v.to_string(),
+                                        FontId::new(
+                                            11.0,
+                                            if is_mono {
+                                                egui::FontFamily::Monospace
+                                            } else {
+                                                egui::FontFamily::Proportional
+                                            },
+                                        ),
+                                        TEXT_PRIMARY,
+                                        half_w - 20.0,
+                                    );
+                                    v_job.wrap.max_rows = 2;
+                                    v_job.wrap.break_anywhere = false;
+                                    let vg = ui.painter().layout_job(v_job);
+                                    ui.painter().galley(
+                                        Pos2::new(m_rect.left() + 10.0, m_rect.top() + 23.0),
+                                        vg,
+                                        TEXT_PRIMARY,
+                                    );
+                                }
+                            });
 
-                                // 3 Spec cells
-                                let gap = 8.0;
-                                let sw = ((inner_w - gap * 2.0) / 3.0).floor();
+                            ui.label(tracked_job(
+                                "CURATED PHYSICS PRESETS (CLICK TO LAUNCH DIRECTLY)",
+                                FontId::new(10.0, egui::FontFamily::Monospace),
+                                TEXT_SECONDARY,
+                                0.8,
+                            ));
+
+                            for pair in entry.presets.chunks(2).enumerate() {
+                                let (row_idx, slice) = pair;
                                 ui.horizontal(|ui| {
-                                    ui.spacing_mut().item_spacing.x = gap;
-                                    for (lbl, val) in entry.specs {
-                                        let (sr, _) = ui.allocate_exact_size(
-                                            Vec2::new(sw, 46.0),
-                                            Sense::hover(),
-                                        );
+                                    ui.spacing_mut().item_spacing.x = 10.0;
+                                    for (col_idx, (p_name, p_desc)) in slice.iter().enumerate() {
+                                        let preset_idx = row_idx * 2 + col_idx;
+                                        let btn_h = 58.0;
+                                        let (p_rect, p_resp) =
+                                            ui.allocate_exact_size(Vec2::new(half_w, btn_h), Sense::click());
+                                        if p_resp.hovered() {
+                                            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                                        }
                                         ui.painter().rect(
-                                            sr,
-                                            CornerRadius::same(8),
-                                            surface_subtle(),
-                                            Stroke::new(1.0, border_hairline()),
+                                            p_rect,
+                                            CornerRadius::same(10),
+                                            if p_resp.hovered() {
+                                                with_alpha(entry.accent, 26)
+                                            } else {
+                                                Color32::from_rgba_unmultiplied(255, 255, 255, 8)
+                                            },
+                                            Stroke::new(
+                                                1.0,
+                                                if p_resp.hovered() {
+                                                    with_alpha(entry.accent, 150)
+                                                } else {
+                                                    hairline_soft()
+                                                },
+                                            ),
                                             StrokeKind::Inside,
                                         );
-                                        let lg = ui.painter().layout_job(tracked_job(
-                                            &lbl.to_ascii_uppercase(),
-                                            FontId::new(9.0, semibold_family()),
-                                            TEXT_MUTED,
-                                            0.5,
-                                        ));
-                                        let vg = ui.painter().layout_job(tracked_job(
-                                            val,
-                                            FontId::new(11.5, semibold_family()),
-                                            TEXT_PRIMARY,
-                                            0.0,
+                                        let n_g = ui.painter().layout_job(tracked_job(
+                                            p_name,
+                                            FontId::new(12.0, semibold_family()),
+                                            Color32::WHITE,
+                                            0.1,
                                         ));
                                         ui.painter().galley(
-                                            Pos2::new(sr.left() + 10.0, sr.top() + 8.0),
-                                            lg,
-                                            TEXT_MUTED,
+                                            Pos2::new(p_rect.left() + 10.0, p_rect.top() + 8.0),
+                                            n_g,
+                                            Color32::WHITE,
                                         );
+                                        let mut d_job = LayoutJob::simple(
+                                            (*p_desc).to_string(),
+                                            FontId::new(10.5, egui::FontFamily::Proportional),
+                                            TEXT_SECONDARY,
+                                            half_w - 20.0,
+                                        );
+                                        d_job.wrap.max_rows = 2;
+                                        d_job.wrap.break_anywhere = false;
+                                        let d_g = ui.painter().layout_job(d_job);
                                         ui.painter().galley(
-                                            Pos2::new(sr.left() + 10.0, sr.top() + 23.0),
-                                            vg,
-                                            TEXT_PRIMARY,
+                                            Pos2::new(p_rect.left() + 10.0, p_rect.top() + 25.0),
+                                            d_g,
+                                            TEXT_SECONDARY,
                                         );
+                                        if p_resp.clicked() {
+                                            *action = Some(HomeAction::LaunchSim {
+                                                sim: entry.sim,
+                                                preset: Some(preset_idx),
+                                            });
+                                        }
                                     }
                                 });
-
-                                ui.label(
-                                    egui::RichText::new("CURATED PHYSICS PRESETS (CLICK TO LAUNCH)")
-                                        .font(FontId::new(10.0, semibold_family()))
-                                        .color(TEXT_MUTED),
-                                );
-
-                                // 6 Clickable preset cards in 2 columns
-                                let p_gap = 8.0;
-                                let p_w = ((inner_w - p_gap) * 0.5).floor();
-                                for pair in entry.presets.iter().enumerate().collect::<Vec<_>>().chunks(2) {
-                                    ui.horizontal(|ui| {
-                                        ui.spacing_mut().item_spacing.x = p_gap;
-                                        for (p_idx, (p_name, p_desc)) in pair {
-                                            let p_slot = ui.painter().add(Shape::Noop);
-                                            let (p_rect, p_resp) = ui.allocate_exact_size(
-                                                Vec2::new(p_w, 66.0),
-                                                Sense::click(),
-                                            );
-                                            if p_resp.hovered() {
-                                                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-                                            }
-                                            ui.painter().set(
-                                                p_slot,
-                                                Shape::Rect(egui::epaint::RectShape::new(
-                                                    p_rect,
-                                                    CornerRadius::same(9),
-                                                    if p_resp.hovered() {
-                                                        with_alpha(entry.accent, 22)
-                                                    } else {
-                                                        surface_subtle()
-                                                    },
-                                                    Stroke::new(
-                                                        1.0,
-                                                        if p_resp.hovered() {
-                                                            with_alpha(entry.accent, 140)
-                                                        } else {
-                                                            border_hairline()
-                                                        },
-                                                    ),
-                                                    StrokeKind::Inside,
-                                                )),
-                                            );
-
-                                            let k_rect = Rect::from_min_size(
-                                                Pos2::new(p_rect.left() + 10.0, p_rect.top() + 10.0),
-                                                Vec2::new(18.0, 18.0),
-                                            );
-                                            ui.painter().rect(
-                                                k_rect,
-                                                CornerRadius::same(4),
-                                                with_alpha(entry.accent, 26),
-                                                Stroke::new(1.0, with_alpha(entry.accent, 110)),
-                                                StrokeKind::Inside,
-                                            );
-                                            let k_str = format!("{}", p_idx + 1);
-                                            let kg = ui.painter().layout_job(tracked_job(
-                                                &k_str,
-                                                FontId::monospace(10.0),
-                                                entry.accent_bright,
-                                                0.0,
-                                            ));
-                                            ui.painter().galley(
-                                                Pos2::new(
-                                                    k_rect.center().x - kg.size().x * 0.5,
-                                                    k_rect.center().y - kg.size().y * 0.5,
-                                                ),
-                                                kg,
-                                                entry.accent_bright,
-                                            );
-
-                                            let ng = ui.painter().layout_job(tracked_job(
-                                                p_name,
-                                                FontId::new(12.0, semibold_family()),
-                                                TEXT_PRIMARY,
-                                                0.0,
-                                            ));
-                                            ui.painter().galley(
-                                                Pos2::new(k_rect.right() + 8.0, k_rect.top() + 1.0),
-                                                ng,
-                                                TEXT_PRIMARY,
-                                            );
-
-                                            let dg = ui.painter().layout_job(wrapped_job(
-                                                p_desc,
-                                                FontId::proportional(10.8),
-                                                TEXT_SECONDARY,
-                                                p_w - 44.0,
-                                            ));
-                                            ui.painter().galley(
-                                                Pos2::new(k_rect.right() + 8.0, k_rect.top() + 20.0),
-                                                dg,
-                                                TEXT_SECONDARY,
-                                            );
-
-                                            if p_resp.clicked() {
-                                                *action = Some(HomeAction::LaunchSim {
-                                                    sim: entry.sim,
-                                                    preset: Some(*p_idx),
-                                                });
-                                                close_modal = true;
-                                            }
-                                        }
-                                    });
-                                }
-
-                                // Special control note
-                                let note_txt = format!("Special Control: {}", entry.special_control);
-                                ui.label(
-                                    egui::RichText::new(note_txt)
-                                        .font(FontId::proportional(11.5))
-                                        .color(entry.accent_bright),
-                                );
-                                ui.add_space(6.0);
-                            });
-                            ui.add_space(pad);
+                            }
                         });
-                    });
 
-                // Modal footer bar
-                let (f_rect, _) =
-                    ui.allocate_exact_size(Vec2::new(modal_w, footer_h), Sense::hover());
-                ui.painter().line_segment(
-                    [f_rect.left_top(), f_rect.right_top()],
-                    Stroke::new(1.0, border_hairline()),
-                );
-                let f_inner = Rect::from_min_max(
-                    Pos2::new(f_rect.left() + 20.0, f_rect.top()),
-                    Pos2::new(f_rect.right() - 20.0, f_rect.bottom()),
-                );
-                ui.scope_builder(egui::UiBuilder::new().max_rect(f_inner), |ui| {
-                    ui.horizontal_centered(|ui| {
-                        let cli_hint = format!("./desktop/run.sh --sim {}", entry.sim.cli_name());
-                        ui.label(
-                            egui::RichText::new(cli_hint)
-                                .font(FontId::monospace(11.0))
-                                .color(TEXT_MUTED),
-                        );
+                    ui.add_space(10.0);
+                    let sep2 = ui.allocate_exact_size(Vec2::new(inner_w, 1.0), Sense::hover()).0;
+                    ui.painter().rect_filled(sep2, CornerRadius::ZERO, hairline_soft());
+                    ui.add_space(10.0);
+
+                    ui.allocate_ui(Vec2::new(inner_w, 36.0), |ui| {
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            ui.spacing_mut().item_spacing.x = 8.0;
-                            if draw_accent_button(
+                            ui.spacing_mut().item_spacing.x = 10.0;
+                            if draw_accent_pill_button(
                                 ui,
-                                "Launch Simulator ->",
+                                "Enter Simulation  →",
                                 entry.accent,
                                 entry.accent_bright,
-                                32.0,
+                                34.0,
                                 16.0,
-                                12.0,
+                                12.5,
                             )
                             .clicked()
                             {
@@ -1725,33 +1480,211 @@ fn draw_dossier_modal(
                                     sim: entry.sim,
                                     preset: None,
                                 });
-                                close_modal = true;
                             }
-                            if draw_ghost_button(ui, "Close", border_strong(), 32.0, 14.0, 12.0)
-                                .clicked()
-                            {
-                                close_modal = true;
+                            if draw_glass_pill_button(ui, "Close", 34.0, 14.0, 12.0, None).clicked() {
+                                close_now = true;
                             }
                         });
                     });
                 });
-            });
 
-            ui.painter().set(
-                modal_slot,
-                Shape::Rect(egui::epaint::RectShape::new(
-                    modal.response.rect,
-                    CornerRadius::same(14),
-                    Color32::from_rgb(10, 14, 24),
-                    Stroke::new(1.0, with_alpha(entry.accent, 110)),
-                    StrokeKind::Outside,
-                )),
+            if close_now {
+                state.inspect_sim = None;
+            }
+        });
+}
+
+fn draw_controls_modal(
+    ctx: &Context,
+    screen: Rect,
+    state: &mut HomeState,
+    active: &CatalogEntry,
+    adapter_label: &str,
+) {
+    if !state.controls_open {
+        return;
+    }
+
+    Area::new(Id::unique("home_controls_scrim"))
+        .fixed_pos(screen.min)
+        .order(Order::Foreground)
+        .fade_in(false)
+        .show(ctx, |ui| {
+            let (bg_rect, bg_resp) = ui.allocate_exact_size(screen.size(), Sense::click());
+            ui.painter().rect_filled(
+                bg_rect,
+                CornerRadius::ZERO,
+                Color32::from_rgba_unmultiplied(2, 4, 9, 208),
             );
+            if bg_resp.clicked() {
+                state.controls_open = false;
+            }
         });
 
-    if close_modal {
-        state.inspect_sim = None;
-    }
+    let dlg_w = (screen.width() - 48.0).clamp(320.0, 620.0);
+    let dlg_h = (screen.height() - 72.0).clamp(300.0, 480.0);
+    let dlg_rect = Rect::from_center_size(screen.center(), Vec2::new(dlg_w, dlg_h));
+
+    Area::new(Id::unique("home_controls_dialog"))
+        .fixed_pos(dlg_rect.min)
+        .order(Order::Foreground)
+        .fade_in(false)
+        .show(ctx, |ui| {
+            ui.set_min_size(dlg_rect.size());
+            ui.set_max_size(dlg_rect.size());
+
+            ui.painter().rect(
+                dlg_rect,
+                CornerRadius::same(16),
+                dialog_surface(),
+                Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 42)),
+                StrokeKind::Inside,
+            );
+
+            let mut close_now = false;
+            egui::Frame::NONE
+                .inner_margin(Margin::same(20))
+                .show(ui, |ui| {
+                    let inner_w = (dlg_w - 40.0).max(200.0);
+                    ui.set_min_width(inner_w);
+                    ui.set_max_width(inner_w);
+
+                    ui.horizontal(|ui| {
+                        ui.set_width(inner_w);
+                        ui.vertical(|ui| {
+                            ui.set_max_width(inner_w - 40.0);
+                            ui.label(tracked_job(
+                                "INTERSTELLAR OBSERVATORY · FLIGHT REFERENCE",
+                                FontId::new(10.0, egui::FontFamily::Monospace),
+                                active.accent_bright,
+                                1.0,
+                            ));
+                            ui.label(
+                                egui::RichText::new("Universal Controls & Hardware")
+                                    .size(20.0)
+                                    .family(semibold_family())
+                                    .color(Color32::WHITE),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("Active Native Backend: {adapter_label}"))
+                                    .size(12.0)
+                                    .monospace()
+                                    .color(CYAN_GPU),
+                            );
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(Align::TOP), |ui| {
+                            let (c_rect, c_resp) = ui.allocate_exact_size(Vec2::splat(30.0), Sense::click());
+                            if c_resp.hovered() {
+                                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                            }
+                            ui.painter().circle(
+                                c_rect.center(),
+                                15.0,
+                                Color32::from_rgba_unmultiplied(255, 255, 255, if c_resp.hovered() { 32 } else { 14 }),
+                                Stroke::new(1.0, hairline()),
+                            );
+                            draw_close_icon(ui.painter(), c_rect.center(), TEXT_PRIMARY);
+                            if c_resp.clicked() {
+                                close_now = true;
+                            }
+                        });
+                    });
+
+                    ui.add_space(10.0);
+                    let sep = ui.allocate_exact_size(Vec2::new(inner_w, 1.0), Sense::hover()).0;
+                    ui.painter().rect_filled(sep, CornerRadius::ZERO, hairline_soft());
+                    ui.add_space(10.0);
+
+                    let bindings = [
+                        ("Drag", "Orbit observer camera"),
+                        ("Scroll / W S", "Radial zoom / altitude"),
+                        ("Right-Drag", "Camera tilt & roll"),
+                        ("1 – 6", "Load physics preset"),
+                        ("Space", "Pause / 128× cinema still"),
+                        ("O", "Toggle orbital cruise"),
+                        ("T", "Toggle special mode / telemetry"),
+                        ("R", "Reset camera & accumulation"),
+                        ("P", "Save PNG capture"),
+                        ("H", "Hide / restore HUD overlay"),
+                    ];
+                    let half_w = (inner_w - 10.0) * 0.5;
+                    for pair in bindings.chunks(2) {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 10.0;
+                            for (key_txt, desc_txt) in pair {
+                                let (k_rect, _) =
+                                    ui.allocate_exact_size(Vec2::new(half_w, 32.0), Sense::hover());
+                                ui.painter().rect(
+                                    k_rect,
+                                    CornerRadius::same(8),
+                                    Color32::from_rgba_unmultiplied(255, 255, 255, 8),
+                                    Stroke::new(1.0, hairline_soft()),
+                                    StrokeKind::Inside,
+                                );
+                                let k_g = ui.painter().layout_job(tracked_job(
+                                    key_txt,
+                                    FontId::new(10.5, egui::FontFamily::Monospace),
+                                    active.accent_bright,
+                                    0.2,
+                                ));
+                                let pill_w = k_g.size().x + 12.0;
+                                let pill_rect = Rect::from_min_size(
+                                    Pos2::new(k_rect.left() + 8.0, k_rect.center().y - 10.0),
+                                    Vec2::new(pill_w, 20.0),
+                                );
+                                ui.painter().rect(
+                                    pill_rect,
+                                    CornerRadius::same(5),
+                                    Color32::from_rgba_unmultiplied(0, 0, 0, 125),
+                                    Stroke::new(1.0, hairline()),
+                                    StrokeKind::Inside,
+                                );
+                                ui.painter().galley(
+                                    Pos2::new(pill_rect.left() + 6.0, pill_rect.center().y - k_g.size().y * 0.5),
+                                    k_g,
+                                    active.accent_bright,
+                                );
+                                let d_g = ui.painter().layout_job(tracked_job(
+                                    desc_txt,
+                                    FontId::new(11.5, egui::FontFamily::Proportional),
+                                    TEXT_PRIMARY,
+                                    0.0,
+                                ));
+                                ui.painter().galley(
+                                    Pos2::new(pill_rect.right() + 9.0, k_rect.center().y - d_g.size().y * 0.5),
+                                    d_g,
+                                    TEXT_PRIMARY,
+                                );
+                            }
+                        });
+                        ui.add_space(5.0);
+                    }
+
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "CLI Launchers: ./launch.sh --desktop  ·  ./launch.sh --desktop --{}",
+                            active.sim.cli_name()
+                        ))
+                        .size(11.0)
+                        .monospace()
+                        .color(TEXT_SECONDARY),
+                    );
+
+                    ui.add_space(12.0);
+                    ui.allocate_ui(Vec2::new(inner_w, 36.0), |ui| {
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            if draw_glass_pill_button(ui, "Close", 34.0, 16.0, 12.5, None).clicked() {
+                                close_now = true;
+                            }
+                        });
+                    });
+                });
+
+            if close_now {
+                state.controls_open = false;
+            }
+        });
 }
 
 pub fn draw_homepage(
@@ -1759,365 +1692,50 @@ pub fn draw_homepage(
     state: &mut HomeState,
     adapter_label: &str,
 ) -> Option<HomeAction> {
-    let screen = ctx.input(|i| i.content_rect());
-    let spot = catalog_entry(state.spotlight);
-    draw_observatory_backdrop(ctx, screen, spot.accent);
-    draw_top_bar(ctx, screen, state, spot, adapter_label);
-
     let mut action: Option<HomeAction> = None;
+    let screen = ctx.input(|i| i.content_rect());
 
-    let body_rect = Rect::from_min_max(
-        Pos2::new(screen.left(), screen.top() + 54.0),
-        screen.max,
-    );
+    // Ensure spotlight stays valid inside the active category filter
+    let filtered_count = state.category.count();
+    let visible: Vec<&CatalogEntry> = CATALOG
+        .iter()
+        .filter(|e| state.category == CategoryFilter::All || e.category == state.category)
+        .collect();
+    if filtered_count > 0 && !visible.iter().any(|e| e.sim == state.spotlight) {
+        state.spotlight = visible[0].sim;
+    }
 
-    Area::new(Id::unique("home_scroll_area"))
-        .fixed_pos(body_rect.min)
-        .order(Order::Middle)
-        .fade_in(false)
-        .show(ctx, |ui| {
-            ui.set_min_size(body_rect.size());
-            ui.set_max_size(body_rect.size());
+    let active = catalog_entry(state.spotlight);
 
-            ScrollArea::vertical()
-                .id_salt("home_main_scroll")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    let side_pad = ((screen.width() - 1140.0) * 0.5).max(20.0);
-                    let content_w = (screen.width() - side_pad * 2.0).max(320.0);
+    // Handle Escape cleanly for overlays
+    if ctx.input(|i| i.key_pressed(Key::Escape)) {
+        if state.controls_open {
+            state.controls_open = false;
+        } else if state.inspect_sim.is_some() {
+            state.inspect_sim = None;
+        }
+    }
 
-                    ui.horizontal(|ui| {
-                        ui.add_space(side_pad);
-                        ui.vertical(|ui| {
-                            ui.set_min_width(content_w);
-                            ui.set_max_width(content_w);
+    let pad_x = if screen.width() >= 1100.0 { 26.0 } else { 16.0 };
+    let dock_w = (screen.width() - pad_x * 2.0).max(320.0);
+    let slot_count = visible.len().max(1);
+    let total_gap = 10.0 * (slot_count.saturating_sub(1) as f32);
+    let max_card_w = if screen.width() >= 1400.0 { 224.0 } else { 205.0 };
+    let card_w = ((dock_w - total_gap) / slot_count as f32).clamp(112.0, max_card_w);
+    let card_h = (card_w * 9.0 / 16.0).clamp(68.0, 124.0);
+    let dock_h = 20.0 + card_h;
+    let dock_top_y = (screen.bottom() - 16.0 - dock_h).max(screen.top() + 360.0);
 
-                            ui.add_space(28.0);
+    draw_stage_backdrop(ctx, state, screen, active);
+    draw_floating_topbar(ctx, screen, pad_x, state, active);
+    draw_mission_brief(ctx, screen, pad_x, dock_top_y, state, active, &mut action);
+    draw_filmstrip_dock(ctx, screen, pad_x, dock_top_y, card_w, card_h, state, &mut action);
 
-                            // ============================================================
-                            // HERO SHOWCASE
-                            // ============================================================
-                            if content_w >= 880.0 {
-                                let gap = 28.0;
-                                let left_w = ((content_w - gap) * 0.42).floor();
-                                let right_w = content_w - gap - left_w;
-                                ui.horizontal(|ui| {
-                                    ui.vertical(|ui| {
-                                        ui.set_min_width(left_w);
-                                        ui.set_max_width(left_w);
-                                        draw_hero_left(ui, state, spot, left_w, &mut action);
-                                    });
-                                    ui.add_space(gap);
-                                    ui.vertical(|ui| {
-                                        ui.set_min_width(right_w);
-                                        ui.set_max_width(right_w);
-                                        draw_hero_viewport(ui, state, spot, right_w, &mut action);
-                                    });
-                                });
-                            } else {
-                                draw_hero_left(ui, state, spot, content_w, &mut action);
-                                ui.add_space(20.0);
-                                draw_hero_viewport(ui, state, spot, content_w, &mut action);
-                            }
-
-                            ui.add_space(38.0);
-
-                            // ============================================================
-                            // THE 7 SPACETIME ENGINES CATALOG
-                            // ============================================================
-                            let catalog_top_resp = ui.horizontal(|ui| {
-                                ui.vertical(|ui| {
-                                    ui.set_max_width((content_w * 0.62).max(280.0));
-                                    ui.label(
-                                        egui::RichText::new("OBSERVATORY CATALOG")
-                                            .font(FontId::new(10.5, semibold_family()))
-                                            .color(Color32::from_rgb(0xf0, 0xb3, 0x5a)),
-                                    );
-                                    ui.add_space(3.0);
-                                    ui.label(
-                                        egui::RichText::new("The 7 Spacetime Engines")
-                                            .font(FontId::new(24.0, semibold_family()))
-                                            .color(TEXT_PRIMARY),
-                                    );
-                                    ui.add_space(3.0);
-                                    ui.label(wrapped_job(
-                                        "Every engine runs natively on your GPU via wgpu with identical WGSL physics, a 4K NASA Milky Way sky, and 6 curated presets.",
-                                        FontId::proportional(13.0),
-                                        TEXT_SECONDARY,
-                                        (content_w * 0.62).max(280.0),
-                                    ));
-                                });
-                            });
-                            if state.scroll_to_catalog {
-                                catalog_top_resp.response.scroll_to_me(Some(Align::TOP));
-                                state.scroll_to_catalog = false;
-                            }
-
-                            ui.add_space(12.0);
-                            // Category filter bar
-                            ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
-                                for cat in CategoryFilter::ALL {
-                                    let is_act = state.category == cat;
-                                    let txt = format!("{}  ({})", cat.label(), cat.count());
-                                    let font = FontId::new(11.5, semibold_family());
-                                    let fg = if is_act {
-                                        Color32::from_rgb(0xf7, 0xca, 0x82)
-                                    } else {
-                                        TEXT_SECONDARY
-                                    };
-                                    let g = ui.painter().layout_job(tracked_job(&txt, font.clone(), fg, 0.15));
-                                    let w = 24.0 + g.size().x;
-                                    let (rect, resp) =
-                                        ui.allocate_exact_size(Vec2::new(w, 30.0), Sense::click());
-                                    if resp.hovered() {
-                                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-                                    }
-                                    let (fill, border) = if is_act {
-                                        (
-                                            Color32::from_rgba_unmultiplied(240, 179, 90, 38),
-                                            Color32::from_rgba_unmultiplied(240, 179, 90, 145),
-                                        )
-                                    } else if resp.hovered() {
-                                        (
-                                            Color32::from_rgba_unmultiplied(255, 255, 255, 16),
-                                            border_strong(),
-                                        )
-                                    } else {
-                                        (surface_subtle(), border_hairline())
-                                    };
-                                    ui.painter().rect(
-                                        rect,
-                                        CornerRadius::same(15),
-                                        fill,
-                                        Stroke::new(1.0, border),
-                                        StrokeKind::Inside,
-                                    );
-                                    ui.painter().galley(
-                                        Pos2::new(
-                                            rect.center().x - g.size().x * 0.5,
-                                            rect.center().y - g.size().y * 0.5,
-                                        ),
-                                        g,
-                                        fg,
-                                    );
-                                    if resp.clicked() {
-                                        state.category = cat;
-                                    }
-                                }
-                            });
-
-                            ui.add_space(16.0);
-
-                            let filtered: Vec<&CatalogEntry> = CATALOG
-                                .iter()
-                                .filter(|e| {
-                                    state.category == CategoryFilter::All
-                                        || e.category == state.category
-                                })
-                                .collect();
-
-                            let rest: &[&CatalogEntry] =
-                                if state.category == CategoryFilter::All && content_w >= 880.0 {
-                                    draw_flagship_card(ui, filtered[0], state, content_w, &mut action);
-                                    ui.add_space(16.0);
-                                    &filtered[1..]
-                                } else {
-                                    &filtered[..]
-                                };
-
-                            let cols = if content_w >= 960.0 {
-                                3
-                            } else if content_w >= 620.0 {
-                                2
-                            } else {
-                                1
-                            };
-                            let grid_gap = 16.0;
-                            let card_w =
-                                ((content_w - grid_gap * (cols as f32 - 1.0)) / cols as f32).floor();
-
-                            for row in rest.chunks(cols) {
-                                ui.horizontal(|ui| {
-                                    ui.spacing_mut().item_spacing.x = grid_gap;
-                                    for entry in row {
-                                        ui.vertical(|ui| {
-                                            draw_engine_card(
-                                                ui,
-                                                entry,
-                                                state,
-                                                card_w,
-                                                428.0,
-                                                &mut action,
-                                            );
-                                        });
-                                    }
-                                });
-                                ui.add_space(16.0);
-                            }
-
-                            ui.add_space(20.0);
-                            draw_controls_section(ui, content_w);
-
-                            // Footer
-                            ui.add_space(22.0);
-                            let (f_div, _) =
-                                ui.allocate_exact_size(Vec2::new(content_w, 1.0), Sense::hover());
-                            ui.painter().line_segment(
-                                [f_div.left_center(), f_div.right_center()],
-                                Stroke::new(1.0, border_hairline()),
-                            );
-                            ui.add_space(14.0);
-                            ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing = Vec2::new(10.0, 8.0);
-                                ui.label(
-                                    egui::RichText::new("INTERSTELLAR OBSERVATORY")
-                                        .font(FontId::new(11.0, semibold_family()))
-                                        .color(TEXT_PRIMARY),
-                                );
-                                draw_badge_pill(
-                                    ui,
-                                    "Native Desktop · 0% Idle GPU",
-                                    Some(Color32::from_rgb(0x34, 0xd3, 0x99)),
-                                    Color32::from_rgba_unmultiplied(16, 42, 34, 180),
-                                    Color32::from_rgba_unmultiplied(52, 211, 153, 110),
-                                    Color32::from_rgb(0x6e, 0xe7, 0xb7),
-                                    10.0,
-                                );
-                                for entry in &CATALOG {
-                                    if ui
-                                        .add(
-                                            egui::Button::new(
-                                                egui::RichText::new(entry.sim.switch_label())
-                                                    .size(11.5)
-                                                    .color(TEXT_SECONDARY),
-                                            )
-                                            .frame(false),
-                                        )
-                                        .on_hover_cursor(CursorIcon::PointingHand)
-                                        .clicked()
-                                    {
-                                        action = Some(HomeAction::LaunchSim {
-                                            sim: entry.sim,
-                                            preset: None,
-                                        });
-                                    }
-                                }
-                            });
-                            ui.add_space(28.0);
-                        });
-                        ui.add_space(side_pad);
-                    });
-                });
-        });
-
-    if state.inspect_sim.is_some() {
+    if state.controls_open {
+        draw_controls_modal(ctx, screen, state, active, adapter_label);
+    } else if state.inspect_sim.is_some() {
         draw_dossier_modal(ctx, screen, state, &mut action);
     }
 
     action
-}
-
-fn draw_hero_left(
-    ui: &mut Ui,
-    state: &mut HomeState,
-    spot: &CatalogEntry,
-    width: f32,
-    action: &mut Option<HomeAction>,
-) {
-    draw_badge_pill(
-        ui,
-        "RELATIVISTIC GPU RAY-TRACING SUITE",
-        Some(spot.accent),
-        with_alpha(spot.accent, 24),
-        with_alpha(spot.accent, 110),
-        spot.accent_bright,
-        10.0,
-    );
-    ui.add_space(14.0);
-
-    // Split display title: "Explore Curved " + accent "Spacetime."
-    let mut h1 = LayoutJob::default();
-    h1.wrap.max_width = width;
-    h1.append(
-        "Explore Curved\n",
-        0.0,
-        TextFormat {
-            font_id: FontId::new(38.0, semibold_family()),
-            color: TEXT_PRIMARY,
-            ..Default::default()
-        },
-    );
-    h1.append(
-        "Spacetime.",
-        0.0,
-        TextFormat {
-            font_id: FontId::new(38.0, semibold_family()),
-            color: spot.accent_bright,
-            ..Default::default()
-        },
-    );
-    ui.label(h1);
-    ui.add_space(10.0);
-
-    ui.label(wrapped_job(
-        "Exact null geodesic integration, volumetric radiative transfer, and Special Relativistic optics across seven interactive spacetime engines — running natively on your GPU.",
-        FontId::proportional(13.5),
-        TEXT_SECONDARY,
-        width,
-    ));
-    ui.add_space(18.0);
-
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(10.0, 8.0);
-        let launch_lbl = format!("Launch {}  ->", spot.short_title);
-        if draw_accent_button(ui, &launch_lbl, spot.accent, spot.accent_bright, 38.0, 20.0, 12.5)
-            .clicked()
-        {
-            *action = Some(HomeAction::LaunchSim {
-                sim: spot.sim,
-                preset: None,
-            });
-        }
-        if draw_ghost_button(ui, "Inspect Dossier", with_alpha(spot.accent, 140), 38.0, 18.0, 12.5)
-            .clicked()
-        {
-            state.inspect_sim = Some(spot.sim);
-        }
-    });
-
-    ui.add_space(22.0);
-    let (div_r, _) = ui.allocate_exact_size(Vec2::new(width, 1.0), Sense::hover());
-    ui.painter().line_segment(
-        [div_r.left_center(), div_r.right_center()],
-        Stroke::new(1.0, border_hairline()),
-    );
-    ui.add_space(12.0);
-
-    let stats = [
-        ("7", "Spacetime Engines"),
-        ("42", "Physics Presets"),
-        ("Native wgpu", "Hardware GPU"),
-        ("0%", "Idle Homepage GPU"),
-    ];
-    let stat_gap = 12.0;
-    let stat_w = ((width - stat_gap * 3.0) / 4.0).floor().max(72.0);
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(stat_gap, 10.0);
-        for (val, lbl) in stats {
-            ui.vertical(|ui| {
-                ui.set_min_width(stat_w);
-                ui.label(
-                    egui::RichText::new(val)
-                        .font(FontId::new(14.5, semibold_family()))
-                        .color(TEXT_PRIMARY),
-                );
-                ui.label(
-                    egui::RichText::new(lbl)
-                        .font(FontId::proportional(11.0))
-                        .color(TEXT_MUTED),
-                );
-            });
-        }
-    });
 }

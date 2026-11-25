@@ -56,627 +56,313 @@
   </script>
   <link rel="stylesheet" href="./home/styles.css" />
 </head>
-<body id="top">
-  <a class="skip-link" href="#simulators">Skip to spacetime simulators</a>
+<body id="top" style="--active-accent: #f0b35a; --active-accent-bright: #f7ca82; --active-accent-rgb: 240, 179, 90;">
+  <a class="skip-link" href="#simulators">Skip to simulation deck</a>
 
-  <!-- Sticky Observatory Top Bar -->
-  <header class="topbar" role="banner">
-    <div class="container topbar-inner">
-      <a class="brand" href="#top" aria-label="Interstellar Observatory home">
-        <svg class="brand-mark" viewBox="0 0 36 36" width="28" height="28" aria-hidden="true">
-          <defs>
-            <radialGradient id="brand-halo" cx="50%" cy="50%" r="50%">
-              <stop offset="55%" stop-color="#f0b35a" stop-opacity="0.32" />
-              <stop offset="100%" stop-color="#f0b35a" stop-opacity="0" />
-            </radialGradient>
-          </defs>
-          <circle cx="18" cy="18" r="16" fill="url(#brand-halo)" />
-          <circle cx="18" cy="18" r="10.2" fill="none" stroke="#f0b35a" stroke-width="1.5" opacity="0.92" />
-          <ellipse
-            cx="18"
-            cy="18"
-            rx="15.5"
-            ry="3.8"
-            transform="rotate(-15 18 18)"
-            fill="none"
-            stroke="#f7ca82"
-            stroke-width="1.45"
-          />
-          <circle cx="18" cy="18" r="6.4" fill="#03050a" stroke="rgba(255,255,255,0.22)" stroke-width="0.7" />
-        </svg>
-        <span class="brand-wordmark">INTERSTELLAR</span>
-        <span class="brand-badge tabular">7 ENGINES</span>
+  <!-- Full-bleed passive stage background (zero canvas / zero WebGL / zero idle GPU) -->
+  <div class="stage-backdrop" aria-hidden="true">
+    <img
+      id="stage-bg-img"
+      class="stage-bg-img"
+      src="./home/previews/blackhole.webp"
+      alt=""
+      decoding="async"
+    />
+    <div class="stage-scrim-left"></div>
+    <div class="stage-scrim-top"></div>
+    <div class="stage-scrim-bottom"></div>
+    <div class="stage-ambient-glow"></div>
+  </div>
+
+  <!-- Foreground Observatory Flight Launcher -->
+  <div class="observatory-shell">
+    <header class="top-nav-pill" aria-label="Observatory Navigation">
+      <a class="brand-lockup" href="#top" aria-label="Interstellar Observatory home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="24" height="24" fill="none">
+            <circle cx="16" cy="16" r="10.5" stroke="#f0b35a" stroke-width="1.6" stroke-opacity="0.88" />
+            <ellipse cx="16" cy="16" rx="14.5" ry="3.8" transform="rotate(-14 16 16)" stroke="#f7ca82" stroke-width="1.5" />
+            <circle cx="16" cy="16" r="5.6" fill="#03050a" stroke="#f7ca82" stroke-opacity="0.35" stroke-width="0.9" />
+          </svg>
+        </span>
+        <span class="brand-wordmark">
+          <strong>INTERSTELLAR</strong>
+          <span class="brand-accent">OBSERVATORY</span>
+        </span>
+        <span class="brand-divider" aria-hidden="true"></span>
+        <span class="brand-version">v0.1.2.1 · 7 ENGINES</span>
       </a>
 
-      <nav class="topbar-nav" aria-label="Primary navigation">
-        <a href="#simulators">Simulators</a>
-        <a href="#architecture">Architecture</a>
-        <a href="#controls">Controls</a>
-        <a href="#desktop">Desktop</a>
-      </nav>
+      <div
+        class="filter-bar"
+        id="category-filter-bar"
+        role="tablist"
+        aria-label="Filter simulators by domain"
+      >
+        <button type="button" class="filter-pill is-active" data-category="all" role="tab" aria-selected="true">All Engines</button>
+        <button type="button" class="filter-pill" data-category="gr" role="tab" aria-selected="false">General Relativity</button>
+        <button type="button" class="filter-pill" data-category="exotic" role="tab" aria-selected="false">Exotic Metrics</button>
+        <button type="button" class="filter-pill" data-category="astro" role="tab" aria-selected="false">Astrophysics</button>
+        <button type="button" class="filter-pill" data-category="sr" role="tab" aria-selected="false">Special Relativity</button>
+      </div>
 
-      <div class="backend-bar">
+      <div class="topbar-actions">
+        <button
+          type="button"
+          id="open-controls-btn"
+          class="topbar-btn"
+          aria-haspopup="dialog"
+          aria-controls="controls-dialog"
+        >
+          Controls
+        </button>
         <div
-          class="backend-switch"
-          role="radiogroup"
-          aria-label="Global rendering backend"
+          class="backend-pill-group"
           id="backend-radiogroup"
+          role="radiogroup"
+          aria-label="Preferred GPU Backend"
         >
           <button
             type="button"
-            class="backend-opt"
+            class="backend-pill is-active"
+            data-backend="webgl2"
             role="radio"
             aria-checked="true"
-            data-backend="webgl2"
           >
             WebGL2
           </button>
           <button
             type="button"
-            class="backend-opt"
+            class="backend-pill"
+            data-backend="webgpu"
             role="radio"
             aria-checked="false"
-            data-backend="webgpu"
           >
-            <span class="gpu-dot" id="webgpu-support-dot" aria-hidden="true"></span>
-            <span>WebGPU</span>
+            WebGPU
           </button>
         </div>
-        <span class="sr-only" id="backend-live-status" aria-live="polite"></span>
       </div>
-    </div>
-  </header>
+    </header>
 
-  <main class="page-main">
-    <!-- Above-the-Fold Hero Showcase -->
-    <section class="hero" id="hero" aria-labelledby="hero-heading">
-      <div class="hero-ambient" aria-hidden="true"></div>
-      <div class="container hero-grid">
-        <div class="hero-copy">
-          <div class="eyebrow-pill">
-            <span class="eyebrow-dot" aria-hidden="true"></span>
-            <span>RELATIVISTIC GPU RAY-TRACING SUITE</span>
-          </div>
-
-          <h1 id="hero-heading" class="hero-title">
-            Explore Curved<br />
-            <span class="hero-title-accent">Spacetime.</span>
-          </h1>
-
-          <p class="hero-lead">
-            Exact null geodesic integration, volumetric radiative transfer, and Special Relativistic
-            optics across seven interactive spacetime engines. Engineered for dual WebGL2 &amp; WebGPU
-            parity with zero external dependencies.
-          </p>
-
-          <div class="hero-actions">
-            <a
-              id="hero-launch-btn"
-              class="btn btn-primary"
-              href="./blackhole-sim/?backend=webgl2"
-              data-sim-launch="blackhole"
-            >
-              <span id="hero-launch-label">Launch Gargantua</span>
-              <span class="btn-arrow" aria-hidden="true">→</span>
-            </a>
-            <a class="btn btn-secondary" href="#simulators">
-              Browse All 7 Engines
-            </a>
-          </div>
-
-          <dl class="hero-stats" aria-label="Suite telemetry summary">
-            <div class="hero-stat">
-              <dt>Spacetime Engines</dt>
-              <dd class="tabular">7</dd>
-            </div>
-            <div class="hero-stat">
-              <dt>Physics Presets</dt>
-              <dd class="tabular" id="stat-preset-count">42</dd>
-            </div>
-            <div class="hero-stat">
-              <dt>Dual Backends</dt>
-              <dd class="tabular">WebGL2 + WebGPU</dd>
-            </div>
-            <div class="hero-stat">
-              <dt>External Deps</dt>
-              <dd class="tabular">0</dd>
-            </div>
-          </dl>
+    <main id="simulators" class="mission-stage">
+      <section class="mission-brief" aria-label="Active Simulation Telemetry">
+        <div class="eyebrow-row">
+          <span class="eyebrow-dot" aria-hidden="true"></span>
+          <span id="hero-eyebrow" class="hero-eyebrow">01 / 07 · GENERAL RELATIVITY</span>
         </div>
 
-        <div class="hero-stage">
-          <figure class="hero-viewport" id="hero-viewport">
-            <div class="viewport-frame" id="hero-media-frame">
-              <img
-                id="hero-preview-img"
-                src="./home/previews/blackhole.webp"
-                alt="Gargantua Kerr black hole accretion disk and gravitationally lensed photon ring"
-                width="960"
-                height="540"
-                fetchpriority="high"
-                decoding="async"
-              />
-              <div class="media-fallback" aria-hidden="true">
-                <svg viewBox="0 0 320 180" class="fallback-svg">
-                  <defs>
-                    <radialGradient id="hero-fb-glow" cx="50%" cy="50%" r="48%">
-                      <stop offset="0%" stop-color="currentColor" stop-opacity="0.32" />
-                      <stop offset="100%" stop-color="currentColor" stop-opacity="0" />
-                    </radialGradient>
-                  </defs>
-                  <rect width="320" height="180" fill="#060912" />
-                  <circle cx="160" cy="90" r="82" fill="url(#hero-fb-glow)" />
-                  <circle cx="160" cy="90" r="34" fill="none" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.2" />
-                  <ellipse cx="160" cy="90" rx="74" ry="18" transform="rotate(-12 160 90)" fill="none" stroke="currentColor" stroke-opacity="0.7" stroke-width="1.2" />
-                </svg>
-                <span class="fallback-label tabular">OBSERVATORY SIGNAL PREVIEW</span>
-              </div>
+        <h1 id="hero-sim-title" class="hero-title">Gargantua</h1>
+        <p id="hero-subtitle" class="hero-subtitle">Gargantua — Kerr Black Hole · 3D Outgoing Kerr–Schild</p>
 
-              <!-- Subtle Observatory Viewfinder Corner Ticks -->
-              <span class="reticle reticle-tl" aria-hidden="true"></span>
-              <span class="reticle reticle-tr" aria-hidden="true"></span>
-              <span class="reticle reticle-bl" aria-hidden="true"></span>
-              <span class="reticle reticle-br" aria-hidden="true"></span>
-
-              <div class="viewport-top-bar">
-                <span class="viewport-pill">
-                  <span class="viewport-index tabular" id="hero-metric-index">01</span>
-                  <span class="viewport-dot" aria-hidden="true"></span>
-                  <span id="hero-metric-name">3D Outgoing Kerr–Schild</span>
-                </span>
-                <span class="viewport-pill viewport-pill--backend tabular" id="hero-backend-pill">
-                  WEBGL2
-                </span>
-              </div>
-
-              <figcaption class="viewport-overlay">
-                <div class="viewport-meta">
-                  <div class="viewport-title" id="hero-sim-title">Gargantua — Kerr Black Hole</div>
-                  <div class="viewport-eq tabular" id="hero-sim-eq">
-                    g_μν = η_μν + 2H l_μ l_ν · a/M ≤ 0.998
-                  </div>
-                </div>
-                <div class="viewport-actions">
-                  <button
-                    type="button"
-                    class="btn-inline"
-                    id="hero-inspect-btn"
-                    data-inspect-sim="blackhole"
-                  >
-                    Inspect
-                  </button>
-                  <a
-                    class="btn-inline btn-inline--accent"
-                    id="hero-frame-launch"
-                    href="./blackhole-sim/?backend=webgl2"
-                    data-sim-launch="blackhole"
-                  >
-                    Launch <span aria-hidden="true">↗</span>
-                  </a>
-                </div>
-              </figcaption>
-            </div>
-          </figure>
-
-          <div
-            class="spotlight-bar"
-            id="spotlight-tablist"
-            role="tablist"
-            aria-label="Spotlight simulator preview"
-          >
-            <!-- Populated by home/app.js -->
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- The 7 Spacetime Engines Catalog -->
-    <section class="section catalog-section" id="simulators" aria-labelledby="catalog-heading">
-      <div class="container">
-        <div class="section-head section-head--split">
-          <div>
-            <p class="section-eyebrow">OBSERVATORY CATALOG</p>
-            <h2 id="catalog-heading" class="section-title">The 7 Spacetime Engines</h2>
-            <p class="section-sub">
-              Every engine runs live in your browser with identical WebGL2 and WebGPU shaders,
-              a shared 4K NASA Milky Way sky, and 6 curated astrophysical presets.
-            </p>
-          </div>
-
-          <div
-            class="filter-bar"
-            id="category-filter-bar"
-            role="group"
-            aria-label="Filter simulators by physics discipline"
-          >
-            <!-- Populated by home/app.js -->
-          </div>
-        </div>
-
-        <p class="sr-only" id="catalog-live-status" aria-live="polite"></p>
-
-        <div class="catalog-grid is-featured-layout" id="catalog-grid" data-count="7">
-          <noscript>
-            <div class="noscript-banner">
-              JavaScript is disabled. Launch any of the 7 relativistic spacetime simulators directly below:
-            </div>
-            <a class="sim-card sim-card--noscript" href="./blackhole-sim/">
-              <div class="sim-card-body">
-                <span class="noscript-idx tabular">01 · GENERAL RELATIVITY</span>
-                <h3 class="sim-card-title">Gargantua — Kerr Black Hole</h3>
-                <p class="sim-card-desc">3D Outgoing Kerr–Schild ray-traced accretion disk, relativistic Doppler beaming, and 128-sample cinema still mode.</p>
-                <span class="noscript-cta">Launch Black Hole →</span>
-              </div>
-            </a>
-            <a class="sim-card sim-card--noscript" href="./wormhole-sim/">
-              <div class="sim-card-body">
-                <span class="noscript-idx tabular">02 · EXOTIC METRICS</span>
-                <h3 class="sim-card-title">Morris–Thorne Traversable Wormhole</h3>
-                <p class="sim-card-desc">James–Thorne &amp; Ellis spacetime throat linking Universe A (4K Milky Way) and Universe B (Exotic Golden–Teal Nebula).</p>
-                <span class="noscript-cta">Launch Wormhole →</span>
-              </div>
-            </a>
-            <a class="sim-card sim-card--noscript" href="./binary-bh-sim/">
-              <div class="sim-card-body">
-                <span class="noscript-idx tabular">03 · GENERAL RELATIVITY</span>
-                <h3 class="sim-card-title">Binary Black Hole Inspiral &amp; GW Lensing</h3>
-                <p class="sim-card-desc">Two-body Brill–Lindquist + 2.5PN inspiral, retarded gravitational wave shear, fractal eyebrow shadows, and tidal gas bridges.</p>
-                <span class="noscript-cta">Launch Binary BH →</span>
-              </div>
-            </a>
-            <a class="sim-card sim-card--noscript" href="./warp-drive-sim/">
-              <div class="sim-card-body">
-                <span class="noscript-idx tabular">04 · EXOTIC METRICS</span>
-                <h3 class="sim-card-title">Alcubierre Warp Drive — FTL Spacetime</h3>
-                <p class="sim-card-desc">Alcubierre, Natário zero-expansion, and Lentz soliton warp metrics with ADM null geodesic ray-tracing and Inside Bridge causal horizon.</p>
-                <span class="noscript-cta">Launch Warp Drive →</span>
-              </div>
-            </a>
-            <a class="sim-card sim-card--noscript" href="./supernova-sim/">
-              <div class="sim-card-body">
-                <span class="noscript-idx tabular">05 · ASTROPHYSICS</span>
-                <h3 class="sim-card-title">Supernova Remnant — Volumetric Nebula</h3>
-                <p class="sim-card-desc">Multi-scattering radiative transfer across Sedov–Taylor shock shells, Rayleigh–Taylor filaments, Bok globules, and deep interior fly-through.</p>
-                <span class="noscript-cta">Launch Supernova →</span>
-              </div>
-            </a>
-            <a class="sim-card sim-card--noscript" href="./pulsar-sim/">
-              <div class="sim-card-body">
-                <span class="noscript-idx tabular">06 · ASTROPHYSICS</span>
-                <h3 class="sim-card-title">Magnetar &amp; Millisecond Pulsar</h3>
-                <p class="sim-card-desc">Outgoing Kerr–Schild light bending exposing &gt;50% of the neutron star crust, twisted pair-plasma dipole loops, and PWN torus &amp; jets.</p>
-                <span class="noscript-cta">Launch Pulsar →</span>
-              </div>
-            </a>
-            <a class="sim-card sim-card--noscript" href="./starflight-sim/">
-              <div class="sim-card-body">
-                <span class="noscript-idx tabular">07 · SPECIAL RELATIVITY</span>
-                <h3 class="sim-card-title">Relativistic Starflight — Aberration &amp; Doppler Sky</h3>
-                <p class="sim-card-desc">Exact Special Relativistic Lorentz null-ray aberration up to 0.9999996c, Planck blackbody UV/IR &amp; CMB blue-shift, and Penrose–Terrell rotation.</p>
-                <span class="noscript-cta">Launch Starflight →</span>
-              </div>
-            </a>
-          </noscript>
-        </div>
-      </div>
-    </section>
-
-    <!-- Engineering & Architecture Section -->
-    <section class="section arch-section" id="architecture" aria-labelledby="arch-heading">
-      <div class="container">
-        <div class="section-head">
-          <p class="section-eyebrow">ENGINEERING &amp; ARCHITECTURE</p>
-          <h2 id="arch-heading" class="section-title">Dual-Backend Relativistic Optics</h2>
-          <p class="section-sub">
-            Zero bundlers, zero frameworks, and strict shader parity across browser WebGL2, WebGPU,
-            and the native Rust desktop runtime.
-          </p>
-        </div>
-
-        <div class="arch-grid">
-          <article class="arch-card">
-            <div class="arch-diagram" aria-hidden="true">
-              <svg viewBox="0 0 320 96" width="320" height="96">
-                <rect x="12" y="16" width="82" height="28" rx="7" fill="rgba(240,179,90,0.12)" stroke="#f0b35a" stroke-opacity="0.7" />
-                <text x="53" y="34" text-anchor="middle" fill="#f7ca82" font-size="11" font-family="ui-monospace, monospace">WebGL2</text>
-                <rect x="12" y="54" width="82" height="28" rx="7" fill="rgba(56,189,248,0.12)" stroke="#38bdf8" stroke-opacity="0.75" />
-                <text x="53" y="72" text-anchor="middle" fill="#7dd3fc" font-size="11" font-family="ui-monospace, monospace">WebGPU</text>
-
-                <path d="M96 30 H126 V48 H144 M96 68 H126 V48" fill="none" stroke="rgba(255,255,255,0.34)" stroke-width="1.4" />
-                <path d="M120 44 L126 48 L120 52" fill="none" stroke="#eef2f7" stroke-width="1.3" opacity="0.65" />
-
-                <rect x="146" y="22" width="162" height="52" rx="9" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.18)" />
-                <text x="227" y="43" text-anchor="middle" fill="#eef2f7" font-size="10.5" font-weight="600" font-family="ui-sans-serif, system-ui, sans-serif">Shared Physics &amp; Assets</text>
-                <text x="227" y="61" text-anchor="middle" fill="#94a3b8" font-size="9.5" font-family="ui-monospace, monospace">4K Sky RAM · 3D Noise · LUTs</text>
-              </svg>
-            </div>
-            <h3 class="arch-title">Dual WebGL2 ↔ WebGPU Parity</h3>
-            <p class="arch-desc">
-              Live in-session backend hot-swap with identical metric equations, uniform layouts,
-              GPU compute 3D noise baking, and a RAM-cached 4K NASA Milky Way sky texture.
-            </p>
-          </article>
-
-          <article class="arch-card">
-            <div class="arch-diagram" aria-hidden="true">
-              <svg viewBox="0 0 320 96" width="320" height="96">
-                <g font-family="ui-monospace, monospace" font-size="9.5" text-anchor="middle">
-                  <rect x="8" y="30" width="66" height="36" rx="7" fill="rgba(167,139,250,0.11)" stroke="#a78bfa" stroke-opacity="0.65" />
-                  <text x="41" y="46" fill="#ddd6fe">HDR Ray</text>
-                  <text x="41" y="59" fill="#94a3b8">RGBA16F</text>
-
-                  <path d="M76 48 H90" stroke="rgba(255,255,255,0.35)" stroke-width="1.4" />
-
-                  <rect x="92" y="30" width="66" height="36" rx="7" fill="rgba(74,212,196,0.10)" stroke="#4ad4c4" stroke-opacity="0.65" />
-                  <text x="125" y="46" fill="#99f6e4">YCoCg</text>
-                  <text x="125" y="59" fill="#94a3b8">TAA / 128×</text>
-
-                  <path d="M160 48 H174" stroke="rgba(255,255,255,0.35)" stroke-width="1.4" />
-
-                  <rect x="176" y="30" width="66" height="36" rx="7" fill="rgba(251,146,60,0.11)" stroke="#fb923c" stroke-opacity="0.65" />
-                  <text x="209" y="46" fill="#fed7aa">6-Mip</text>
-                  <text x="209" y="59" fill="#94a3b8">Bloom+70mm</text>
-
-                  <path d="M244 48 H258" stroke="rgba(255,255,255,0.35)" stroke-width="1.4" />
-
-                  <rect x="260" y="30" width="52" height="36" rx="7" fill="rgba(240,179,90,0.14)" stroke="#f0b35a" stroke-opacity="0.75" />
-                  <text x="286" y="46" fill="#f7ca82">AgX</text>
-                  <text x="286" y="59" fill="#94a3b8">sRGB</text>
-                </g>
-              </svg>
-            </div>
-            <h3 class="arch-title">Cinematic HDR Optical Pipeline</h3>
-            <p class="arch-desc">
-              Variance-clipped YCoCg TAA, progressive 128× cinema still accumulation, 6-mip
-              physically weighted bloom, 70mm anamorphic lens flare, and AgX filmic tone mapping.
-            </p>
-          </article>
-
-          <article class="arch-card">
-            <div class="arch-diagram" aria-hidden="true">
-              <svg viewBox="0 0 320 96" width="320" height="96">
-                <rect x="14" y="18" width="132" height="60" rx="9" fill="rgba(103,232,249,0.08)" stroke="#67e8f9" stroke-opacity="0.55" />
-                <text x="80" y="41" text-anchor="middle" fill="#a5f3fc" font-size="11" font-weight="600" font-family="ui-sans-serif, system-ui, sans-serif">Native Desktop</text>
-                <text x="80" y="59" text-anchor="middle" fill="#94a3b8" font-size="9.5" font-family="ui-monospace, monospace">Rust · wgpu · egui</text>
-
-                <rect x="174" y="18" width="132" height="60" rx="9" fill="rgba(96,165,250,0.08)" stroke="#60a5fa" stroke-opacity="0.55" />
-                <text x="240" y="41" text-anchor="middle" fill="#bfdbfe" font-size="11" font-weight="600" font-family="ui-sans-serif, system-ui, sans-serif">Static Web Suite</text>
-                <text x="240" y="59" text-anchor="middle" fill="#94a3b8" font-size="9.5" font-family="ui-monospace, monospace">Pure ES Modules · 0 Deps</text>
-
-                <path d="M148 48 H172" stroke="rgba(255,255,255,0.35)" stroke-width="1.4" stroke-dasharray="3 3" />
-              </svg>
-            </div>
-            <h3 class="arch-title">Native Rust Desktop &amp; Zero-Dep Web</h3>
-            <p class="arch-desc">
-              Run natively at full workstation throughput with the Rust <code>wgpu</code> +
-              <code>egui</code> multi-simulator app, or host directly on GitHub Pages as pure static ES modules.
-            </p>
-          </article>
-        </div>
-
-        <!-- Quick Launch CLI & Native Desktop Bar -->
-        <div class="cli-panel" id="desktop">
-          <div class="cli-panel-head">
-            <div>
-              <span class="cli-kicker tabular">LOCAL &amp; NATIVE DESKTOP LAUNCHER</span>
-              <h3 class="cli-heading">One Command for Web, WebGPU, Firefox, or Native Rust</h3>
-            </div>
-            <span class="cli-note">Serves repo root on <code>127.0.0.1:8080+</code> with NVIDIA PRIME offload</span>
-          </div>
-
-          <div class="cli-grid">
-            <div class="cli-item">
-              <div class="cli-meta">
-                <span class="cli-tag">Observatory Home</span>
-                <code class="cli-cmd">./launch.sh --home</code>
-              </div>
-              <button type="button" class="copy-btn" data-copy="./launch.sh --home" aria-label="Copy ./launch.sh --home">
-                <span class="copy-btn-text">Copy</span>
-              </button>
-            </div>
-
-            <div class="cli-item">
-              <div class="cli-meta">
-                <span class="cli-tag">Direct WebGPU</span>
-                <code class="cli-cmd">./launch.sh --blackhole --webgpu</code>
-              </div>
-              <button
-                type="button"
-                class="copy-btn"
-                data-copy="./launch.sh --blackhole --webgpu"
-                aria-label="Copy ./launch.sh --blackhole --webgpu"
-              >
-                <span class="copy-btn-text">Copy</span>
-              </button>
-            </div>
-
-            <div class="cli-item">
-              <div class="cli-meta">
-                <span class="cli-tag">Native Rust Desktop</span>
-                <code class="cli-cmd">./launch.sh --desktop --pulsar</code>
-              </div>
-              <button
-                type="button"
-                class="copy-btn"
-                data-copy="./launch.sh --desktop --pulsar"
-                aria-label="Copy ./launch.sh --desktop --pulsar"
-              >
-                <span class="copy-btn-text">Copy</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Universal Controls Strip -->
-    <section class="section controls-section" id="controls" aria-labelledby="controls-heading">
-      <div class="container">
-        <div class="section-head">
-          <p class="section-eyebrow">UNIVERSAL CONTROLS</p>
-          <h2 id="controls-heading" class="section-title">Consistent Flight &amp; Capture Keys</h2>
-          <p class="section-sub">
-            Every simulator shares the same Observatory Glass HUD, camera navigation, and
-            progressive cinema-still capture bindings.
-          </p>
-        </div>
-
-        <ul class="controls-grid" aria-label="Universal simulator keyboard and mouse controls">
-          <li class="control-item">
-            <span class="key-group"><kbd class="keycap">Drag</kbd></span>
-            <span class="control-name">Orbit Camera</span>
-          </li>
-          <li class="control-item">
-            <span class="key-group">
-              <kbd class="keycap">Scroll</kbd>
-              <span class="key-sep">/</span>
-              <kbd class="keycap">W</kbd>
-              <kbd class="keycap">S</kbd>
-            </span>
-            <span class="control-name">Zoom / Fly</span>
-          </li>
-          <li class="control-item">
-            <span class="key-group"><kbd class="keycap">1</kbd><span class="key-sep">–</span><kbd class="keycap">6</kbd></span>
-            <span class="control-name">Physics Presets</span>
-          </li>
-          <li class="control-item">
-            <span class="key-group"><kbd class="keycap">Space</kbd></span>
-            <span class="control-name">128× Cinema Still</span>
-          </li>
-          <li class="control-item">
-            <span class="key-group"><kbd class="keycap">O</kbd></span>
-            <span class="control-name">Auto-Orbit</span>
-          </li>
-          <li class="control-item">
-            <span class="key-group"><kbd class="keycap">T</kbd></span>
-            <span class="control-name">Traverse / Bridge / Aft</span>
-          </li>
-          <li class="control-item">
-            <span class="key-group"><kbd class="keycap">R</kbd></span>
-            <span class="control-name">Reset Camera</span>
-          </li>
-          <li class="control-item">
-            <span class="key-group"><kbd class="keycap">P</kbd></span>
-            <span class="control-name">PNG Capture</span>
-          </li>
-          <li class="control-item">
-            <span class="key-group"><kbd class="keycap">H</kbd></span>
-            <span class="control-name">Hide / Restore HUD</span>
-          </li>
-        </ul>
-      </div>
-    </section>
-  </main>
-
-  <!-- Clean Footer -->
-  <footer class="site-footer" role="contentinfo">
-    <div class="container footer-inner">
-      <div class="footer-brand">
-        <div class="footer-brand-row">
-          <span class="footer-title">INTERSTELLAR OBSERVATORY</span>
-          <span class="idle-badge">
-            <span class="idle-dot" aria-hidden="true"></span>
-            Static Observatory · 0% Idle GPU
-          </span>
-        </div>
-        <p class="footer-note">
-          Direct deep-linking supported via <code>?sim=&lt;alias&gt;</code> (e.g.
-          <code>?sim=pulsar&amp;backend=webgpu</code>, <code>?sim=gargantua</code>,
-          <code>?sim=alcubierre</code>).
+        <p id="hero-desc" class="hero-desc">
+          Extremal Kerr black hole with an angularly integrated 3D volumetric accretion disk, relativistic Doppler beaming, photon-ring caustic, and 128-sample cinema still mode.
         </p>
-      </div>
 
-      <nav class="footer-links" id="footer-sim-links" aria-label="Simulator quick links">
-        <a href="./blackhole-sim/" data-sim-launch="blackhole">Black Hole</a>
-        <a href="./wormhole-sim/" data-sim-launch="wormhole">Wormhole</a>
-        <a href="./binary-bh-sim/" data-sim-launch="binary">Binary BH</a>
-        <a href="./warp-drive-sim/" data-sim-launch="warp">Warp Drive</a>
-        <a href="./supernova-sim/" data-sim-launch="supernova">Supernova</a>
-        <a href="./pulsar-sim/" data-sim-launch="pulsar">Pulsar</a>
-        <a href="./starflight-sim/" data-sim-launch="starflight">Starflight</a>
-      </nav>
-    </div>
-  </footer>
-
-  <!-- Native <dialog> Quick-Inspect Observatory Dossier -->
-  <dialog id="sim-dossier" class="dossier-dialog" aria-labelledby="dossier-title">
-    <div class="dossier-shell">
-      <div class="dossier-hero" id="dossier-media-frame">
-        <div class="media-fallback" aria-hidden="true">
-          <span class="fallback-label tabular">OBSERVATORY DOSSIER PREVIEW</span>
+        <div class="equation-ribbon" aria-label="Governing Metric Equation">
+          <span class="eq-label">METRIC</span>
+          <code id="hero-equation" class="hero-equation">g_μν = η_μν + 2H l_μ l_ν · a/M ≤ 0.998</code>
         </div>
-        <div class="dossier-hero-top">
-          <span class="viewport-pill">
-            <span class="viewport-index tabular" id="dossier-index">01</span>
-            <span class="viewport-dot" aria-hidden="true"></span>
-            <span id="dossier-category">General Relativity</span>
-          </span>
+
+        <dl id="hero-specs" class="hero-specs" aria-label="Simulation Specifications">
+          <div class="spec-col">
+            <dt>Spin Limit</dt>
+            <dd>a/M ≤ 0.998</dd>
+          </div>
+          <div class="spec-col">
+            <dt>Cinema Still</dt>
+            <dd>128× TAA</dd>
+          </div>
+          <div class="spec-col">
+            <dt>Sky Map</dt>
+            <dd>4K Milky Way</dd>
+          </div>
+        </dl>
+
+        <div class="hero-actions">
+          <a
+            id="hero-launch-btn"
+            class="cta-launch"
+            href="./blackhole-sim/"
+            data-sim-launch="blackhole"
+          >
+            <span>Enter Simulation</span>
+            <span class="cta-arrow" aria-hidden="true">→</span>
+          </a>
           <button
             type="button"
-            class="dossier-close"
-            id="dossier-close-btn"
-            aria-label="Close simulator dossier"
+            id="hero-inspect-btn"
+            class="cta-dossier"
+            aria-haspopup="dialog"
+            aria-controls="sim-dossier"
           >
-            <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
-              <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-            </svg>
+            Presets &amp; Dossier
           </button>
+          <div class="idle-status-pill" aria-label="Zero idle GPU overhead on homepage">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span>0% Idle GPU · 42 Presets</span>
+          </div>
         </div>
-        <div class="dossier-hero-bottom">
-          <p class="dossier-tagline" id="dossier-tagline"></p>
-          <h2 class="dossier-title" id="dossier-title">Simulator Dossier</h2>
+      </section>
+    </main>
+
+    <footer class="filmstrip-dock" aria-label="Simulation Engine Selector">
+      <div class="dock-header">
+        <span class="dock-title">SIMULATION ENGINES · SECTOR ARCHIVE</span>
+        <span class="dock-hint">Click to preview · Double-click or ↗ to launch · ← / →</span>
+      </div>
+
+      <div
+        id="catalog-grid"
+        class="filmstrip-grid"
+        role="list"
+        aria-label="7 Relativistic Simulation Engines"
+      ></div>
+
+      <noscript>
+        <ul class="noscript-links">
+          <li><a href="./blackhole-sim/">01 · Gargantua — Kerr Black Hole</a></li>
+          <li><a href="./wormhole-sim/">02 · Morris–Thorne Wormhole</a></li>
+          <li><a href="./binary-bh-sim/">03 · Binary Black Holes</a></li>
+          <li><a href="./warp-drive-sim/">04 · Alcubierre Warp Drive</a></li>
+          <li><a href="./supernova-sim/">05 · Supernova Remnant</a></li>
+          <li><a href="./pulsar-sim/">06 · Magnetar Pulsar</a></li>
+          <li><a href="./starflight-sim/">07 · Relativistic Starflight</a></li>
+        </ul>
+      </noscript>
+    </footer>
+  </div>
+
+  <!-- Quick-Inspect Dossier Dialog -->
+  <dialog id="sim-dossier" class="obs-dialog" aria-labelledby="dossier-title">
+    <div class="dialog-surface">
+      <header class="dialog-header">
+        <div>
+          <p id="dossier-badge" class="dialog-eyebrow">01 / 07 · GENERAL RELATIVITY</p>
+          <h2 id="dossier-title" class="dialog-title">Gargantua — Kerr Black Hole</h2>
+          <p id="dossier-tagline" class="dialog-tagline"></p>
+        </div>
+        <button
+          type="button"
+          class="dialog-close"
+          data-close-dialog="sim-dossier"
+          aria-label="Close dossier"
+        >
+          ✕
+        </button>
+      </header>
+
+      <div class="dialog-body">
+        <p id="dossier-desc" class="dossier-desc"></p>
+
+        <div class="dossier-meta-grid">
+          <div class="dossier-meta-card">
+            <span class="meta-k">Spacetime Formulation</span>
+            <code id="dossier-equation" class="meta-eq"></code>
+          </div>
+          <div class="dossier-meta-card">
+            <span class="meta-k">Signature Control</span>
+            <p id="dossier-control" class="meta-v"></p>
+          </div>
+        </div>
+
+        <div id="dossier-specs" class="dossier-specs"></div>
+
+        <div class="dossier-presets-block">
+          <div class="dossier-section-head">
+            <span>Curated Physics Presets</span>
+            <span class="dossier-section-note">Click any preset to launch directly</span>
+          </div>
+          <div id="dossier-presets" class="dossier-presets-grid"></div>
+        </div>
+
+        <div class="dossier-cli-row">
+          <div class="cli-code-wrap">
+            <span class="cli-prefix">CLI</span>
+            <code id="dossier-cli-cmd">./launch.sh --blackhole</code>
+          </div>
+          <button type="button" id="dossier-copy-cli" class="cli-copy-btn">Copy</button>
         </div>
       </div>
 
-      <div class="dossier-body">
-        <p class="dossier-desc" id="dossier-desc"></p>
-
-        <div class="dossier-metric-bar">
-          <span class="dossier-metric-label" id="dossier-metric-name">Metric</span>
-          <code class="dossier-eq tabular" id="dossier-equation"></code>
-        </div>
-
-        <dl class="dossier-specs" id="dossier-specs"></dl>
-
-        <div class="dossier-section">
-          <h3 class="dossier-subhead">Curated Physics Presets</h3>
-          <ol class="dossier-presets" id="dossier-presets"></ol>
-        </div>
-
-        <div class="dossier-meta-row">
-          <div class="dossier-special">
-            <span class="dossier-subhead">Special Control</span>
-            <p class="dossier-special-text" id="dossier-special-control"></p>
-          </div>
-
-          <div class="dossier-cli">
-            <span class="dossier-subhead">Local CLI Launch</span>
-            <div class="dossier-cli-box">
-              <code class="cli-cmd" id="dossier-cli-cmd">./launch.sh --blackhole</code>
-              <button type="button" class="copy-btn" id="dossier-copy-btn" data-copy="./launch.sh --blackhole">
-                <span class="copy-btn-text">Copy</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="dossier-footer">
+      <footer class="dialog-footer">
         <a
           id="dossier-launch-webgl2"
-          class="btn btn-primary"
-          href="./blackhole-sim/?backend=webgl2"
+          class="dialog-btn-secondary"
+          href="./blackhole-sim/"
+          data-sim-launch="blackhole"
         >
-          Launch WebGL2 <span aria-hidden="true">→</span>
+          Launch WebGL2
         </a>
         <a
           id="dossier-launch-webgpu"
-          class="btn btn-secondary"
+          class="dialog-btn-primary"
           href="./blackhole-sim/?backend=webgpu"
+          data-sim-launch="blackhole"
         >
-          Launch WebGPU <span aria-hidden="true">→</span>
+          Launch WebGPU →
         </a>
+      </footer>
+    </div>
+  </dialog>
+
+  <!-- Universal Controls & CLI Dialog -->
+  <dialog id="controls-dialog" class="obs-dialog" aria-labelledby="controls-title">
+    <div class="dialog-surface">
+      <header class="dialog-header">
+        <div>
+          <p class="dialog-eyebrow">INTERSTELLAR OBSERVATORY · FLIGHT REFERENCE</p>
+          <h2 id="controls-title" class="dialog-title">Universal Controls &amp; Backends</h2>
+          <p class="dialog-tagline">Identical relativistic physics across WebGL2, WebGPU, and Native Rust wgpu desktop builds.</p>
+        </div>
+        <button
+          type="button"
+          class="dialog-close"
+          data-close-dialog="controls-dialog"
+          aria-label="Close controls dialog"
+        >
+          ✕
+        </button>
+      </header>
+
+      <div class="dialog-body">
+        <div class="keycap-grid" aria-label="Shared Simulator Keybindings">
+          <div class="keycap-row"><kbd>Drag</kbd><span>Orbit observer camera</span></div>
+          <div class="keycap-row"><kbd>Scroll / W S</kbd><span>Radial zoom / altitude</span></div>
+          <div class="keycap-row"><kbd>Right-Drag</kbd><span>Camera tilt &amp; roll</span></div>
+          <div class="keycap-row"><kbd>1 – 6</kbd><span>Load physics preset</span></div>
+          <div class="keycap-row"><kbd>Space</kbd><span>Pause / 128× cinema still</span></div>
+          <div class="keycap-row"><kbd>O</kbd><span>Toggle orbital cruise</span></div>
+          <div class="keycap-row"><kbd>T</kbd><span>Toggle live telemetry strip</span></div>
+          <div class="keycap-row"><kbd>R</kbd><span>Reset camera &amp; accumulation</span></div>
+          <div class="keycap-row"><kbd>P</kbd><span>Save PNG capture</span></div>
+          <div class="keycap-row"><kbd>H</kbd><span>Hide / restore HUD overlay</span></div>
+        </div>
+
+        <div class="controls-section">
+          <div class="dossier-section-head">
+            <span>Direct Query Routing &amp; CLI Launchers</span>
+            <span class="dossier-section-note">?sim=&lt;alias&gt;&amp;backend=webgpu supported</span>
+          </div>
+          <div class="cli-snippets">
+            <div class="dossier-cli-row">
+              <div class="cli-code-wrap"><span class="cli-prefix">WEB</span><code>./launch.sh --webgpu --sim pulsar</code></div>
+              <button type="button" class="cli-copy-btn" data-copy-text="./launch.sh --webgpu --sim pulsar">Copy</button>
+            </div>
+            <div class="dossier-cli-row">
+              <div class="cli-code-wrap"><span class="cli-prefix">NATIVE</span><code>./launch.sh --desktop</code></div>
+              <button type="button" class="cli-copy-btn" data-copy-text="./launch.sh --desktop">Copy</button>
+            </div>
+            <div class="dossier-cli-row">
+              <div class="cli-code-wrap"><span class="cli-prefix">URL</span><code>?sim=blackhole&amp;backend=webgpu</code></div>
+              <button type="button" class="cli-copy-btn" data-copy-text="?sim=blackhole&backend=webgpu">Copy</button>
+            </div>
+          </div>
+        </div>
       </div>
+
+      <footer class="dialog-footer">
+        <button type="button" class="dialog-btn-secondary" data-close-dialog="controls-dialog">Close</button>
+      </footer>
     </div>
   </dialog>
 

@@ -1082,51 +1082,57 @@ fn draw_top_right_bar(
         .order(Order::Foreground)
         .fade_in(false)
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 5.0;
+            ui.with_layout(
+                egui::Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.set_height(36.0);
+                    ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
 
-                // Compact Observatory Home Button
-                let (home_rect, home_resp) =
-                    ui.allocate_exact_size(Vec2::new(34.0, 34.0), Sense::click());
-                if home_resp.hovered() {
-                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-                }
-                let (home_fill, home_border, home_fg) = if home_resp.hovered() {
-                    (
-                        Color32::from_rgba_unmultiplied(20, 24, 34, 200),
-                        theme.accent_border,
-                        theme.accent_bright,
-                    )
-                } else {
-                    (theme.glass_bg, theme.glass_border, theme.text_secondary)
-                };
-                paint_glass_panel(
-                    ui.painter(),
-                    home_rect,
-                    17.0,
-                    screen_size,
-                    glass_tex_id,
-                    home_fill,
-                    home_border,
-                );
-                draw_home_icon(ui.painter(), home_rect.center(), home_fg);
-                if home_resp
-                    .on_hover_text("Return to Observatory Home")
-                    .clicked()
-                {
-                    actions.push(HudAction::GoHome);
-                }
+                    // Compact Observatory Home Button (exact 36x36 aligned to row center)
+                    let (home_rect, home_resp) =
+                        ui.allocate_exact_size(Vec2::new(36.0, 36.0), Sense::click());
+                    if home_resp.hovered() {
+                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    }
+                    let (home_fill, home_border, home_fg) = if home_resp.hovered() {
+                        (
+                            Color32::from_rgba_unmultiplied(20, 24, 34, 200),
+                            theme.accent_border,
+                            theme.accent_bright,
+                        )
+                    } else {
+                        (theme.glass_bg, theme.glass_border, theme.text_secondary)
+                    };
+                    paint_glass_panel(
+                        ui.painter(),
+                        home_rect,
+                        18.0,
+                        screen_size,
+                        glass_tex_id,
+                        home_fill,
+                        home_border,
+                    );
+                    draw_home_icon(ui.painter(), home_rect.center(), home_fg);
+                    if home_resp
+                        .on_hover_text("Return to Observatory Home")
+                        .clicked()
+                    {
+                        actions.push(HudAction::GoHome);
+                    }
 
-                // 7-Sim Switcher Glass Pill
-                let sw_bg = ui.painter().add(Shape::Noop);
-                let sw = ui.scope(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.add_space(3.0);
-                        ui.spacing_mut().item_spacing.x = 1.5;
-                        ui.vertical(|ui| {
-                            ui.add_space(3.0);
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 1.0;
+                    // 7-Sim Switcher Glass Pill (exact 36px height: 3px top + 30px pills + 3px bottom)
+                    let sw_bg = ui.painter().add(Shape::Noop);
+                    let sw = egui::Frame::NONE
+                        .inner_margin(egui::Margin {
+                            left: 4,
+                            right: 4,
+                            top: 3,
+                            bottom: 3,
+                        })
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing = Vec2::new(1.5, 0.0);
+                            ui.horizontal_centered(|ui| {
+                                ui.spacing_mut().item_spacing = Vec2::new(1.5, 0.0);
                                 for id in SimId::ALL {
                                     let is_curr = id == active_id;
                                     let resp = draw_pill_button(
@@ -1135,7 +1141,7 @@ fn draw_top_right_bar(
                                         is_curr,
                                         is_curr,
                                         theme,
-                                        29.0,
+                                        30.0,
                                         5.5,
                                         None,
                                         None,
@@ -1145,55 +1151,52 @@ fn draw_top_right_bar(
                                     }
                                 }
                             });
-                            ui.add_space(3.0);
                         });
-                        ui.add_space(3.0);
-                    });
-                });
-                ui.painter().set(
-                    sw_bg,
-                    build_glass_shapes(
-                        sw.response.rect,
-                        18.0,
+                    ui.painter().set(
+                        sw_bg,
+                        build_glass_shapes(
+                            sw.response.rect,
+                            18.0,
+                            screen_size,
+                            glass_tex_id,
+                            theme.glass_bg,
+                            theme.glass_border,
+                        ),
+                    );
+
+                    // Controls Pill (36px height)
+                    if draw_standalone_glass_pill(
+                        ui,
+                        "Controls",
+                        hud.drawer_open,
+                        theme,
                         screen_size,
                         glass_tex_id,
-                        theme.glass_bg,
-                        theme.glass_border,
-                    ),
-                );
+                        &draw_sliders_icon,
+                        None,
+                    )
+                    .clicked()
+                    {
+                        actions.push(HudAction::ToggleDrawer);
+                    }
 
-                // Controls Pill
-                if draw_standalone_glass_pill(
-                    ui,
-                    "Controls",
-                    hud.drawer_open,
-                    theme,
-                    screen_size,
-                    glass_tex_id,
-                    &draw_sliders_icon,
-                    None,
-                )
-                .clicked()
-                {
-                    actions.push(HudAction::ToggleDrawer);
-                }
-
-                // Hide UI Pill
-                if draw_standalone_glass_pill(
-                    ui,
-                    "Hide UI",
-                    false,
-                    theme,
-                    screen_size,
-                    glass_tex_id,
-                    &|p, c, col| draw_eye_icon(p, c, col, true),
-                    None,
-                )
-                .clicked()
-                {
-                    actions.push(HudAction::ToggleHud);
-                }
-            });
+                    // Hide UI Pill (36px height)
+                    if draw_standalone_glass_pill(
+                        ui,
+                        "Hide UI",
+                        false,
+                        theme,
+                        screen_size,
+                        glass_tex_id,
+                        &|p, c, col| draw_eye_icon(p, c, col, true),
+                        None,
+                    )
+                    .clicked()
+                    {
+                        actions.push(HudAction::ToggleHud);
+                    }
+                },
+            );
         });
 }
 
@@ -1793,15 +1796,14 @@ fn draw_bottom_dock(
         .fade_in(false)
         .show(ctx, |ui| {
             let bg_slot = ui.painter().add(Shape::Noop);
-            let dock = ui.scope(|ui| {
-                ui.horizontal(|ui| {
-                    ui.add_space(8.0);
-                    ui.vertical(|ui| {
-                        ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
+            let dock = egui::Frame::NONE
+                .inner_margin(egui::Margin::symmetric(8, 5))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
+                    ui.horizontal_centered(|ui| {
+                        ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
 
-                            // 6 Presets with [1]..[6] keycaps on the left
+                        // 6 Presets with [1]..[6] keycaps on the left
                             for (idx, preset) in presets.iter().enumerate() {
                                 let is_act = active_preset == Some(idx);
                                 let font = FontId::new(11.5, semibold_family());
@@ -2014,18 +2016,14 @@ fn draw_bottom_dock(
                             {
                                 actions.push(HudAction::ToggleHud);
                             }
-                        });
-                        ui.add_space(6.0);
                     });
-                    ui.add_space(8.0);
                 });
-            });
 
             ui.painter().set(
                 bg_slot,
                 build_glass_shapes(
                     dock.response.rect,
-                    22.0,
+                    20.0,
                     screen_size,
                     glass_tex_id,
                     theme.glass_bg,
@@ -2036,6 +2034,9 @@ fn draw_bottom_dock(
 }
 
 fn draw_bottom_left_hint(ctx: &Context, hint_text: &str, screen_size: Vec2) {
+    if screen_size.x < 1440.0 {
+        return;
+    }
     Area::new(Id::unique("hud_hint"))
         .fixed_pos(Pos2::new(HUD_PAD, (screen_size.y - HUD_PAD - 64.0).max(16.0)))
         .interactable(false)

@@ -691,20 +691,33 @@ impl RuntimeState {
     fn handle_shortcut(&mut self, code: KeyCode) {
         if self.screen == AppScreen::Home {
             if !self.egui_ctx.egui_wants_keyboard_input() {
-                if self.home.inspect_sim.is_none()
-                    && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight)
-                {
-                    let idx = SimId::ALL
-                        .iter()
-                        .position(|&s| s == self.home.spotlight)
-                        .unwrap_or(0);
-                    let next = if code == KeyCode::ArrowRight {
-                        (idx + 1) % SimId::ALL.len()
-                    } else {
-                        (idx + SimId::ALL.len() - 1) % SimId::ALL.len()
-                    };
-                    self.home.spotlight = SimId::ALL[next];
-                    self.needs_redraw = true;
+                if self.home.inspect_sim.is_none() && !self.home.controls_open {
+                    if matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
+                        use interstellar_desktop::ui::home::{catalog_entry, CategoryFilter};
+                        let visible: Vec<SimId> = SimId::ALL
+                            .iter()
+                            .copied()
+                            .filter(|&id| {
+                                self.home.category == CategoryFilter::All
+                                    || catalog_entry(id).category == self.home.category
+                            })
+                            .collect();
+                        if !visible.is_empty() {
+                            let idx = visible
+                                .iter()
+                                .position(|&s| s == self.home.spotlight)
+                                .unwrap_or(0);
+                            let next = if code == KeyCode::ArrowRight {
+                                (idx + 1) % visible.len()
+                            } else {
+                                (idx + visible.len() - 1) % visible.len()
+                            };
+                            self.home.spotlight = visible[next];
+                            self.needs_redraw = true;
+                        }
+                    } else if code == KeyCode::Enter {
+                        self.enter_sim(self.home.spotlight, None);
+                    }
                 }
             }
             return;
