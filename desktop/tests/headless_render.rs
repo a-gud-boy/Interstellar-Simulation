@@ -3,14 +3,17 @@ use std::sync::Arc;
 
 use egui::{Pos2, RawInput, Rect, Vec2};
 
-use interstellar_desktop::renderer::post::{PostPipeline, MAX_PROGRESSIVE_SAMPLES};
-use interstellar_desktop::renderer::{format_adapter_label, readback_rgba8_texture, SharedGpuAssets};
-use interstellar_desktop::sims::{create_simulation, SimId, SimInput};
-use interstellar_desktop::ui::{configure_fonts, draw_homepage, draw_hud, HomeState, HudState};
+use interstellar_desktop::renderer::post::{MAX_PROGRESSIVE_SAMPLES, PostPipeline};
+use interstellar_desktop::renderer::{
+    SharedGpuAssets, format_adapter_label, readback_rgba8_texture,
+};
+use interstellar_desktop::sims::{SimId, SimInput, create_simulation};
+use interstellar_desktop::ui::{HomeState, HudState, configure_fonts, draw_homepage, draw_hud};
 
 const WIDTH: u32 = 1280;
 const HEIGHT: u32 = 720;
 
+#[allow(clippy::too_many_arguments)]
 fn render_home_and_capture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -94,7 +97,7 @@ fn render_home_and_capture(
     let mut sum_luma = 0.0_f64;
     let mut sum_luma2 = 0.0_f64;
     let pixel_count = (WIDTH * HEIGHT) as f64;
-    for chunk in rgba.chunks_exact(4) {
+    for chunk in rgba.as_chunks::<4>().0 {
         let luma = 0.2126 * chunk[0] as f64 + 0.7152 * chunk[1] as f64 + 0.0722 * chunk[2] as f64;
         sum_luma += luma;
         sum_luma2 += luma * luma;
@@ -121,6 +124,7 @@ fn render_home_and_capture(
         .expect("Failed to save homepage PNG screenshot");
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_and_capture(
     assets: &mut SharedGpuAssets,
     post: &mut PostPipeline,
@@ -260,7 +264,7 @@ fn render_and_capture(
     let mut sum_luma = 0.0_f64;
     let mut sum_luma2 = 0.0_f64;
     let pixel_count = (WIDTH * HEIGHT) as f64;
-    for chunk in rgba.chunks_exact(4) {
+    for chunk in rgba.as_chunks::<4>().0 {
         let luma = 0.2126 * chunk[0] as f64 + 0.7152 * chunk[1] as f64 + 0.0722 * chunk[2] as f64;
         sum_luma += luma;
         sum_luma2 += luma * luma;
@@ -317,7 +321,10 @@ fn render_all_seven_sims_with_hud() {
         adapter_info,
         true, // synchronous 4K Milky Way load
     );
-    assert!(assets.sky_map_loaded, "4K Milky Way failed to load synchronously");
+    assert!(
+        assets.sky_map_loaded,
+        "4K Milky Way failed to load synchronously"
+    );
 
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let mut post = PostPipeline::new(
@@ -430,11 +437,8 @@ fn render_observatory_homepage_and_dossier() {
 
     let egui_ctx = egui::Context::default();
     configure_fonts(&egui_ctx);
-    let mut egui_renderer = egui_wgpu::Renderer::new(
-        &device,
-        format,
-        egui_wgpu::RendererOptions::default(),
-    );
+    let mut egui_renderer =
+        egui_wgpu::Renderer::new(&device, format, egui_wgpu::RendererOptions::default());
 
     let mut home = HomeState::default();
     render_home_and_capture(

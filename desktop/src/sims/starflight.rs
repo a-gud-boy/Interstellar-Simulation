@@ -1,12 +1,12 @@
 use bytemuck::{Pod, Zeroable};
 
-use crate::renderer::post::{make_fs_pipe, run_fs_pass, PostFrameParams, PostTuning};
 use crate::renderer::SharedGpuAssets;
+use crate::renderer::post::{PostFrameParams, PostTuning, make_fs_pipe, run_fs_pass};
 use crate::shaders;
 use crate::sims::{
-    ease_out_cubic, step_critically_damped, wrap_angle_delta, ControlItem, ControlKind,
-    ControlSection, HudMetadata, PresetMeta, SimId, SimInput, Simulation, SpecialActionUi,
-    StepOutcome, TelemetryCell,
+    ControlItem, ControlKind, ControlSection, HudMetadata, PresetMeta, SimId, SimInput, Simulation,
+    SpecialActionUi, StepOutcome, TelemetryCell, ease_out_cubic, step_critically_damped,
+    wrap_angle_delta,
 };
 
 const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
@@ -1002,7 +1002,11 @@ impl StarflightSim {
         is_progressive: bool,
     ) -> StarflightUniforms {
         let tel = self.telemetry();
-        let fdir = if self.flight_dir >= 0 { 1.0_f32 } else { -1.0_f32 };
+        let fdir = if self.flight_dir >= 0 {
+            1.0_f32
+        } else {
+            -1.0_f32
+        };
         StarflightUniforms {
             resolution_time_frame: [
                 render_width as f32,
@@ -1129,7 +1133,7 @@ impl Simulation for StarflightSim {
     }
 
     fn presets(&self) -> Vec<PresetMeta> {
-        PRESETS.iter().map(|p| p.meta.clone()).collect()
+        PRESETS.iter().map(|p| p.meta).collect()
     }
 
     fn active_preset_index(&self) -> Option<usize> {
@@ -1614,12 +1618,15 @@ impl Simulation for StarflightSim {
                 self.rapidity = tel.true_rapidity as f32;
             }
             let tel = self.telemetry();
-            let dir_sign = if self.flight_dir >= 0 { 1.0_f32 } else { -1.0_f32 };
-            self.flight_pos_z =
-                (self.flight_pos_z + cdt * (tel.visual_pace as f32) * dir_sign).rem_euclid(FLIGHT_PERIOD_Z);
+            let dir_sign = if self.flight_dir >= 0 {
+                1.0_f32
+            } else {
+                -1.0_f32
+            };
+            self.flight_pos_z = (self.flight_pos_z + cdt * (tel.visual_pace as f32) * dir_sign)
+                .rem_euclid(FLIGHT_PERIOD_Z);
         }
-        self.camera
-            .update(cdt, self.paused, self.auto_orbit, input);
+        self.camera.update(cdt, self.paused, self.auto_orbit, input);
         StepOutcome {
             camera_moved: self.camera.moved,
             sim_time: self.sim_time,

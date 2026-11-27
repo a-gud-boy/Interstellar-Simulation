@@ -65,6 +65,7 @@ export async function launchChromeDualCDP({
       '--ignore-gpu-blocklist',
       '--gtk-version=3',
       '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
       '--disable-renderer-backgrounding',
       `--window-size=${viewportW},${viewportH}`,
       '--force-device-scale-factor=1',

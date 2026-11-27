@@ -74,10 +74,10 @@ export function mountSimSwitcher({
   homeLink.className = nav.parentElement
     ? 'sim-switch-item sim-switch-home glass-surface'
     : 'sim-switch-item sim-switch-home';
-  homeLink.setAttribute('data-home-href', '../');
+  homeLink.setAttribute('data-home-href', '../../');
   homeLink.setAttribute('aria-label', 'Return to Interstellar Observatory homepage');
   homeLink.title = 'Observatory Home';
-  homeLink.href = `../?backend=${backend}`;
+  homeLink.href = `../../?backend=${backend}`;
   homeLink.appendChild(createHomeIcon());
 
   if (nav.parentElement) {
@@ -90,7 +90,7 @@ export function mountSimSwitcher({
 
   for (const sim of SIMULATORS) {
     const isCurrent = sim.id === activeId;
-    const baseHref = isCurrent ? './' : `../${sim.dir}/`;
+    const baseHref = isCurrent ? './' : `../../${sim.dir}/`;
 
     const a = document.createElement('a');
     a.id = `sim-switch-${sim.id}`;

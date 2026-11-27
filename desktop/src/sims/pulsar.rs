@@ -2,13 +2,12 @@ use std::f64::consts::{PI, TAU};
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::renderer::post::{make_fs_pipe, run_fs_pass, PostFrameParams, PostTuning};
 use crate::renderer::SharedGpuAssets;
+use crate::renderer::post::{PostFrameParams, PostTuning, make_fs_pipe, run_fs_pass};
 use crate::shaders;
 use crate::sims::{
-    ease_out_cubic, step_critically_damped, wrap_angle_delta, ControlItem, ControlKind,
-    ControlSection, HudMetadata, PresetMeta, SimId, SimInput, Simulation, StepOutcome,
-    TelemetryCell,
+    ControlItem, ControlKind, ControlSection, HudMetadata, PresetMeta, SimId, SimInput, Simulation,
+    StepOutcome, TelemetryCell, ease_out_cubic, step_critically_damped, wrap_angle_delta,
 };
 
 const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
@@ -429,7 +428,7 @@ pub fn compute_pulsar_telemetry(
 
 fn clamp_pivot(p: [f32; 3]) -> [f32; 3] {
     let len = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
-    if len > MAX_PIVOT_RADIUS && len > 1e-6 {
+    if len > MAX_PIVOT_RADIUS {
         let s = MAX_PIVOT_RADIUS / len;
         [p[0] * s, p[1] * s, p[2] * s]
     } else {
@@ -746,7 +745,8 @@ impl PulsarCamera {
             interacting = true;
             let delta = input.scroll_y.clamp(-240.0, 240.0);
             let factor = (delta * 0.00115).exp();
-            self.target_distance = (self.target_distance * factor).clamp(MIN_DISTANCE, MAX_DISTANCE);
+            self.target_distance =
+                (self.target_distance * factor).clamp(MIN_DISTANCE, MAX_DISTANCE);
             self.mark_interaction();
         }
 
@@ -1176,7 +1176,7 @@ impl Simulation for PulsarSim {
     }
 
     fn presets(&self) -> Vec<PresetMeta> {
-        PRESETS.iter().map(|p| p.meta.clone()).collect()
+        PRESETS.iter().map(|p| p.meta).collect()
     }
 
     fn active_preset_index(&self) -> Option<usize> {
@@ -1611,10 +1611,10 @@ impl Simulation for PulsarSim {
         let tel = self.telemetry();
         if !self.paused {
             self.sim_time += cdt;
-            self.spin_phase = (self.spin_phase + cdt * tel.omega_vis as f32).rem_euclid(std::f32::consts::TAU);
+            self.spin_phase =
+                (self.spin_phase + cdt * tel.omega_vis as f32).rem_euclid(std::f32::consts::TAU);
         }
-        self.camera
-            .update(cdt, self.paused, self.auto_orbit, input);
+        self.camera.update(cdt, self.paused, self.auto_orbit, input);
         StepOutcome {
             camera_moved: self.camera.moved,
             sim_time: self.sim_time,

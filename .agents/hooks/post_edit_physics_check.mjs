@@ -3,7 +3,7 @@
  * Antigravity PostToolUse + PostInvocation hook for Interstellar Simulation.
  *
  * - PostToolUse: Inspects the edited file path. If it lies under
- *   `<sim>/src/engine/` or `<sim>/src/shaders/` for any `*-sim/` simulator
+ *   `<sim>/src/engine/` or `<sim>/src/shaders/` for any `sims/<id>/` simulator
  *   containing `tests/physics_check.mjs`, runs `node <sim>/tests/physics_check.mjs`
  *   (zero-dependency contract check).
  *   Always emits `{}` on stdout per Antigravity's PostToolUse contract.
@@ -24,8 +24,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const SIM_EDIT_RE = /^([a-z0-9-]+-sim)\/src\/(engine|shaders)\//;
-const SHARED_EDIT_RE = /^shared\/(?:shaders\/|assets\/|ui\/|simRegistry\.js$)/;
+const SIM_EDIT_RE = /^(sims\/[a-z0-9-]+)\/src\/(engine|shaders)\//;
+const SHARED_EDIT_RE = /^shared\/(?:shaders\/|assets\/|ui\/|simRegistry\.js$|sims\.json$)/;
 
 function readStdinUtf8() {
   try {

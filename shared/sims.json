@@ -1,0 +1,517 @@
+{
+  "categories": [
+    {
+      "id": "all",
+      "label": "All Engines",
+      "desktopLabel": "All 7"
+    },
+    {
+      "id": "gr",
+      "label": "General Relativity"
+    },
+    {
+      "id": "exotic",
+      "label": "Exotic Metrics"
+    },
+    {
+      "id": "astro",
+      "label": "Astrophysics"
+    },
+    {
+      "id": "sr",
+      "label": "Special Relativity"
+    }
+  ],
+  "simulators": [
+    {
+      "id": "blackhole",
+      "rustVariant": "Blackhole",
+      "dir": "sims/blackhole",
+      "index": "01",
+      "shortLabel": "Black Hole",
+      "shortTitle": "Gargantua",
+      "title": "Gargantua — Kerr Black Hole",
+      "windowTitle": "Gargantua — Relativistic Black Hole Simulator",
+      "launchLabel": "Gargantua Black Hole Sim",
+      "ariaLabel": "Switch to Gargantua Black Hole Simulator",
+      "debugHandle": "__GARGANTUA__",
+      "accentVar": "--accent",
+      "cardClass": "",
+      "cliFlag": "--blackhole",
+      "aliases": ["blackhole", "blackhole-sim", "gargantua", "bh"],
+      "description": "3D Outgoing Kerr–Schild ray-traced accretion disk, relativistic Doppler beaming, and 128-sample cinema still mode.",
+      "category": "gr",
+      "categoryLabel": "General Relativity",
+      "tagline": "Extremal Kerr black hole with volumetric accretion disk",
+      "accent": "#f0b35a",
+      "accentBright": "#f7ca82",
+      "preview": "./home/previews/blackhole.webp",
+      "previewAlt": "Gargantua spinning Kerr black hole with a glowing golden accretion disk warped above and below the circular event horizon shadow against the Milky Way.",
+      "equation": "g_μν = η_μν + 2H l_μ l_ν · a/M ≤ 0.998",
+      "metricName": "3D Outgoing Kerr–Schild",
+      "specialControl": "Space freezes orbit for 128× cinema still accumulation",
+      "highlights": [
+        "Outgoing Kerr–Schild",
+        "Relativistic Beaming",
+        "Photon Sub-Rings"
+      ],
+      "specs": [
+        { "label": "Spin Limit", "value": "a/M ≤ 0.998" },
+        { "label": "Cinema Still", "value": "128× TAA" },
+        { "label": "Sky Map", "value": "4K Milky Way" }
+      ],
+      "presets": [
+        {
+          "id": "gargantua",
+          "name": "Gargantua (Interstellar)",
+          "summary": "Spinning a=0.998 Kerr horizon with luminous golden disk and subtle Doppler shift."
+        },
+        {
+          "id": "relativistic",
+          "name": "Relativistic Exact (a=0.998)",
+          "summary": "Full physical beaming asymmetry with hot 9,200 K blue-white approaching plasma."
+        },
+        {
+          "id": "schwarzschild",
+          "name": "Schwarzschild (a=0)",
+          "summary": "Non-rotating symmetric shadow with wider 6M ISCO and classic photon ring."
+        },
+        {
+          "id": "millers",
+          "name": "Miller's Horizon (Close)",
+          "summary": "Grazing near-horizon vantage at 9.5M looking straight across the warped disk plane."
+        },
+        {
+          "id": "m87",
+          "name": "EHT M87* (Polar Ring)",
+          "summary": "High-inclination 62° polar view with warm synchrotron crescent and faint relativistic jet."
+        },
+        {
+          "id": "quasar",
+          "name": "Active Quasar Core",
+          "summary": "Ultra-hot 12,500 K turbulent accretion torus paired with bipolar polar plasma jets."
+        }
+      ]
+    },
+    {
+      "id": "wormhole",
+      "rustVariant": "Wormhole",
+      "dir": "sims/wormhole",
+      "index": "02",
+      "shortLabel": "Wormhole",
+      "shortTitle": "Wormhole",
+      "title": "Morris–Thorne Traversable Wormhole",
+      "windowTitle": "Wormhole — Traversable Spacetime Simulator",
+      "launchLabel": "Wormhole Sim",
+      "ariaLabel": "Switch to Traversable Wormhole Simulator",
+      "debugHandle": "__WORMHOLE__",
+      "accentVar": "--accent-teal",
+      "cardClass": "wormhole",
+      "cliFlag": "--wormhole",
+      "aliases": ["wormhole", "wormhole-sim", "wh"],
+      "description": "James–Thorne & Ellis spacetime throat linking Universe A (4K Milky Way) and Universe B (Exotic Golden–Teal Nebula).",
+      "category": "exotic",
+      "categoryLabel": "Exotic Metrics",
+      "tagline": "Traversable dual-universe throat linking two distant skies",
+      "accent": "#4ad4c4",
+      "accentBright": "#96f2e7",
+      "preview": "./home/previews/wormhole.webp",
+      "previewAlt": "Spherical Morris–Thorne traversable wormhole portal floating in deep space, refracting an exotic golden-teal nebula from Universe B inside its luminous Einstein ring.",
+      "equation": "ds² = −c²dt² + dl² + r(l)²(dθ² + sin²θ dφ²)",
+      "metricName": "James–Thorne & Ellis",
+      "specialControl": "T auto-traverses through the throat; W/S steps radial coordinate l",
+      "highlights": [
+        "Dual-Universe Skies",
+        "Live Throat Traversal",
+        "Twin Einstein Rings"
+      ],
+      "specs": [
+        { "label": "Metrics", "value": "James–Thorne / Ellis" },
+        { "label": "Topology", "value": "Universe A ⇄ B" },
+        { "label": "Traversal", "value": "Smooth l → −l" }
+      ],
+      "presets": [
+        {
+          "id": "interstellar",
+          "name": "Interstellar Portal",
+          "summary": "Compact crystalline throat linking the 4K Milky Way to an exotic golden-teal nebula."
+        },
+        {
+          "id": "ellis",
+          "name": "Pure Ellis Throat",
+          "summary": "Zero-length r(l)=√(ρ²+l²) drainhole metric with clean vacuum gravitational lensing."
+        },
+        {
+          "id": "tunnel",
+          "name": "Long Throat Tunnel",
+          "summary": "Extended cylindrical throat filled with swirling luminous dust and nested reflections."
+        },
+        {
+          "id": "crossing",
+          "name": "Inside the Throat",
+          "summary": "Centered at l=0 looking simultaneously into both asymptotically flat universes."
+        },
+        {
+          "id": "universe_b",
+          "name": "Gargantua Side (Univ B)",
+          "summary": "Emergent viewpoint on the far side looking back toward our Milky Way portal."
+        },
+        {
+          "id": "einstein",
+          "name": "Twin Einstein Rings",
+          "summary": "Tight lensing width emphasizing concentric multiple-orbit light rings around the sphere."
+        }
+      ]
+    },
+    {
+      "id": "binary",
+      "rustVariant": "BinaryBh",
+      "dir": "sims/binary",
+      "index": "03",
+      "shortLabel": "Binary BH",
+      "shortTitle": "Binary BH",
+      "title": "Binary Black Hole Inspiral & GW Lensing",
+      "windowTitle": "Binary BH — Inspiral & Gravitational Wave Simulator",
+      "launchLabel": "Binary BH Sim",
+      "ariaLabel": "Switch to Binary Black Hole Simulator",
+      "debugHandle": "__BINARY_BH__",
+      "accentVar": "--accent-violet",
+      "cardClass": "binary",
+      "cliFlag": "--binary",
+      "aliases": ["binary", "binary-bh", "binary-bh-sim", "bbh"],
+      "description": "Two-body Brill–Lindquist + 2.5PN inspiral, retarded gravitational wave shear, fractal eyebrow shadows, and tidal gas bridges.",
+      "category": "gr",
+      "categoryLabel": "General Relativity",
+      "tagline": "Two-body black hole inspiral with gravitational wave shear",
+      "accent": "#a78bfa",
+      "accentBright": "#c4b5fd",
+      "preview": "./home/previews/binary.webp",
+      "previewAlt": "Orbiting binary black holes surrounded by a glowing circumbinary accretion disk, twin mini-disks, luminous tidal gas bridges, and distorted double shadows.",
+      "equation": "Ψ = 1 + M₁/2r₁ + M₂/2r₂ · h₊,×(t − r/c)",
+      "metricName": "Brill–Lindquist + 2.5PN",
+      "specialControl": "Space triggers 128× cinema still on frozen inspiral phase",
+      "highlights": [
+        "2.5PN Inspiral Decay",
+        "Retarded GW Lensing",
+        "Fractal Eyebrows"
+      ],
+      "specs": [
+        { "label": "Mass Ratio", "value": "q = 0.1 – 1.0" },
+        { "label": "Radiation", "value": "h₊, h× Retarded" },
+        { "label": "Accretion", "value": "Mini-Disks + Bridges" }
+      ],
+      "presets": [
+        {
+          "id": "equal_mass",
+          "name": "Equal-Mass Inspiral",
+          "summary": "Symmetric 1:1 binary spiraling inward with glowing tidal streams and circumbinary ring."
+        },
+        {
+          "id": "emri",
+          "name": "Extreme Mass Ratio (10:1)",
+          "summary": "Secondary black hole carving bright tidal bridges around a dominant primary shadow."
+        },
+        {
+          "id": "eyebrows",
+          "name": "Edge-On Eyebrow Shadows",
+          "summary": "Near-equatorial 88° sightline revealing secondary crescent eyebrow shadows above each hole."
+        },
+        {
+          "id": "tidal_bridges",
+          "name": "Tidal Gas Bridges",
+          "summary": "Elevated 58° vantage highlighting spiral accretion streams feeding both mini-disks."
+        },
+        {
+          "id": "pre_merger",
+          "name": "Pre-Merger Plunge",
+          "summary": "Tight 3.4M separation with strong quadrupole gravitational-wave shear across the sky."
+        },
+        {
+          "id": "vacuum",
+          "name": "Pure Vacuum Binary",
+          "summary": "Disk-free binary spacetime isolating pure double-lensing and retarded GW starfield ripples."
+        }
+      ]
+    },
+    {
+      "id": "warp",
+      "rustVariant": "WarpDrive",
+      "dir": "sims/warp",
+      "index": "04",
+      "shortLabel": "Warp Drive",
+      "shortTitle": "Warp Drive",
+      "title": "Alcubierre Warp Drive — FTL Spacetime",
+      "windowTitle": "Alcubierre Warp — Relativistic FTL Bubble Simulator",
+      "launchLabel": "Alcubierre Warp Drive Sim",
+      "ariaLabel": "Switch to Alcubierre Warp Drive Simulator",
+      "debugHandle": "__WARP_DRIVE__",
+      "accentVar": "--accent-cyan",
+      "cardClass": "warp",
+      "cliFlag": "--warp",
+      "aliases": ["warp", "warp-drive", "warp-drive-sim", "alcubierre"],
+      "description": "Alcubierre, Natário zero-expansion, and Lentz soliton warp metrics with ADM null geodesic ray-tracing, relativistic Doppler bow caustics, and Inside Bridge causal horizon.",
+      "category": "exotic",
+      "categoryLabel": "Exotic Metrics",
+      "tagline": "Superluminal warp bubble with ADM null geodesic caustics",
+      "accent": "#38bdf8",
+      "accentBright": "#7dd3fc",
+      "preview": "./home/previews/warp.webp",
+      "previewAlt": "Superluminal Alcubierre warp bubble hurtling through curved starlight with electric cyan-blue Doppler bow caustics, redshifted aft wake, and streaked relativistic stars.",
+      "equation": "ds² = −dt² + (dx − vₛ f(rₛ) dt)² + dy² + dz²",
+      "metricName": "Alcubierre / Natário / Lentz",
+      "specialControl": "T switches between External Chase and Inside Bridge cockpit",
+      "highlights": [
+        "ADM Null Geodesics",
+        "Doppler Bow Caustic",
+        "Inside Bridge Mode"
+      ],
+      "specs": [
+        { "label": "Speed Range", "value": "0.1c – 5.0c FTL" },
+        { "label": "Metrics", "value": "Alcubierre / Natário / Lentz" },
+        { "label": "Viewpoints", "value": "Chase & Cockpit" }
+      ],
+      "presets": [
+        {
+          "id": "subluminal",
+          "name": "Subluminal Cruise (0.8c)",
+          "summary": "Gentle expansion-contraction wall distortion and crisp forward blueshift at 0.8c."
+        },
+        {
+          "id": "light_barrier",
+          "name": "Light Barrier (1.0c)",
+          "summary": "Critical luminal threshold where forward horizon caustics sharpen into an intense ring."
+        },
+        {
+          "id": "superluminal",
+          "name": "Superluminal (2.5c)",
+          "summary": "Iconic FTL transit with luminous cyan bow caustic, exotic wall shimmer, and star streaks."
+        },
+        {
+          "id": "bridge",
+          "name": "Bridge View (Cockpit)",
+          "summary": "First-person viewpoint inside the flat bubble interior facing the causal horizon wall."
+        },
+        {
+          "id": "thin_wall",
+          "name": "Thin-Wall High-Energy",
+          "summary": "High-sigma 3.5c compression shell amplifying York time-extrinsic curvature shimmer."
+        },
+        {
+          "id": "natario",
+          "name": "Natário Stealth Bubble",
+          "summary": "Zero-expansion divergence-free shift vector sliding spacetime smoothly around the hull."
+        }
+      ]
+    },
+    {
+      "id": "supernova",
+      "rustVariant": "Supernova",
+      "dir": "sims/supernova",
+      "index": "05",
+      "shortLabel": "Supernova",
+      "shortTitle": "Supernova",
+      "title": "Supernova Remnant — Volumetric Nebula",
+      "windowTitle": "Supernova Remnant — Volumetric Nebula Simulator",
+      "launchLabel": "Supernova Remnant Sim",
+      "ariaLabel": "Switch to Supernova Remnant Simulator",
+      "debugHandle": "__SUPERNOVA__",
+      "accentVar": "--accent-nebula",
+      "cardClass": "supernova",
+      "cliFlag": "--supernova",
+      "aliases": ["supernova", "supernova-sim", "snr", "nebula"],
+      "description": "Multi-scattering radiative transfer across Sedov–Taylor shock shells, Rayleigh–Taylor filaments, Bok globules, Hubble SHO / True Color palettes, and deep interior fly-through.",
+      "category": "astro",
+      "categoryLabel": "Astrophysics",
+      "tagline": "Volumetric multi-scattering remnant nebula & shock shell",
+      "accent": "#fb923c",
+      "accentBright": "#fdba74",
+      "preview": "./home/previews/supernova.webp",
+      "previewAlt": "Volumetric glowing supernova remnant nebula with intricate orange-gold and teal Rayleigh–Taylor shock filaments, dark dusty Bok globules, and a luminous central pulsar cavity.",
+      "equation": "dI/ds = j(s) − κ(s)I + σₛ ∫ P_HG(g, cosθ) I dΩ",
+      "metricName": "Sedov–Taylor Radiative Transfer",
+      "specialControl": "W/S flies deep inside the expanding shock shell and dust cavity",
+      "highlights": [
+        "Multi-Scattering Dust",
+        "Rayleigh–Taylor Web",
+        "Hubble SHO & True Color"
+      ],
+      "specs": [
+        { "label": "Blast Model", "value": "Sedov–Taylor" },
+        { "label": "Phase Function", "value": "Henyey–Greenstein" },
+        { "label": "Palettes", "value": "Broadband & SHO" }
+      ],
+      "presets": [
+        {
+          "id": "crab",
+          "name": "Crab Filament Shell",
+          "summary": "970-year-old broadband remnant with tangled ionized filaments and bright pulsar synchrotron core."
+        },
+        {
+          "id": "veil",
+          "name": "Veil Shock Front",
+          "summary": "Aged 10,500-year thin lacework blast wave sweeping cleanly through the interstellar medium."
+        },
+        {
+          "id": "hubble_sho",
+          "name": "Hubble SHO Narrowband",
+          "summary": "Iconic S II / Hα / O III gold-and-cyan narrowband mapping across sculpted dust walls."
+        },
+        {
+          "id": "bok_globules",
+          "name": "Dark Bok Globules",
+          "summary": "Dense forward-scattering dust knots silhouetted against backlit glowing ionization fronts."
+        },
+        {
+          "id": "pulsar_cavity",
+          "name": "Central Pulsar Cavity",
+          "summary": "Close interior vantage immersed in the radiant blue-white synchrotron wind bubble."
+        },
+        {
+          "id": "flythrough",
+          "name": "Deep Interior Flythrough",
+          "summary": "Wide 62° cockpit framing drifting directly inside the turbulent SHO filament web."
+        }
+      ]
+    },
+    {
+      "id": "pulsar",
+      "rustVariant": "Pulsar",
+      "dir": "sims/pulsar",
+      "index": "06",
+      "shortLabel": "Pulsar",
+      "shortTitle": "Pulsar",
+      "title": "Magnetar & Millisecond Pulsar",
+      "windowTitle": "Magnetar & Pulsar — GR Ray-Traced Neutron Star",
+      "launchLabel": "Magnetar & Pulsar Sim",
+      "ariaLabel": "Switch to Magnetar & Pulsar Simulator",
+      "debugHandle": "__PULSAR__",
+      "accentVar": "--accent-pulsar",
+      "cardClass": "pulsar",
+      "cliFlag": "--pulsar",
+      "aliases": ["pulsar", "pulsar-sim", "magnetar", "ns"],
+      "description": "Outgoing Kerr–Schild light bending exposing >50% of the neutron star crust, twisted pair-plasma dipole loops, sweeping lighthouse beams, and PWN torus & jets.",
+      "category": "astro",
+      "categoryLabel": "Astrophysics",
+      "tagline": "Relativistically lensed neutron star, dipole & lighthouse beams",
+      "accent": "#67e8f9",
+      "accentBright": "#a5f3fc",
+      "preview": "./home/previews/pulsar.webp",
+      "previewAlt": "Relativistically lensed young pulsar with sweeping electric-cyan lighthouse beams, twisted pair-plasma dipole loops, glowing polar caps, and a pulsar wind nebula torus and jets.",
+      "equation": "1 − cos α ≈ (1 − cos ψ)(1 − Rₛ/R) · Ω×μ",
+      "metricName": "Kerr–Schild + Twisted Dipole",
+      "specialControl": "Space freezes spin phase for 128× cinema still accumulation",
+      "highlights": [
+        ">50% Crust Visible",
+        "Twisted Dipole Loops",
+        "PWN Torus & Jets"
+      ],
+      "specs": [
+        { "label": "Compactness", "value": "Rₛ/R ≤ 0.29" },
+        { "label": "Spin Period", "value": "1.5 – 320 ms" },
+        { "label": "Emission", "value": "Polar Caps & Beams" }
+      ],
+      "presets": [
+        {
+          "id": "crab",
+          "name": "Crab-like Young Pulsar",
+          "summary": "33 ms oblique rotator with sweeping twin beams, dipolar loops, and equatorial PWN torus."
+        },
+        {
+          "id": "millisecond",
+          "name": "Millisecond Recycled Pulsar",
+          "summary": "Rapid 1.5 ms compact rotator with strong Kerr–Schild light bending and broad radio cones."
+        },
+        {
+          "id": "magnetar",
+          "name": "Ultra-Compact Magnetar",
+          "summary": "Extreme Rₛ/R=0.29 compactness with strongly twisted magnetosphere and glowing crust cracks."
+        },
+        {
+          "id": "polar_cap",
+          "name": "Polar Cap View",
+          "summary": "Close 58° polar inspection showing hot 8 MK magnetic footprints and gravitational self-lensing."
+        },
+        {
+          "id": "edge_on",
+          "name": "Edge-On Lighthouse",
+          "summary": "72° obliquity sweeping razor-bright synchrotron beams straight across the camera lens."
+        },
+        {
+          "id": "pwn_torus",
+          "name": "Torus & Jet PWN",
+          "summary": "Wide establishing shot emphasizing the Chandra-inspired synchrotron ring and polar outflows."
+        }
+      ]
+    },
+    {
+      "id": "starflight",
+      "rustVariant": "Starflight",
+      "dir": "sims/starflight",
+      "index": "07",
+      "shortLabel": "Starflight",
+      "shortTitle": "Starflight",
+      "title": "Relativistic Starflight — Aberration & Doppler Sky",
+      "windowTitle": "Relativistic Starflight — SR Aberration & Doppler Sky",
+      "launchLabel": "Relativistic Starflight Sim",
+      "ariaLabel": "Switch to Relativistic Starflight Simulator",
+      "debugHandle": "__STARFLIGHT__",
+      "accentVar": "--accent-starflight",
+      "cardClass": "starflight",
+      "cliFlag": "--starflight",
+      "aliases": ["starflight", "starflight-sim", "sf", "relativistic"],
+      "description": "Exact Special Relativistic Lorentz null-ray aberration up to 0.9999996c, Planck blackbody UV/IR & CMB blue-shift, Penrose–Terrell rotation on 3D foreground beacons, and 1g brachistochrone cruise.",
+      "category": "sr",
+      "categoryLabel": "Special Relativity",
+      "tagline": "Exact Lorentz aberration, Doppler sky & Terrell rotation",
+      "accent": "#60a5fa",
+      "accentBright": "#93c5fd",
+      "preview": "./home/previews/starflight.webp",
+      "previewAlt": "Relativistic starflight at 0.995c looking through a golden Penrose–Terrell beacon ring as the Milky Way arches into a brilliant blue-violet ultraviolet cone flanked by a passing asteroid and probe.",
+      "equation": "cos θ′ = (cos θ + β)/(1 + β cos θ) · D = [γ(1 − β cos θ)]⁻¹",
+      "metricName": "Exact Lorentz Null-Ray SR",
+      "specialControl": "T flips Forward / Aft viewport; W/S adjusts optical FOV zoom",
+      "highlights": [
+        "Up to 0.9999996c",
+        "Planck UV/IR & CMB",
+        "Terrell 3D Beacons"
+      ],
+      "specs": [
+        { "label": "Peak Velocity", "value": "0.9999996c" },
+        { "label": "Spectrum", "value": "IR → Visible → UV" },
+        { "label": "Propulsion", "value": "1g Brachistochrone" }
+      ],
+      "presets": [
+        {
+          "id": "sub_rel",
+          "name": "0.50c Sub-Relativistic",
+          "summary": "Clear forward star compression and early Penrose–Terrell apparent rotation on passing beacons."
+        },
+        {
+          "id": "headlight_90",
+          "name": "0.90c Headlight Cone",
+          "summary": "Classic relativistic beaming concentrating the Milky Way into an intense sapphire forward cone."
+        },
+        {
+          "id": "uv_milkyway",
+          "name": "0.995c UV Milky Way",
+          "summary": "γ≈10 boost shifting infrared dust into visible gold and optical stars into ultraviolet glow."
+        },
+        {
+          "id": "cmb_glow",
+          "name": "0.9999c CMB Glow",
+          "summary": "Ultra-relativistic γ≈70 flight blue-shifting the 2.725 K Cosmic Microwave Background into sight."
+        },
+        {
+          "id": "aft_redshift",
+          "name": "Aft Redshift View",
+          "summary": "Rear-facing window revealing deep crimson Doppler redshift and stretched receding starfields."
+        },
+        {
+          "id": "brachistochrone",
+          "name": "1g Brachistochrone Cruise",
+          "summary": "Continuous 1g proper acceleration integrating ship proper time τ against external coordinate time."
+        }
+      ]
+    }
+  ]
+}

@@ -2,13 +2,13 @@ use std::f32::consts::PI;
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::renderer::post::{make_fs_pipe, run_fs_pass, PostFrameParams, PostTuning};
 use crate::renderer::SharedGpuAssets;
+use crate::renderer::post::{PostFrameParams, PostTuning, make_fs_pipe, run_fs_pass};
 use crate::shaders;
 use crate::sims::{
-    ease_out_cubic, step_critically_damped, wrap_angle_delta, ControlItem, ControlKind,
-    ControlSection, HudMetadata, PresetMeta, SimId, SimInput, Simulation, SpecialActionUi,
-    StepOutcome, TelemetryCell,
+    ControlItem, ControlKind, ControlSection, HudMetadata, PresetMeta, SimId, SimInput, Simulation,
+    SpecialActionUi, StepOutcome, TelemetryCell, ease_out_cubic, step_critically_damped,
+    wrap_angle_delta,
 };
 
 const DEG2RAD: f32 = PI / 180.0;
@@ -495,11 +495,7 @@ impl WormholeCamera {
             }
         } else {
             let mag = start_l.abs().max(2.0);
-            if start_l > 0.0 {
-                -mag
-            } else {
-                mag
-            }
+            if start_l > 0.0 { -mag } else { mag }
         }
         .clamp(MIN_L, MAX_L);
 
@@ -915,8 +911,8 @@ impl WormholeSim {
             throat_len as f64,
             lensing_w as f64,
         ) as f32;
-        let escape_l = (self.camera.l.abs() * 3.0 + 40.0)
-            .max(throat_len + 4.0 * lensing_w.max(0.35) + 80.0);
+        let escape_l =
+            (self.camera.l.abs() * 3.0 + 40.0).max(throat_len + 4.0 * lensing_w.max(0.35) + 80.0);
         let b = self.camera.basis;
         let n0 = self.camera.n0;
 
@@ -986,7 +982,7 @@ impl Simulation for WormholeSim {
     }
 
     fn presets(&self) -> Vec<PresetMeta> {
-        PRESETS.iter().map(|p| p.meta.clone()).collect()
+        PRESETS.iter().map(|p| p.meta).collect()
     }
 
     fn active_preset_index(&self) -> Option<usize> {
@@ -1377,8 +1373,7 @@ impl Simulation for WormholeSim {
         if !self.paused {
             self.sim_time += dt.clamp(0.0, 0.05);
         }
-        self.camera
-            .update(dt, self.paused, self.auto_orbit, input);
+        self.camera.update(dt, self.paused, self.auto_orbit, input);
         StepOutcome {
             camera_moved: self.camera.moved,
             sim_time: self.sim_time,

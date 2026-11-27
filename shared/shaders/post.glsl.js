@@ -9,7 +9,7 @@
  *                    subtle triangular-PDF dither / film grain, and exact linear-to-sRGB encoding
  */
 
-import { formatShaderFloat, resolvePostOpticsProfile } from './postConfig.js';
+import { resolvePostOpticsProfile } from './postConfig.js';
 
 export const TAA_FRAG = `#version 300 es
 precision highp float;
@@ -283,13 +283,7 @@ void main() {
 }
 `;
 
-function buildAnamorphicFrag(p) {
-  const core = p.coreTint.map(formatShaderFloat).join(', ');
-  const outer = p.outerTint.map(formatShaderFloat).join(', ');
-  const fStart = formatShaderFloat(p.fringeStart);
-  const fMix = formatShaderFloat(p.fringeMix);
-
-  return `#version 300 es
+export const ANAMORPHIC_FRAG = `#version 300 es
 precision highp float;
 
 in vec2 vUv;
@@ -300,6 +294,8 @@ uniform vec2 uTexelSize;
 uniform float uThreshold;
 uniform float uSpread;
 uniform int uPass;
+uniform vec4 uTintInnerEdge;
+uniform vec4 uTintOuterMix;
 
 vec3 isolateHighlights(vec3 c) {
   bvec3 bad = bvec3(isnan(c.r) || isinf(c.r), isnan(c.g) || isinf(c.g), isnan(c.b) || isinf(c.b));
@@ -337,7 +333,11 @@ void main() {
       float w = exp(-af * 3.1) + 0.22 / (1.0 + af * af * 9.0);
 
       // Subtle chromatic glass coating
-      vec3 tint = mix(vec3(${core}), vec3(${outer}), smoothstep(${fStart}, 1.0, af) * ${fMix});
+      vec3 tint = mix(
+        uTintInnerEdge.xyz,
+        uTintOuterMix.xyz,
+        smoothstep(uTintInnerEdge.w, 1.0, af) * uTintOuterMix.w
+      );
       sum += s * tint * w;
       weightSum += w;
     }
@@ -362,13 +362,8 @@ void main() {
   fragColor = vec4(sum / max(weightSum, 1e-5), 1.0);
 }
 `;
-}
 
-function buildCompositeFrag(p) {
-  const bloomGain = formatShaderFloat(p.bloomGain);
-  const anamorphicGain = formatShaderFloat(p.anamorphicGain);
-
-  return `#version 300 es
+export const COMPOSITE_FRAG = `#version 300 es
 precision highp float;
 
 in vec2 vUv;
@@ -381,6 +376,8 @@ uniform vec2 uResolution;
 uniform float uExposure;
 uniform float uBloomIntensity;
 uniform float uAnamorphicIntensity;
+uniform float uBloomGain;
+uniform float uAnamorphicGain;
 uniform float uTime;
 uniform int uFrameIndex;
 
@@ -478,8 +475,8 @@ void main() {
 
   // Energy-balanced optical bloom & horizontal 70mm anamorphic streak
   vec3 hdr = scene
-    + bloom * (uBloomIntensity * ${bloomGain})
-    + anamorphic * (uAnamorphicIntensity * ${anamorphicGain});
+    + bloom * (uBloomIntensity * uBloomGain)
+    + anamorphic * (uAnamorphicIntensity * uAnamorphicGain);
 
   // Camera exposure
   hdr *= max(uExposure, 0.01);
@@ -510,23 +507,20 @@ void main() {
   fragColor = vec4(srgb, 1.0);
 }
 `;
-}
 
 /**
- * Generates the complete set of GLSL post-processing shaders for a named optics profile.
+ * Returns the complete set of GLSL post-processing shaders and validates the optics profile.
+ * Optical constants are supplied via uniforms at runtime.
  * @param {string | object} [profile='default']
  */
 export function createPostShadersGLSL(profile = 'default') {
-  const resolved = resolvePostOpticsProfile(profile);
+  resolvePostOpticsProfile(profile);
   return {
     TAA_FRAG,
     BLOOM_PREFILTER_FRAG,
     BLOOM_DOWNSAMPLE_FRAG,
     BLOOM_UPSAMPLE_FRAG,
-    ANAMORPHIC_FRAG: buildAnamorphicFrag(resolved),
-    COMPOSITE_FRAG: buildCompositeFrag(resolved),
+    ANAMORPHIC_FRAG,
+    COMPOSITE_FRAG,
   };
 }
-
-export const ANAMORPHIC_FRAG = buildAnamorphicFrag(resolvePostOpticsProfile('default'));
-export const COMPOSITE_FRAG = buildCompositeFrag(resolvePostOpticsProfile('default'));

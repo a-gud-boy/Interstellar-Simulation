@@ -9,7 +9,8 @@ on:
       - "home/**"
       - "shared/**"
       - "scripts/**"
-      - "*-sim/**"
+      - "sims/**"
+      - "desktop/**"
       - ".github/workflows/web-ci.yml"
   pull_request:
     branches:
@@ -19,7 +20,8 @@ on:
       - "home/**"
       - "shared/**"
       - "scripts/**"
-      - "*-sim/**"
+      - "sims/**"
+      - "desktop/**"
       - ".github/workflows/web-ci.yml"
 
 jobs:
@@ -35,5 +37,37 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Verify unified metadata registry
+        run: node scripts/sync-metadata.mjs --check
+
+      - name: Verify single-source WGSL wrappers
+        run: node scripts/sync-wgsl.mjs --check
+
       - name: Run shared & simulator physics checks
         run: node scripts/run-tests.mjs --physics
+
+  rust-check:
+    name: Desktop Rust Parity, Shaders, Clippy & Fmt
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo dependencies & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path desktop/Cargo.toml -- --check
+
+      - name: Run Clippy lints
+        run: cargo clippy --manifest-path desktop/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run desktop physics parity & WGSL shader validation
+        run: cargo test --manifest-path desktop/Cargo.toml --test physics_parity --test shader_validation

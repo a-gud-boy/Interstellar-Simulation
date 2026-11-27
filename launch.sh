@@ -2,22 +2,24 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+MANIFEST_PATH="${SCRIPT_DIR}/shared/sims.json"
 SIM_TARGET="home"
+SIM_DIR=""
+SIM_LABEL="Interstellar Observatory Homepage"
 HOST="127.0.0.1"
 START_PORT=8080
 MODE="chrome"
 BACKEND=""
+DRY_RUN=0
 EXTRA_ARGS=()
 
 usage() {
   cat <<'EOF'
 Usage: ./launch.sh [OPTIONS] [-- EXTRA_BROWSER_ARGS...]
 
-Global launcher for the Interstellar Spacetime Simulators (Gargantua Black Hole,
-Morris-Thorne Traversable Wormhole, Binary Black Hole Inspiral, Alcubierre
-Warp Drive, Supernova Remnant & Nebula, Magnetar & Millisecond Pulsar, and
-Relativistic Starflight) on NVIDIA GPU with live WebGL2/WebGPU switching and
-cross-simulation navigation.
+Global launcher for the Interstellar Spacetime Simulators (resolved dynamically
+from shared/sims.json) on NVIDIA GPU with live WebGL2/WebGPU switching,
+cross-simulation navigation, and native Rust desktop launch.
 
 Simulation Options:
   --home, --hub         Open Interstellar Observatory Homepage (default)
@@ -28,7 +30,7 @@ Simulation Options:
   --supernova, --snr    Open Supernova Remnant & Nebula Simulator
   --pulsar, --magnetar  Open Magnetar & Millisecond Pulsar Simulator
   --starflight, --sf    Open Relativistic Starflight Simulator
-  --sim <name>          Select target: home | blackhole | wormhole | binary | warp | supernova | pulsar | starflight
+  --sim <name>          Select target: home | any canonical ID or alias in shared/sims.json
 
 Backend Options:
   --webgpu, -w          Start directly in WebGPU backend (?backend=webgpu)
@@ -38,81 +40,52 @@ Target / Browser Options:
   --chrome              Launch in Google Chrome / Chromium in dark mode (default)
   --firefox, -f         Launch in Firefox (with NVIDIA WebGL2 + WebGPU enabled)
   --desktop, -d         Launch native Rust desktop binary (desktop/run.sh)
+  --dry-run             Resolve target/URL from shared/sims.json and exit without launching
   --help, -h            Show this help message
 EOF
 }
 
+resolve_sim_json() {
+  python3 - "$MANIFEST_PATH" "$1" <<'PY'
+import json, sys
+
+manifest_path, raw = sys.argv[1], sys.argv[2].strip().lower()
+if raw in ("home", "hub", "index", "observatory"):
+    print("home\t\tInterstellar Observatory Homepage")
+    sys.exit(0)
+
+with open(manifest_path, "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+for sim in data.get("simulators", []):
+    aliases = [a.strip().lower() for a in sim.get("aliases", [])]
+    if raw == sim.get("id", "").lower() or raw == sim.get("dir", "").lower() or raw in aliases:
+        label = sim.get("launchLabel") or sim.get("title") or sim["id"]
+        print(f"{sim['id']}\t{sim['dir']}\t{label}")
+        sys.exit(0)
+
+sys.exit(1)
+PY
+}
+
 set_sim_target() {
-  local raw="${1,,}"
-  case "${raw}" in
-    home|hub|index|observatory)
-      SIM_TARGET="home"
-      ;;
-    blackhole|blackhole-sim|gargantua|bh)
-      SIM_TARGET="home"
-      ;;
-    wormhole|wormhole-sim|wh)
-      SIM_TARGET="wormhole"
-      ;;
-    binary|binary-bh|binary-bh-sim|bbh)
-      SIM_TARGET="binary"
-      ;;
-    warp|warp-drive|warp-drive-sim|alcubierre)
-      SIM_TARGET="warp"
-      ;;
-    supernova|supernova-sim|snr|nebula)
-      SIM_TARGET="supernova"
-      ;;
-    pulsar|pulsar-sim|magnetar|ns)
-      SIM_TARGET="pulsar"
-      ;;
-    starflight|starflight-sim|sf|relativistic)
-      SIM_TARGET="starflight"
-      ;;
-    *)
-      echo "Error: unknown simulation '${1}'. Expected 'home', 'blackhole', 'wormhole', 'binary', 'warp', 'supernova', 'pulsar', or 'starflight'." >&2
-      exit 1
-      ;;
-  esac
+  local resolved
+  if ! resolved="$(resolve_sim_json "$1")"; then
+    echo "Error: unknown simulation '${1}' (not found in ${MANIFEST_PATH})." >&2
+    exit 1
+  fi
+  IFS=$'\t' read -r SIM_TARGET SIM_DIR SIM_LABEL <<< "${resolved}"
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --home|--hub)
-      SIM_TARGET="home"
-      shift
-      ;;
-    --blackhole)
-      SIM_TARGET="home"
-      shift
-      ;;
-    --wormhole)
-      SIM_TARGET="wormhole"
-      shift
-      ;;
-    --binary|--binary-bh)
-      SIM_TARGET="binary"
-      shift
-      ;;
-    --warp|--warp-drive)
-      SIM_TARGET="warp"
-      shift
-      ;;
-    --supernova|--snr)
-      SIM_TARGET="supernova"
-      shift
-      ;;
-    --pulsar|--magnetar)
-      SIM_TARGET="pulsar"
-      shift
-      ;;
-    --starflight|--sf)
-      SIM_TARGET="starflight"
+      set_sim_target "home"
       shift
       ;;
     --sim)
       if [[ $# -lt 2 ]]; then
-        echo "Error: --sim requires an argument ('home', 'blackhole', 'wormhole', 'binary', 'warp', 'supernova', 'pulsar', or 'starflight')." >&2
+        echo "Error: --sim requires an argument ('home' or any simulator alias in shared/sims.json)." >&2
         exit 1
       fi
       set_sim_target "$2"
@@ -142,6 +115,10 @@ while [[ $# -gt 0 ]]; do
       MODE="desktop"
       shift
       ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -151,6 +128,15 @@ while [[ $# -gt 0 ]]; do
       EXTRA_ARGS+=("$@")
       break
       ;;
+    --*)
+      if resolved="$(resolve_sim_json "${1#--}")"; then
+        IFS=$'\t' read -r SIM_TARGET SIM_DIR SIM_LABEL <<< "${resolved}"
+        shift
+      else
+        EXTRA_ARGS+=("$1")
+        shift
+      fi
+      ;;
     *)
       EXTRA_ARGS+=("$1")
       shift
@@ -158,30 +144,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "${SIM_TARGET}" == "home" ]]; then
-  SIM_DIR=""
-  SIM_LABEL="Interstellar Observatory Homepage"
-elif [[ "${SIM_TARGET}" == "wormhole" ]]; then
-  SIM_DIR="wormhole-sim"
-  SIM_LABEL="Wormhole Sim"
-elif [[ "${SIM_TARGET}" == "binary" ]]; then
-  SIM_DIR="binary-bh-sim"
-  SIM_LABEL="Binary BH Sim"
-elif [[ "${SIM_TARGET}" == "warp" ]]; then
-  SIM_DIR="warp-drive-sim"
-  SIM_LABEL="Alcubierre Warp Drive Sim"
-elif [[ "${SIM_TARGET}" == "supernova" ]]; then
-  SIM_DIR="supernova-sim"
-  SIM_LABEL="Supernova Remnant Sim"
-elif [[ "${SIM_TARGET}" == "pulsar" ]]; then
-  SIM_DIR="pulsar-sim"
-  SIM_LABEL="Magnetar & Pulsar Sim"
-elif [[ "${SIM_TARGET}" == "starflight" ]]; then
-  SIM_DIR="starflight-sim"
-  SIM_LABEL="Relativistic Starflight Sim"
+if [[ "${BACKEND}" == "webgpu" ]]; then
+  BACKEND_LABEL="WebGPU (switchable to WebGL2 in Controls)"
+  QUERY="?backend=webgpu"
+elif [[ "${BACKEND}" == "webgl2" ]]; then
+  BACKEND_LABEL="WebGL2 (switchable to WebGPU in Controls)"
+  QUERY="?backend=webgl2"
 else
-  SIM_DIR="blackhole-sim"
-  SIM_LABEL="Gargantua Black Hole Sim"
+  BACKEND_LABEL="WebGL2 default (switchable to WebGPU in Controls)"
+  QUERY=""
+fi
+
+if [[ "${DRY_RUN}" -eq 1 ]]; then
+  echo "DRY_RUN target=${SIM_TARGET} dir=${SIM_DIR:-<root>} mode=${MODE} backend=${BACKEND:-default} label=${SIM_LABEL} query=${QUERY:-none}"
+  exit 0
 fi
 
 if [[ "${MODE}" == "desktop" ]]; then
@@ -203,17 +179,6 @@ if [[ -n "${SIM_DIR}" ]]; then
 elif [[ ! -f "${SCRIPT_DIR}/index.html" ]]; then
   echo "Error: homepage not found: ${SCRIPT_DIR}/index.html" >&2
   exit 1
-fi
-
-if [[ "${BACKEND}" == "webgpu" ]]; then
-  BACKEND_LABEL="WebGPU (switchable to WebGL2 in Controls)"
-  QUERY="?backend=webgpu"
-elif [[ "${BACKEND}" == "webgl2" ]]; then
-  BACKEND_LABEL="WebGL2 (switchable to WebGPU in Controls)"
-  QUERY="?backend=webgl2"
-else
-  BACKEND_LABEL="WebGL2 default (switchable to WebGPU in Controls)"
-  QUERY=""
 fi
 
 # Pick the first available local port starting at 8080
@@ -273,7 +238,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Serve Trial root so relative ../wormhole-sim/ and ../blackhole-sim/ switcher URLs both resolve
+# Serve repo root so relative switcher URLs resolve across all simulators
 python3 -m http.server "${PORT}" --bind "${HOST}" --directory "${SCRIPT_DIR}" >/dev/null 2>&1 &
 SERVER_PID=$!
 

@@ -8,7 +8,7 @@
  *  3. Interactive UX Flows: hero spotlight switcher, category filter pills, global WebGL2 <-> WebGPU toggle,
  *     Quick-Inspect <dialog> dossier (open, 6 presets + equation, close button + Escape),
  *     and Navigation E2E (launch simulator with ?backend=webgpu + return via #sim-switch-home preserving ?backend=webgpu)
- *  4. Routing Backwards Compatibility: /?sim=pulsar&backend=webgpu redirects to /pulsar-sim/?backend=webgpu; /?hub renders homepage
+ *  4. Routing Backwards Compatibility: /?sim=pulsar&backend=webgpu redirects to /sims/pulsar/?backend=webgpu; /?hub renders homepage
  *  5. Visual Screenshots at desktop (1440x810) and mobile (390x844, zero horizontal overflow)
  */
 
@@ -338,13 +338,13 @@ async function main() {
 
     // 3f. Navigation E2E: Launch simulator with ?backend=webgpu -> return via #sim-switch-home preserving ?backend=webgpu
     currentStep = '4a_launch_blackhole';
-    console.log('4. Testing Navigation E2E (Homepage -> blackhole-sim ?backend=webgpu -> #sim-switch-home -> Homepage)...');
+    console.log('4. Testing Navigation E2E (Homepage -> sims/blackhole ?backend=webgpu -> #sim-switch-home -> Homepage)...');
     await evalJS(`document.getElementById('hero-launch-btn')?.click()`);
     const simLaunchDiag = await waitForCondition(`(() => {
       const api = window.__GARGANTUA__;
       const d = api?.getDiagnostics?.();
       const homeLink = document.getElementById('sim-switch-home');
-      if (window.location.pathname.includes('/blackhole-sim/') && d && d.backend === 'webgpu' && !d.switchingBackend && homeLink) {
+      if (window.location.pathname.includes('/sims/blackhole/') && d && d.backend === 'webgpu' && !d.switchingBackend && homeLink) {
         return {
           pathname: window.location.pathname,
           search: window.location.search,
@@ -382,7 +382,7 @@ async function main() {
     await cdp.send('Page.navigate', { url: `http://127.0.0.1:${port}/?sim=pulsar&backend=webgpu` });
     const redirectPulsarCheck = await waitForCondition(`(() => {
       const d = window.__PULSAR__?.getDiagnostics?.();
-      if (window.location.pathname.includes('/pulsar-sim/') && d && d.backend === 'webgpu' && !d.switchingBackend) {
+      if (window.location.pathname.includes('/sims/pulsar/') && d && d.backend === 'webgpu' && !d.switchingBackend) {
         return {
           pathname: window.location.pathname,
           search: window.location.search,
@@ -542,7 +542,7 @@ async function main() {
         heroAfter.imgSrc !== heroBefore.imgSrc &&
         heroAfter.imgSrc?.includes('wormhole.webp') &&
         heroAfter.imgWidth > 0 &&
-        heroAfter.launchHref?.includes('wormhole-sim') &&
+        heroAfter.launchHref?.includes('sims/wormhole') &&
         heroAfter.activeCardId === 'wormhole' &&
         heroAfter.cardBtnPressed === 'true',
       'Filmstrip spotlight switcher updates stage backdrop, title, active pill, and launch href',
@@ -578,11 +578,11 @@ async function main() {
     );
 
     check(
-      simLaunchDiag?.pathname?.includes('/blackhole-sim/') &&
+      simLaunchDiag?.pathname?.includes('/sims/blackhole/') &&
         simLaunchDiag?.search?.includes('backend=webgpu') &&
         simLaunchDiag?.backend === 'webgpu' &&
         simLaunchDiag?.allShadersCompiled === true &&
-        simLaunchDiag?.homeHref === '../?backend=webgpu' &&
+        simLaunchDiag?.homeHref === '../../?backend=webgpu' &&
         simLaunchDiag?.homeHasSimHrefAttr === false &&
         simLaunchDiag?.simSwitchCount === 7,
       'Launching simulator from homepage boots in WebGPU with #sim-switch-home synced cleanly',
@@ -599,11 +599,11 @@ async function main() {
     );
 
     check(
-      redirectPulsarCheck?.pathname?.includes('/pulsar-sim/') &&
+      redirectPulsarCheck?.pathname?.includes('/sims/pulsar/') &&
         redirectPulsarCheck?.search?.includes('backend=webgpu') &&
         redirectPulsarCheck?.backend === 'webgpu' &&
         redirectPulsarCheck?.allShadersCompiled === true,
-      'Backwards-compatible /?sim=pulsar&backend=webgpu redirects immediately to /pulsar-sim/?backend=webgpu',
+      'Backwards-compatible /?sim=pulsar&backend=webgpu redirects immediately to /sims/pulsar/?backend=webgpu',
       JSON.stringify(redirectPulsarCheck)
     );
 

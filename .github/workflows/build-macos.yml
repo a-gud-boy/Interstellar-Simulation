@@ -19,6 +19,9 @@ on:
       - desktop/**
       - home/previews/**
       - shared/assets/milkyway_4k.jpg
+      - shared/sims.json
+      - shared/shaders/*.wgsl
+      - "sims/*/src/shaders/*.wgsl"
       - .github/workflows/build-macos.yml
     tags:
       - "v*"
@@ -45,8 +48,8 @@ jobs:
         with:
           workspaces: desktop
 
-      - name: Run deterministic physics parity tests
-        run: cargo test --manifest-path desktop/Cargo.toml --test physics_parity
+      - name: Run deterministic physics parity & WGSL shader validation tests
+        run: cargo test --manifest-path desktop/Cargo.toml --test physics_parity --test shader_validation
 
       - name: Build and package Interstellar.app (.zip + .dmg)
         run: |

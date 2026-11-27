@@ -1,15 +1,16 @@
-pub mod binary_bh;
+pub mod binary;
 pub mod blackhole;
 pub mod pulsar;
+pub mod registry;
 pub mod starflight;
 pub mod supernova;
-pub mod warp_drive;
+pub mod warp;
 pub mod wormhole;
 
 use egui::Color32;
 
-use crate::renderer::post::{PostFrameParams, PostTuning};
 use crate::renderer::SharedGpuAssets;
+use crate::renderer::post::{PostFrameParams, PostTuning};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum SimId {
@@ -34,52 +35,19 @@ impl SimId {
     ];
 
     pub fn switch_label(self) -> &'static str {
-        match self {
-            SimId::Blackhole => "Black Hole",
-            SimId::Wormhole => "Wormhole",
-            SimId::BinaryBh => "Binary BH",
-            SimId::WarpDrive => "Warp Drive",
-            SimId::Supernova => "Supernova",
-            SimId::Pulsar => "Pulsar",
-            SimId::Starflight => "Starflight",
-        }
+        registry::registry_entry(self).switch_label
     }
 
     pub fn cli_name(self) -> &'static str {
-        match self {
-            SimId::Blackhole => "blackhole",
-            SimId::Wormhole => "wormhole",
-            SimId::BinaryBh => "binary",
-            SimId::WarpDrive => "warp",
-            SimId::Supernova => "supernova",
-            SimId::Pulsar => "pulsar",
-            SimId::Starflight => "starflight",
-        }
+        registry::registry_entry(self).cli_name
     }
 
     pub fn window_title(self) -> &'static str {
-        match self {
-            SimId::Blackhole => "Gargantua — Relativistic Black Hole Simulator",
-            SimId::Wormhole => "Wormhole — Traversable Spacetime Simulator",
-            SimId::BinaryBh => "Binary BH — Inspiral & Gravitational Wave Simulator",
-            SimId::WarpDrive => "Alcubierre Warp — Relativistic FTL Bubble Simulator",
-            SimId::Supernova => "Supernova Remnant — Volumetric Nebula Simulator",
-            SimId::Pulsar => "Magnetar & Pulsar — GR Ray-Traced Neutron Star",
-            SimId::Starflight => "Relativistic Starflight — SR Aberration & Doppler Sky",
-        }
+        registry::registry_entry(self).window_title
     }
 
     pub fn from_cli_name(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "blackhole" | "blackhole-sim" | "bh" | "gargantua" => Some(SimId::Blackhole),
-            "wormhole" | "wormhole-sim" | "wh" => Some(SimId::Wormhole),
-            "binary" | "binary-bh" | "binary-bh-sim" | "bbh" => Some(SimId::BinaryBh),
-            "warp" | "warp-drive" | "warp-drive-sim" | "alcubierre" => Some(SimId::WarpDrive),
-            "supernova" | "supernova-sim" | "snr" | "nebula" => Some(SimId::Supernova),
-            "pulsar" | "pulsar-sim" | "magnetar" | "ns" => Some(SimId::Pulsar),
-            "starflight" | "starflight-sim" | "sf" | "relativistic" => Some(SimId::Starflight),
-            _ => None,
-        }
+        registry::resolve_sim_id(s)
     }
 }
 
@@ -388,8 +356,8 @@ pub fn create_simulation(id: SimId, assets: &mut SharedGpuAssets) -> Box<dyn Sim
     match id {
         SimId::Blackhole => Box::new(blackhole::BlackholeSim::new(assets)),
         SimId::Wormhole => Box::new(wormhole::WormholeSim::new(assets)),
-        SimId::BinaryBh => Box::new(binary_bh::BinaryBhSim::new(assets)),
-        SimId::WarpDrive => Box::new(warp_drive::WarpDriveSim::new(assets)),
+        SimId::BinaryBh => Box::new(binary::BinaryBhSim::new(assets)),
+        SimId::WarpDrive => Box::new(warp::WarpDriveSim::new(assets)),
         SimId::Supernova => Box::new(supernova::SupernovaSim::new(assets)),
         SimId::Pulsar => Box::new(pulsar::PulsarSim::new(assets)),
         SimId::Starflight => Box::new(starflight::StarflightSim::new(assets)),

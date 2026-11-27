@@ -85,7 +85,7 @@ assert(
 );
 
 assert(
-  getSimById('pulsar')?.dir === 'pulsar-sim' &&
+  getSimById('pulsar')?.dir === 'sims/pulsar' &&
     resolveSimByAlias('gargantua')?.id === 'blackhole' &&
     resolveSimByAlias('bbh')?.id === 'binary' &&
     resolveSimByAlias('alcubierre')?.id === 'warp' &&
@@ -110,22 +110,86 @@ assert(
   `files=[${milkywayFiles.join(', ')}], bytes=${skyBytes}`
 );
 
-console.log('\n=== 3. Shared HTML / CSS / Switcher Wiring Across All 7 Simulators ===');
+console.log('\n=== 3. Shared HTML / CSS / Engine / Switcher Wiring Across All 7 Simulators ===');
 const baseCss = fs.readFileSync(path.join(REPO_ROOT, 'shared/ui/base.css'), 'utf8');
 assert(baseCss.includes('.sim-canvas') && baseCss.includes('.sim-switcher'), 'shared/ui/base.css defines .sim-canvas and .sim-switcher');
+
+const simAppShellSrc = fs.readFileSync(path.join(REPO_ROOT, 'shared/engine/SimAppShell.js'), 'utf8');
+assert(
+  simAppShellSrc.includes("'../ui/simSwitcher.js'") && simAppShellSrc.includes("'../assets/skyLoader.js'"),
+  'shared/engine/SimAppShell.js imports ../ui/simSwitcher.js and ../assets/skyLoader.js'
+);
 
 for (const sim of SIMULATORS) {
   const html = fs.readFileSync(path.join(REPO_ROOT, sim.dir, 'index.html'), 'utf8');
   const mainJs = fs.readFileSync(path.join(REPO_ROOT, sim.dir, 'src/main.js'), 'utf8');
+  const glJs = fs.readFileSync(path.join(REPO_ROOT, sim.dir, 'src/engine/WebGLRenderer.js'), 'utf8');
+  const gpuJs = fs.readFileSync(path.join(REPO_ROOT, sim.dir, 'src/engine/WebGPURenderer.js'), 'utf8');
+  const camJs = fs.readFileSync(path.join(REPO_ROOT, sim.dir, 'src/engine/CameraController.js'), 'utf8');
+  const ffQaJs = fs.readFileSync(path.join(REPO_ROOT, sim.dir, 'tests/firefox_qa.mjs'), 'utf8');
   const ok =
-    html.includes('../shared/ui/base.css') &&
+    html.includes('../../shared/ui/base.css') &&
     html.includes('class="sim-canvas"') &&
     html.includes(`data-current-sim="${sim.id}"`) &&
     !html.includes('sim-switch-link') &&
-    mainJs.includes('../../shared/ui/simSwitcher.js') &&
-    mainJs.includes('../../shared/assets/skyLoader.js');
-  assert(ok, `${sim.dir} cleanly wired to shared/ui/base.css, simSwitcher.js, and skyLoader.js`);
+    mainJs.includes('../../../shared/engine/SimAppShell.js') &&
+    glJs.includes('../../../../shared/engine/SharedWebGLPostPipeline.js') &&
+    gpuJs.includes('../../../../shared/engine/SharedWebGPUPostPipeline.js') &&
+    camJs.includes('../../../../shared/engine/BaseCamera.js') &&
+    ffQaJs.includes('../../../shared/testing/firefoxQaRunner.mjs');
+  assert(
+    ok,
+    `${sim.dir} cleanly wired to base.css, SimAppShell, SharedWeb{GL,GPU}PostPipeline, BaseCamera, and firefoxQaRunner`
+  );
+
+  const engineDir = path.join(REPO_ROOT, sim.dir, 'src/engine');
+  const expectedEngine = ['CameraController.js', 'Physics.js', 'Presets.js', 'WebGLRenderer.js', 'WebGPURenderer.js'];
+  const actualEngine = fs.readdirSync(engineDir).filter((f) => f.endsWith('.js')).sort();
+  assert(
+    JSON.stringify(actualEngine) === JSON.stringify(expectedEngine),
+    `${sim.dir}/src/engine has canonical 5-file layout (${actualEngine.join(', ')})`
+  );
 }
+
+console.log('\n=== 3b. Shared Engine & Testing Export Contracts ===');
+const baseCamMod = await import(path.join(REPO_ROOT, 'shared/engine/BaseCamera.js'));
+const glPostMod = await import(path.join(REPO_ROOT, 'shared/engine/SharedWebGLPostPipeline.js'));
+const gpuPostMod = await import(path.join(REPO_ROOT, 'shared/engine/SharedWebGPUPostPipeline.js'));
+const appShellMod = await import(path.join(REPO_ROOT, 'shared/engine/SimAppShell.js'));
+const ffRunnerMod = await import(path.join(REPO_ROOT, 'shared/testing/firefoxQaRunner.mjs'));
+
+assert(
+  typeof baseCamMod.stepCriticallyDamped === 'function' &&
+    typeof baseCamMod.computeSphericalOrbitBasis === 'function' &&
+    typeof baseCamMod.applyLocalLookTriad === 'function' &&
+    typeof baseCamMod.normalizeWheelDelta === 'function' &&
+    typeof baseCamMod.clamp === 'function' &&
+    typeof baseCamMod.wrapAngleDelta === 'function' &&
+    typeof baseCamMod.easeOutCubic === 'function' &&
+    typeof baseCamMod.easeInOutCubic === 'function' &&
+    typeof glPostMod.SharedWebGLPostPipeline === 'function' &&
+    typeof gpuPostMod.SharedWebGPUPostPipeline === 'function' &&
+    typeof appShellMod.createSimApp === 'function' &&
+    typeof ffRunnerMod.runSimFirefoxQA === 'function',
+  'shared/engine/*.js and shared/testing/firefoxQaRunner.mjs export all required APIs'
+);
+
+const sharedGlPostSrc = fs.readFileSync(path.join(REPO_ROOT, 'shared/engine/SharedWebGLPostPipeline.js'), 'utf8');
+const postGlslAll = Object.values((await import(path.join(REPO_ROOT, 'shared/shaders/post.glsl.js'))).createPostShadersGLSL('default')).join('\n');
+const postGlUniforms = [];
+{
+  const re = /\buniform\s+(?:highp\s+|mediump\s+|lowp\s+)?\w+\s+(\w+)\s*(?:\[[^\]]*\])?\s*;/g;
+  let m;
+  while ((m = re.exec(postGlslAll)) !== null) {
+    if (!postGlUniforms.includes(m[1])) postGlUniforms.push(m[1]);
+  }
+}
+const unboundSharedGlPost = postGlUniforms.filter((u) => !sharedGlPostSrc.includes(u));
+assert(
+  postGlUniforms.length > 0 && unboundSharedGlPost.length === 0,
+  'shared/engine/SharedWebGLPostPipeline.js binds all uniforms declared in shared/shaders/post.glsl.js',
+  `bound=${postGlUniforms.length}, missing=[${unboundSharedGlPost.join(',')}]`
+);
 
 console.log('\n=== 4. Shared Dual-Backend Assets & Post Optics Profile Parity ===');
 const lutsMod = await import(path.join(REPO_ROOT, 'shared/assets/physicalLuts.js'));
@@ -195,14 +259,31 @@ for (const profileName of Object.keys(POST_OPTICS_PROFILES)) {
   const wg = postWgslMod.createPostShadersWGSL(profileName);
   const glOk = Object.values(gl).every((s) => s.includes('#version 300 es'));
   const wgOk = Object.values(wg).every((s) => s.includes('@fragment') && !forbiddenGlsl.test(s));
-  const bloomToken = String(p.bloomGain);
-  const anaToken = String(p.anamorphicGain);
-  const parityOk =
-    gl.COMPOSITE_FRAG.includes(bloomToken) &&
-    wg.COMPOSITE_WGSL.includes(bloomToken) &&
-    gl.COMPOSITE_FRAG.includes(anaToken) &&
-    wg.COMPOSITE_WGSL.includes(anaToken);
-  assert(glOk && wgOk && parityOk, `Post shader profile '${profileName}' passes GLSL <-> WGSL parity`);
+  const profileOk =
+    Array.isArray(p.coreTint) &&
+    p.coreTint.length === 3 &&
+    p.coreTint.every(Number.isFinite) &&
+    Array.isArray(p.outerTint) &&
+    p.outerTint.length === 3 &&
+    p.outerTint.every(Number.isFinite) &&
+    Number.isFinite(p.fringeStart) &&
+    Number.isFinite(p.fringeMix) &&
+    Number.isFinite(p.bloomGain) &&
+    Number.isFinite(p.anamorphicGain);
+  const uniformParityOk =
+    gl.ANAMORPHIC_FRAG.includes('uniform vec4 uTintInnerEdge;') &&
+    gl.ANAMORPHIC_FRAG.includes('uniform vec4 uTintOuterMix;') &&
+    wg.ANAMORPHIC_WGSL.includes('tint_inner_edge') &&
+    wg.ANAMORPHIC_WGSL.includes('tint_outer_mix') &&
+    gl.COMPOSITE_FRAG.includes('uniform float uBloomGain;') &&
+    gl.COMPOSITE_FRAG.includes('uniform float uAnamorphicGain;') &&
+    wg.COMPOSITE_WGSL.includes('weights_pad') &&
+    wg.COMPOSITE_WGSL.includes('u.weights_pad.x') &&
+    wg.COMPOSITE_WGSL.includes('u.weights_pad.y');
+  assert(
+    glOk && wgOk && profileOk && uniformParityOk,
+    `Post shader profile '${profileName}' passes GLSL <-> WGSL uniform parity`
+  );
 }
 
 assert(

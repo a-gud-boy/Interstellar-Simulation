@@ -21,7 +21,7 @@ All simulators maintain 1:1 visual and physical parity between **WebGL2** (`WebG
    - Preserve IEEE NaN/Inf guards (`isBadFloat` / `sanitizeHdr` / safe hyperbolic clamps) across both backends, especially for NVIDIA WebGPU and `rg11b10ufloat` / `rgba16float` HDR render targets.
 5. **Mandatory Verification**: After editing any simulation shader or renderer file, run that simulation's contract suite; after editing `shared/shaders/`, run the full physics suite and confirm zero failures:
    ```bash
-   node <sim>/tests/physics_check.mjs
+   node sims/<id>/tests/physics_check.mjs
    # or for shared/shaders/ changes:
    node scripts/run-tests.mjs --physics
    ```

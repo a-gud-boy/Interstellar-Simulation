@@ -2,14 +2,13 @@ use std::f32::consts::PI;
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::renderer::post::{make_fs_pipe, run_fs_pass, PostFrameParams, PostTuning};
 use crate::renderer::SharedGpuAssets;
+use crate::renderer::post::{PostFrameParams, PostTuning, make_fs_pipe, run_fs_pass};
 use crate::shaders;
 use crate::sims::blackhole::format_thousands;
 use crate::sims::{
-    ease_out_cubic, step_critically_damped, wrap_angle_delta, ControlItem, ControlKind,
-    ControlSection, HudMetadata, PresetMeta, SimId, SimInput, Simulation, StepOutcome,
-    TelemetryCell,
+    ControlItem, ControlKind, ControlSection, HudMetadata, PresetMeta, SimId, SimInput, Simulation,
+    StepOutcome, TelemetryCell, ease_out_cubic, step_critically_damped, wrap_angle_delta,
 };
 
 const DEG2RAD: f32 = PI / 180.0;
@@ -416,8 +415,7 @@ pub fn compute_supernova_telemetry(
         let h_alpha = gaussian(u, 0.96, 0.15 * thick);
         let sii = gaussian(u, 1.09, 0.11 * thick);
         let dust_env = smoothstep(0.76, 1.04, u) * (1.0 - smoothstep(1.34, 1.66, u)) * dust_op;
-        let bok_env =
-            smoothstep(0.86, 1.06, u) * (1.0 - smoothstep(1.32, 1.58, u)) * dust_op * bok;
+        let bok_env = smoothstep(0.86, 1.06, u) * (1.0 - smoothstep(1.32, 1.58, u)) * dust_op * bok;
         let gas = (0.18 * pwn_cavity + 0.55 * oiii + 0.95 * h_alpha + 0.65 * sii) * gain;
         let sigma_scat = 0.08 * gas + 0.52 * dust_env + 0.42 * bok_env;
         let sigma_abs = 0.02 * gas + 0.26 * dust_env + 0.48 * bok_env;
@@ -658,7 +656,8 @@ impl SupernovaCamera {
         } else {
             let back = -step_dist;
             if straight && self.target_distance > 0.05 {
-                self.target_distance = (self.target_distance + back).clamp(MIN_DISTANCE, MAX_DISTANCE);
+                self.target_distance =
+                    (self.target_distance + back).clamp(MIN_DISTANCE, MAX_DISTANCE);
             } else {
                 self.target_pivot = clamp_pivot([
                     self.target_pivot[0] - fwd[0] * back,
@@ -1122,7 +1121,12 @@ impl SupernovaSim {
                 tel.central_temp_k as f32,
                 if is_progressive { 1.0 } else { 0.0 },
             ],
-            zone_params: [self.bok_density, self.shell_thickness, self.emission_gain, 0.0],
+            zone_params: [
+                self.bok_density,
+                self.shell_thickness,
+                self.emission_gain,
+                0.0,
+            ],
         }
     }
 }
@@ -1146,7 +1150,7 @@ impl Simulation for SupernovaSim {
     }
 
     fn presets(&self) -> Vec<PresetMeta> {
-        PRESETS.iter().map(|p| p.meta.clone()).collect()
+        PRESETS.iter().map(|p| p.meta).collect()
     }
 
     fn active_preset_index(&self) -> Option<usize> {
@@ -1567,8 +1571,7 @@ impl Simulation for SupernovaSim {
         if !self.paused {
             self.sim_time += dt.clamp(0.0, 0.05);
         }
-        self.camera
-            .update(dt, self.paused, self.auto_orbit, input);
+        self.camera.update(dt, self.paused, self.auto_orbit, input);
         StepOutcome {
             camera_moved: self.camera.moved,
             sim_time: self.sim_time,

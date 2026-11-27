@@ -1,7 +1,7 @@
 pub mod post;
 
-use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 use crate::assets::{luts, sky};
@@ -726,7 +726,9 @@ pub fn readback_rgba8_texture(
     let _ = device.poll(wgpu::PollType::wait_indefinitely());
     rx.recv().unwrap().expect("Failed to map readback buffer");
 
-    let mapped = slice.get_mapped_range().expect("Failed to get mapped buffer view");
+    let mapped = slice
+        .get_mapped_range()
+        .expect("Failed to get mapped buffer view");
     let mut out = vec![0u8; (width * height * 4) as usize];
     for y in 0..height as usize {
         let src_start = y * padded_bytes_per_row as usize;

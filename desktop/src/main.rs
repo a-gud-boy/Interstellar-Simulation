@@ -14,15 +14,15 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-use interstellar_desktop::renderer::post::{PostPipeline, MAX_PROGRESSIVE_SAMPLES};
-use interstellar_desktop::renderer::{
-    format_adapter_label, readback_rgba8_texture, SharedGpuAssets,
-};
-use interstellar_desktop::sims::{create_simulation, SimId, SimInput, Simulation};
-use interstellar_desktop::ui::{
-    configure_fonts, draw_homepage, draw_hud, HomeAction, HomeState, HudAction, HudState,
-};
 use interstellar_desktop::APP_VERSION;
+use interstellar_desktop::renderer::post::{MAX_PROGRESSIVE_SAMPLES, PostPipeline};
+use interstellar_desktop::renderer::{
+    SharedGpuAssets, format_adapter_label, readback_rgba8_texture,
+};
+use interstellar_desktop::sims::{SimId, SimInput, Simulation, create_simulation};
+use interstellar_desktop::ui::{
+    HomeAction, HomeState, HudAction, HudState, configure_fonts, draw_homepage, draw_hud,
+};
 
 const DEFAULT_MAX_FPS: u32 = 165;
 
@@ -71,7 +71,9 @@ fn parse_cli_args() -> CliArgs {
                 match parse_sim_arg(&val) {
                     Ok(sim) => out.start_sim = sim,
                     Err(bad) => {
-                        eprintln!("[interstellar-desktop] Unknown --sim '{bad}', opening homepage.");
+                        eprintln!(
+                            "[interstellar-desktop] Unknown --sim '{bad}', opening homepage."
+                        );
                     }
                 }
             }
@@ -80,50 +82,50 @@ fn parse_cli_args() -> CliArgs {
                 out.start_sim = sim;
             }
         } else if arg == "--width" {
-            if let Some(val) = it.next() {
-                if let Ok(w) = val.parse::<u32>() {
-                    out.width = w.clamp(640, 7680);
-                }
+            if let Some(val) = it.next()
+                && let Ok(w) = val.parse::<u32>()
+            {
+                out.width = w.clamp(640, 7680);
             }
         } else if let Some(val) = arg.strip_prefix("--width=") {
             if let Ok(w) = val.parse::<u32>() {
                 out.width = w.clamp(640, 7680);
             }
         } else if arg == "--height" {
-            if let Some(val) = it.next() {
-                if let Ok(h) = val.parse::<u32>() {
-                    out.height = h.clamp(360, 4320);
-                }
+            if let Some(val) = it.next()
+                && let Ok(h) = val.parse::<u32>()
+            {
+                out.height = h.clamp(360, 4320);
             }
         } else if let Some(val) = arg.strip_prefix("--height=") {
             if let Ok(h) = val.parse::<u32>() {
                 out.height = h.clamp(360, 4320);
             }
         } else if arg == "--vsync" {
-            if let Some(val) = it.next() {
-                if let Some(b) = parse_bool_flag(&val) {
-                    out.vsync = b;
-                }
+            if let Some(val) = it.next()
+                && let Some(b) = parse_bool_flag(&val)
+            {
+                out.vsync = b;
             }
         } else if let Some(val) = arg.strip_prefix("--vsync=") {
             if let Some(b) = parse_bool_flag(val) {
                 out.vsync = b;
             }
         } else if arg == "--max-fps" {
-            if let Some(val) = it.next() {
-                if let Ok(n) = val.parse::<u32>() {
-                    out.max_fps = n.clamp(15, 1000);
-                }
+            if let Some(val) = it.next()
+                && let Ok(n) = val.parse::<u32>()
+            {
+                out.max_fps = n.clamp(15, 1000);
             }
         } else if let Some(val) = arg.strip_prefix("--max-fps=") {
             if let Ok(n) = val.parse::<u32>() {
                 out.max_fps = n.clamp(15, 1000);
             }
         } else if arg == "--smoke-frames" {
-            if let Some(val) = it.next() {
-                if let Ok(n) = val.parse::<u32>() {
-                    out.smoke_frames = Some(n.max(1));
-                }
+            if let Some(val) = it.next()
+                && let Ok(n) = val.parse::<u32>()
+            {
+                out.smoke_frames = Some(n.max(1));
             }
         } else if let Some(val) = arg.strip_prefix("--smoke-frames=") {
             if let Ok(n) = val.parse::<u32>() {
@@ -543,10 +545,13 @@ impl RuntimeState {
 
         if let Some(sr) = &mut self.sim_rt {
             let res_scale = (sr.sim.get_i32("resolutionScale") as f32 / 100.0).clamp(0.5, 1.0);
-            if sr
-                .post
-                .resize(&sr.assets.device, &sr.assets.queue, width, height, res_scale)
-            {
+            if sr.post.resize(
+                &sr.assets.device,
+                &sr.assets.queue,
+                width,
+                height,
+                res_scale,
+            ) {
                 self.egui_renderer.update_egui_texture_from_wgpu_texture(
                     &sr.assets.device,
                     &sr.post.glass_backdrop_rt.view,
@@ -610,7 +615,11 @@ impl RuntimeState {
                     return;
                 }
                 HudAction::SwitchSim(next_id) => {
-                    if self.sim_rt.as_ref().is_some_and(|sr| sr.sim.id() != next_id) {
+                    if self
+                        .sim_rt
+                        .as_ref()
+                        .is_some_and(|sr| sr.sim.id() != next_id)
+                    {
                         self.enter_sim(next_id, None);
                     }
                 }
@@ -690,34 +699,35 @@ impl RuntimeState {
 
     fn handle_shortcut(&mut self, code: KeyCode) {
         if self.screen == AppScreen::Home {
-            if !self.egui_ctx.egui_wants_keyboard_input() {
-                if self.home.inspect_sim.is_none() && !self.home.controls_open {
-                    if matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
-                        use interstellar_desktop::ui::home::{catalog_entry, CategoryFilter};
-                        let visible: Vec<SimId> = SimId::ALL
+            if !self.egui_ctx.egui_wants_keyboard_input()
+                && self.home.inspect_sim.is_none()
+                && !self.home.controls_open
+            {
+                if matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
+                    use interstellar_desktop::ui::home::{CategoryFilter, catalog_entry};
+                    let visible: Vec<SimId> = SimId::ALL
+                        .iter()
+                        .copied()
+                        .filter(|&id| {
+                            self.home.category == CategoryFilter::All
+                                || catalog_entry(id).category == self.home.category
+                        })
+                        .collect();
+                    if !visible.is_empty() {
+                        let idx = visible
                             .iter()
-                            .copied()
-                            .filter(|&id| {
-                                self.home.category == CategoryFilter::All
-                                    || catalog_entry(id).category == self.home.category
-                            })
-                            .collect();
-                        if !visible.is_empty() {
-                            let idx = visible
-                                .iter()
-                                .position(|&s| s == self.home.spotlight)
-                                .unwrap_or(0);
-                            let next = if code == KeyCode::ArrowRight {
-                                (idx + 1) % visible.len()
-                            } else {
-                                (idx + visible.len() - 1) % visible.len()
-                            };
-                            self.home.spotlight = visible[next];
-                            self.needs_redraw = true;
-                        }
-                    } else if code == KeyCode::Enter {
-                        self.enter_sim(self.home.spotlight, None);
+                            .position(|&s| s == self.home.spotlight)
+                            .unwrap_or(0);
+                        let next = if code == KeyCode::ArrowRight {
+                            (idx + 1) % visible.len()
+                        } else {
+                            (idx + visible.len() - 1) % visible.len()
+                        };
+                        self.home.spotlight = visible[next];
+                        self.needs_redraw = true;
                     }
+                } else if code == KeyCode::Enter {
+                    self.enter_sim(self.home.spotlight, None);
                 }
             }
             return;
@@ -1079,20 +1089,20 @@ impl RuntimeState {
         }
         self.rendered_frames += 1;
 
-        if self.screen == AppScreen::Sim {
-            if let Some(rem) = self.next_frame_at.checked_duration_since(Instant::now()) {
-                #[cfg(target_os = "windows")]
-                let spin_margin = Duration::from_micros(1500);
-                #[cfg(not(target_os = "windows"))]
-                let spin_margin = Duration::from_micros(500);
+        if self.screen == AppScreen::Sim
+            && let Some(rem) = self.next_frame_at.checked_duration_since(Instant::now())
+        {
+            #[cfg(target_os = "windows")]
+            let spin_margin = Duration::from_micros(1500);
+            #[cfg(not(target_os = "windows"))]
+            let spin_margin = Duration::from_micros(500);
 
-                let sleep_dur = rem.saturating_sub(spin_margin);
-                if !sleep_dur.is_zero() {
-                    std::thread::sleep(sleep_dur);
-                }
-                while Instant::now() < self.next_frame_at {
-                    std::hint::spin_loop();
-                }
+            let sleep_dur = rem.saturating_sub(spin_margin);
+            if !sleep_dur.is_zero() {
+                std::thread::sleep(sleep_dur);
+            }
+            while Instant::now() < self.next_frame_at {
+                std::hint::spin_loop();
             }
         }
     }
@@ -1161,14 +1171,12 @@ impl ApplicationHandler for DesktopApp {
                     let dragging_canvas = rt.input.left_down_canvas
                         || rt.input.right_down_canvas
                         || rt.input.middle_down_canvas;
-                    if dragging_canvas {
-                        if let Some(p) = prev {
-                            let ppp = rt.window.scale_factor() as f32;
-                            rt.input.pending_drag_delta[0] +=
-                                ((position.x - p[0]) as f32) / ppp.max(1.0);
-                            rt.input.pending_drag_delta[1] +=
-                                ((position.y - p[1]) as f32) / ppp.max(1.0);
-                        }
+                    if dragging_canvas && let Some(p) = prev {
+                        let ppp = rt.window.scale_factor() as f32;
+                        rt.input.pending_drag_delta[0] +=
+                            ((position.x - p[0]) as f32) / ppp.max(1.0);
+                        rt.input.pending_drag_delta[1] +=
+                            ((position.y - p[1]) as f32) / ppp.max(1.0);
                     }
                 }
             }
@@ -1193,7 +1201,8 @@ impl ApplicationHandler for DesktopApp {
                                             }
                                             rt.input.last_left_click_at = None;
                                         } else {
-                                            rt.input.last_left_click_at = Some((Instant::now(), pos));
+                                            rt.input.last_left_click_at =
+                                                Some((Instant::now(), pos));
                                         }
                                     } else {
                                         rt.input.last_left_click_at = Some((Instant::now(), pos));
@@ -1263,37 +1272,33 @@ impl ApplicationHandler for DesktopApp {
                     event_loop.exit();
                     return;
                 }
-                if pressed
-                    && !repeat
-                    && !cmd_or_ctrl
-                    && !rt.input.modifiers.alt_key()
-                {
+                if pressed && !repeat && !cmd_or_ctrl && !rt.input.modifiers.alt_key() {
                     rt.handle_shortcut(code);
                 }
             }
             WindowEvent::RedrawRequested => {
                 rt.render_frame();
-                if let Some(target) = self.cli.smoke_frames {
-                    if rt.rendered_frames >= target {
-                        let active_label = match rt.screen {
-                            AppScreen::Home => "home",
-                            AppScreen::Sim => rt
-                                .sim_rt
-                                .as_ref()
-                                .map(|sr| sr.sim.id().cli_name())
-                                .unwrap_or("sim"),
-                        };
-                        println!(
-                            "[interstellar-desktop] Smoke OK: sim={}, adapter={}, frames={}, resolution={}x{}, fps={:.1}",
-                            active_label,
-                            rt.adapter_label,
-                            rt.rendered_frames,
-                            rt.surface_config.width,
-                            rt.surface_config.height,
-                            rt.fps_smoothed,
-                        );
-                        event_loop.exit();
-                    }
+                if let Some(target) = self.cli.smoke_frames
+                    && rt.rendered_frames >= target
+                {
+                    let active_label = match rt.screen {
+                        AppScreen::Home => "home",
+                        AppScreen::Sim => rt
+                            .sim_rt
+                            .as_ref()
+                            .map(|sr| sr.sim.id().cli_name())
+                            .unwrap_or("sim"),
+                    };
+                    println!(
+                        "[interstellar-desktop] Smoke OK: sim={}, adapter={}, frames={}, resolution={}x{}, fps={:.1}",
+                        active_label,
+                        rt.adapter_label,
+                        rt.rendered_frames,
+                        rt.surface_config.width,
+                        rt.surface_config.height,
+                        rt.fps_smoothed,
+                    );
+                    event_loop.exit();
                 }
             }
             _ => {}
@@ -1302,10 +1307,7 @@ impl ApplicationHandler for DesktopApp {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(rt) = &mut self.runtime {
-            if rt.screen == AppScreen::Sim {
-                event_loop.set_control_flow(ControlFlow::Poll);
-                rt.window.request_redraw();
-            } else if rt.needs_redraw || self.cli.smoke_frames.is_some() {
+            if rt.screen == AppScreen::Sim || rt.needs_redraw || self.cli.smoke_frames.is_some() {
                 event_loop.set_control_flow(ControlFlow::Poll);
                 rt.window.request_redraw();
             } else if let Some(t) = rt.next_repaint_at {
@@ -1364,5 +1366,7 @@ fn main() {
     let cli = parse_cli_args();
     let event_loop = EventLoop::new().expect("Failed to initialize winit EventLoop");
     let mut app = DesktopApp { cli, runtime: None };
-    event_loop.run_app(&mut app).expect("Desktop event loop exited with error");
+    event_loop
+        .run_app(&mut app)
+        .expect("Desktop event loop exited with error");
 }

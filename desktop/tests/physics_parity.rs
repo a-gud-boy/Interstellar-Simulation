@@ -1,8 +1,7 @@
 use std::f64::consts::PI;
 
-use interstellar_desktop::sims::binary_bh::{
-    compute_binary_state, eggleton_roche_radius, peters_mathews_rate, step_binary_orbit,
-    OrbitState,
+use interstellar_desktop::sims::binary::{
+    OrbitState, compute_binary_state, eggleton_roche_radius, peters_mathews_rate, step_binary_orbit,
 };
 use interstellar_desktop::sims::blackhole::compute_kerr_telemetry;
 use interstellar_desktop::sims::pulsar::{
@@ -16,7 +15,7 @@ use interstellar_desktop::sims::starflight::{
 use interstellar_desktop::sims::supernova::{
     compute_supernova_telemetry, eval_dual_hg, eval_hg, eval_sedov_taylor,
 };
-use interstellar_desktop::sims::warp_drive::{compute_warp_telemetry, eval_shape, eval_warp_metric};
+use interstellar_desktop::sims::warp::{compute_warp_telemetry, eval_shape, eval_warp_metric};
 use interstellar_desktop::sims::wormhole::{compute_wormhole_telemetry, eval_wormhole_r};
 
 #[test]
@@ -74,7 +73,10 @@ fn binary_bh_inspiral_parity() {
     for _ in 0..100 {
         step_binary_orbit(&mut orb, 1.0, 12.0, 1, 1.0, 0.05);
     }
-    assert!(orb.current_sep < 12.0, "2.5PN inspiral must shrink separation");
+    assert!(
+        orb.current_sep < 12.0,
+        "2.5PN inspiral must shrink separation"
+    );
     assert!(orb.phase.is_finite());
 }
 
@@ -90,7 +92,10 @@ fn warp_drive_metric_parity() {
     let len = eval_warp_metric([2.0, 0.0, 0.8], 2, 2.0, 3.0, 2.5, 1.0);
     assert!(alc.theta.abs() > 0.0);
     assert!(alc.t00 < 0.0);
-    assert!((nat.theta - 0.0).abs() < 1e-12, "Natario metric is expansion-free");
+    assert!(
+        (nat.theta - 0.0).abs() < 1e-12,
+        "Natario metric is expansion-free"
+    );
     assert!(nat.t00.is_finite() && len.t00.is_finite());
 
     let tel = compute_warp_telemetry(0, 2.0, 3.0, 2.5);
@@ -105,7 +110,10 @@ fn supernova_sedov_and_hg_parity() {
     let e_late = eval_sedov_taylor(640_000.0);
     // Deep in Sedov-Taylor regime, R ~ t^(2/5), so 32^(2/5) = 4.0
     let ratio = e_late.shock_radius_ly / e_early.shock_radius_ly;
-    assert!((ratio - 4.0).abs() < 0.25, "unexpected expansion ratio: {ratio}");
+    assert!(
+        (ratio - 4.0).abs() < 0.25,
+        "unexpected expansion ratio: {ratio}"
+    );
     assert!(e_early.expansion_velocity_kms > e_late.expansion_velocity_kms);
 
     assert!(eval_hg(1.0, 0.65) > eval_hg(-1.0, 0.65));

@@ -1,0 +1,445 @@
+#!/usr/bin/env node
+/**
+ * Unified Metadata Registry Generator & Drift Guard (`scripts/sync-metadata.mjs`).
+ *
+ * Reads canonical `shared/sims.json` and generates/verifies zero-fetch JS ESM
+ * (`shared/simRegistry.js`, `home/catalogData.js`) and zero-dependency Rust
+ * `const` tables (`desktop/src/sims/registry.rs`).
+ *
+ * Usage:
+ *   node scripts/sync-metadata.mjs --check   # Verify all generated files match shared/sims.json (default)
+ *   node scripts/sync-metadata.mjs --write   # Regenerate JS and Rust metadata modules
+ */
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(__dirname, '..');
+const MANIFEST_REL = 'shared/sims.json';
+
+function jsStr(value) {
+  return JSON.stringify(String(value));
+}
+
+function rsStr(value) {
+  return JSON.stringify(String(value));
+}
+
+function parseHexRgb(hex, label) {
+  const m = /^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/.exec(hex);
+  if (!m) {
+    throw new Error(`Invalid hex color "${hex}" for ${label}`);
+  }
+  return [
+    `0x${m[1].toLowerCase()}`,
+    `0x${m[2].toLowerCase()}`,
+    `0x${m[3].toLowerCase()}`,
+  ];
+}
+
+const RUST_CATEGORIES = {
+  gr: 'SimCategory::GeneralRelativity',
+  exotic: 'SimCategory::ExoticMetrics',
+  astro: 'SimCategory::Astrophysics',
+  sr: 'SimCategory::SpecialRelativity',
+};
+
+function validateManifest(manifest) {
+  if (!manifest || typeof manifest !== 'object') {
+    throw new Error('shared/sims.json must export a root object.');
+  }
+  const { categories, simulators } = manifest;
+  if (!Array.isArray(categories) || categories.length < 2) {
+    throw new Error('shared/sims.json must declare a non-empty categories array.');
+  }
+  if (!Array.isArray(simulators) || simulators.length !== 7) {
+    throw new Error(`shared/sims.json must declare 7 simulators (found ${simulators?.length ?? 0}).`);
+  }
+
+  const seenIds = new Set();
+  const seenDirs = new Set();
+  const seenHandles = new Set();
+  const seenAliases = new Set();
+
+  for (const sim of simulators) {
+    for (const key of [
+      'id', 'rustVariant', 'dir', 'index', 'shortLabel', 'shortTitle', 'title',
+      'windowTitle', 'launchLabel', 'ariaLabel', 'debugHandle', 'accentVar',
+      'cliFlag', 'description', 'category', 'categoryLabel', 'tagline',
+      'accent', 'accentBright', 'preview', 'previewAlt', 'equation',
+      'metricName', 'specialControl',
+    ]) {
+      if (typeof sim[key] !== 'string' || sim[key].trim().length === 0) {
+        throw new Error(`Simulator "${sim.id || '?'}" missing string field "${key}".`);
+      }
+    }
+    if (typeof sim.cardClass !== 'string') {
+      throw new Error(`Simulator "${sim.id}" cardClass must be a string.`);
+    }
+    if (!RUST_CATEGORIES[sim.category]) {
+      throw new Error(`Simulator "${sim.id}" has unknown category "${sim.category}".`);
+    }
+    if (!Array.isArray(sim.aliases) || sim.aliases.length === 0) {
+      throw new Error(`Simulator "${sim.id}" must declare non-empty aliases.`);
+    }
+    if (!Array.isArray(sim.highlights) || sim.highlights.length !== 3) {
+      throw new Error(`Simulator "${sim.id}" must declare 3 highlights.`);
+    }
+    if (!Array.isArray(sim.specs) || sim.specs.length !== 3) {
+      throw new Error(`Simulator "${sim.id}" must declare 3 specs.`);
+    }
+    if (!Array.isArray(sim.presets) || sim.presets.length !== 6) {
+      throw new Error(`Simulator "${sim.id}" must declare 6 presets.`);
+    }
+    if (seenIds.has(sim.id)) throw new Error(`Duplicate simulator id: ${sim.id}`);
+    if (seenDirs.has(sim.dir)) throw new Error(`Duplicate simulator dir: ${sim.dir}`);
+    if (seenHandles.has(sim.debugHandle)) throw new Error(`Duplicate debugHandle: ${sim.debugHandle}`);
+    seenIds.add(sim.id);
+    seenDirs.add(sim.dir);
+    seenHandles.add(sim.debugHandle);
+
+    for (const alias of sim.aliases) {
+      const norm = String(alias).trim().toLowerCase();
+      if (!norm || seenAliases.has(norm)) {
+        throw new Error(`Duplicate or empty alias "${alias}" on simulator "${sim.id}".`);
+      }
+      seenAliases.add(norm);
+    }
+  }
+}
+
+function renderSimRegistryJs(manifest) {
+  const entries = manifest.simulators.map((sim) => {
+    const aliases = sim.aliases.map(jsStr).join(', ');
+    return [
+      '  Object.freeze({',
+      `    id: ${jsStr(sim.id)},`,
+      `    dir: ${jsStr(sim.dir)},`,
+      `    shortLabel: ${jsStr(sim.shortLabel)},`,
+      `    title: ${jsStr(sim.title)},`,
+      `    ariaLabel: ${jsStr(sim.ariaLabel)},`,
+      `    debugHandle: ${jsStr(sim.debugHandle)},`,
+      `    accentVar: ${jsStr(sim.accentVar)},`,
+      `    cardClass: ${jsStr(sim.cardClass)},`,
+      `    aliases: Object.freeze([${aliases}]),`,
+      `    description: ${jsStr(sim.description)},`,
+      '  }),',
+    ].join('\n');
+  });
+
+  return [
+    `// AUTO-GENERATED by scripts/sync-metadata.mjs from ${MANIFEST_REL}. Do not edit directly.`,
+    '/**',
+    ' * Canonical registry of all Interstellar Spacetime Simulators.',
+    ' * Single source of truth for root routing, fallback cards, top-right nav switcher,',
+    ' * launch/test tooling, and shared verification scripts.',
+    ' */',
+    '',
+    'export const SIMULATORS = Object.freeze([',
+    ...entries,
+    ']);',
+    '',
+    '/**',
+    ' * Finds a simulator entry by its canonical `id`.',
+    ' * @param {string} id',
+    ' */',
+    'export function getSimById(id) {',
+    "  const key = String(id || '').trim().toLowerCase();",
+    '  return SIMULATORS.find((sim) => sim.id === key) || null;',
+    '}',
+    '',
+    '/**',
+    ' * Resolves any CLI/URL alias (or directory name) to its simulator entry.',
+    ' * Returns `SIMULATORS[0]` (blackhole) when empty/unmatched unless `strict` is true.',
+    ' * @param {string} raw',
+    ' * @param {{ strict?: boolean }} [options]',
+    ' */',
+    'export function resolveSimByAlias(raw, { strict = false } = {}) {',
+    "  const key = String(raw || '').trim().toLowerCase();",
+    '  if (!key) {',
+    '    return strict ? null : SIMULATORS[0];',
+    '  }',
+    '  const found = SIMULATORS.find(',
+    '    (sim) => sim.id === key || sim.dir === key || sim.aliases.includes(key)',
+    '  );',
+    '  if (found) return found;',
+    '  return strict ? null : SIMULATORS[0];',
+    '}',
+    '',
+  ].join('\n');
+}
+
+function renderCatalogDataJs(manifest) {
+  const categories = manifest.categories.map(
+    (c) => `  Object.freeze({ id: ${jsStr(c.id)}, label: ${jsStr(c.label)} }),`
+  );
+
+  const metaBlocks = manifest.simulators.map((sim) => {
+    const highlights = sim.highlights.map((h) => `      ${jsStr(h)},`);
+    const specs = sim.specs.map(
+      (s) => `      Object.freeze({ label: ${jsStr(s.label)}, value: ${jsStr(s.value)} }),`
+    );
+    const presets = sim.presets.map((p) =>
+      [
+        '      Object.freeze({',
+        `        id: ${jsStr(p.id)},`,
+        `        name: ${jsStr(p.name)},`,
+        `        summary: ${jsStr(p.summary)},`,
+        '      }),',
+      ].join('\n')
+    );
+
+    return [
+      `  ${sim.id}: Object.freeze({`,
+      `    index: ${jsStr(sim.index)},`,
+      `    category: ${jsStr(sim.category)},`,
+      `    categoryLabel: ${jsStr(sim.categoryLabel)},`,
+      `    tagline: ${jsStr(sim.tagline)},`,
+      `    accent: ${jsStr(sim.accent)},`,
+      `    accentBright: ${jsStr(sim.accentBright)},`,
+      `    preview: ${jsStr(sim.preview)},`,
+      `    previewAlt: ${jsStr(sim.previewAlt)},`,
+      `    equation: ${jsStr(sim.equation)},`,
+      `    metricName: ${jsStr(sim.metricName)},`,
+      `    cliFlag: ${jsStr(sim.cliFlag)},`,
+      `    specialControl: ${jsStr(sim.specialControl)},`,
+      '    highlights: Object.freeze([',
+      ...highlights,
+      '    ]),',
+      '    specs: Object.freeze([',
+      ...specs,
+      '    ]),',
+      '    presets: Object.freeze([',
+      ...presets,
+      '    ]),',
+      '  }),',
+    ].join('\n');
+  });
+
+  return [
+    `// AUTO-GENERATED by scripts/sync-metadata.mjs from ${MANIFEST_REL}. Do not edit directly.`,
+    '/**',
+    ' * Canonical Homepage catalog metadata & physics dossiers for all 7 Interstellar',
+    ' * Spacetime Simulators. Pure ES module, zero dependencies.',
+    ' */',
+    '',
+    'export const CATEGORIES = Object.freeze([',
+    ...categories,
+    ']);',
+    '',
+    'export const SIM_CATALOG_META = Object.freeze({',
+    ...metaBlocks,
+    '});',
+    '',
+  ].join('\n');
+}
+
+function renderRustRegistry(manifest) {
+  const entries = manifest.simulators.map((sim) => {
+    const accent = parseHexRgb(sim.accent, `${sim.id}.accent`);
+    const accentBright = parseHexRgb(sim.accentBright, `${sim.id}.accentBright`);
+    const aliases = sim.aliases.map(rsStr).join(', ');
+    const highlights = sim.highlights.map((h) => `            ${rsStr(h)},`);
+    const specs = sim.specs.map(
+      (s) => `            (${rsStr(s.label)}, ${rsStr(s.value)}),`
+    );
+    const presets = sim.presets.map((p) =>
+      [
+        '            (',
+        `                ${rsStr(p.name)},`,
+        `                ${rsStr(p.summary)},`,
+        '            ),',
+      ].join('\n')
+    );
+
+    return [
+      '    SimRegistryEntry {',
+      `        id: SimId::${sim.rustVariant},`,
+      `        index: ${rsStr(sim.index)},`,
+      `        cli_name: ${rsStr(sim.id)},`,
+      `        switch_label: ${rsStr(sim.shortLabel)},`,
+      `        window_title: ${rsStr(sim.windowTitle)},`,
+      `        aliases: &[${aliases}],`,
+      `        category: ${RUST_CATEGORIES[sim.category]},`,
+      `        category_label: ${rsStr(sim.categoryLabel)},`,
+      `        title: ${rsStr(sim.title)},`,
+      `        short_title: ${rsStr(sim.shortTitle)},`,
+      `        tagline: ${rsStr(sim.tagline)},`,
+      `        description: ${rsStr(sim.description)},`,
+      `        equation: ${rsStr(sim.equation)},`,
+      `        metric_name: ${rsStr(sim.metricName)},`,
+      `        accent_rgb: [${accent.join(', ')}],`,
+      `        accent_bright_rgb: [${accentBright.join(', ')}],`,
+      `        special_control: ${rsStr(sim.specialControl)},`,
+      '        highlights: [',
+      ...highlights,
+      '        ],',
+      '        specs: [',
+      ...specs,
+      '        ],',
+      '        presets: [',
+      ...presets,
+      '        ],',
+      '    },',
+    ].join('\n');
+  });
+
+  const matchArms = manifest.simulators.map(
+    (sim, idx) => `        SimId::${sim.rustVariant} => &SIM_REGISTRY[${idx}],`
+  );
+
+  return [
+    `// AUTO-GENERATED by scripts/sync-metadata.mjs from ${MANIFEST_REL}. Do not edit directly.`,
+    '',
+    'use crate::sims::SimId;',
+    '',
+    '#[derive(Copy, Clone, Debug, Eq, PartialEq)]',
+    'pub enum SimCategory {',
+    '    GeneralRelativity,',
+    '    ExoticMetrics,',
+    '    Astrophysics,',
+    '    SpecialRelativity,',
+    '}',
+    '',
+    'pub struct SimRegistryEntry {',
+    '    pub id: SimId,',
+    "    pub index: &'static str,",
+    "    pub cli_name: &'static str,",
+    "    pub switch_label: &'static str,",
+    "    pub window_title: &'static str,",
+    "    pub aliases: &'static [&'static str],",
+    '    pub category: SimCategory,',
+    "    pub category_label: &'static str,",
+    "    pub title: &'static str,",
+    "    pub short_title: &'static str,",
+    "    pub tagline: &'static str,",
+    "    pub description: &'static str,",
+    "    pub equation: &'static str,",
+    "    pub metric_name: &'static str,",
+    '    pub accent_rgb: [u8; 3],',
+    '    pub accent_bright_rgb: [u8; 3],',
+    "    pub special_control: &'static str,",
+    "    pub highlights: [&'static str; 3],",
+    "    pub specs: [(&'static str, &'static str); 3],",
+    "    pub presets: [(&'static str, &'static str); 6],",
+    '}',
+    '',
+    'pub const SIM_REGISTRY: [SimRegistryEntry; 7] = [',
+    ...entries,
+    '];',
+    '',
+    'pub const fn registry_entry(id: SimId) -> &\'static SimRegistryEntry {',
+    '    match id {',
+    ...matchArms,
+    '    }',
+    '}',
+    '',
+    'pub fn resolve_sim_id(raw: &str) -> Option<SimId> {',
+    '    let key = raw.trim().to_ascii_lowercase();',
+    '    for entry in &SIM_REGISTRY {',
+    '        if entry.aliases.iter().any(|&a| a == key) {',
+    '            return Some(entry.id);',
+    '        }',
+    '    }',
+    '    None',
+    '}',
+    '',
+  ].join('\n');
+}
+
+function summarizeFirstDiff(expected, actual) {
+  const expLines = expected.split('\n');
+  const actLines = actual.split('\n');
+  const maxLines = Math.max(expLines.length, actLines.length);
+  const diffs = [];
+  for (let i = 0; i < maxLines; i++) {
+    if (expLines[i] !== actLines[i]) {
+      diffs.push(
+        `    line ${i + 1}:\n      expected: ${JSON.stringify(expLines[i] ?? '<EOF>')}\n      actual  : ${JSON.stringify(actLines[i] ?? '<EOF>')}`
+      );
+      if (diffs.length >= 3) break;
+    }
+  }
+  return diffs.join('\n');
+}
+
+function parseArgs(argv) {
+  let mode = 'check';
+  for (const arg of argv) {
+    if (arg === '-h' || arg === '--help') {
+      console.log('Usage: node scripts/sync-metadata.mjs [--check | --write]');
+      process.exit(0);
+    } else if (arg === '--write') {
+      mode = 'write';
+    } else if (arg === '--check') {
+      mode = 'check';
+    } else {
+      console.error(`Unknown option: ${arg}`);
+      process.exit(2);
+    }
+  }
+  return mode;
+}
+
+function main() {
+  const mode = parseArgs(process.argv.slice(2));
+  const manifestPath = path.join(REPO_ROOT, MANIFEST_REL);
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  validateManifest(manifest);
+
+  const outputs = [
+    ['shared/simRegistry.js', renderSimRegistryJs(manifest)],
+    ['home/catalogData.js', renderCatalogDataJs(manifest)],
+    ['desktop/src/sims/registry.rs', renderRustRegistry(manifest)],
+  ];
+
+  let written = 0;
+  let unchanged = 0;
+  let drifted = 0;
+
+  for (const [relPath, expected] of outputs) {
+    const outPath = path.join(REPO_ROOT, relPath);
+    const exists = fs.existsSync(outPath);
+    const actual = exists ? fs.readFileSync(outPath, 'utf8').replace(/\r\n/g, '\n') : null;
+
+    if (mode === 'write') {
+      if (actual === expected) {
+        unchanged++;
+        console.log(`  [OK]   ${relPath} (unchanged)`);
+      } else {
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        fs.writeFileSync(outPath, expected, 'utf8');
+        written++;
+        console.log(`  [SYNC] ${relPath}`);
+      }
+    } else if (!exists) {
+      drifted++;
+      console.error(`  [FAIL] ${relPath} is missing.`);
+    } else if (actual !== expected) {
+      drifted++;
+      console.error(`  [FAIL] ${relPath} is out of sync with ${MANIFEST_REL}:`);
+      console.error(summarizeFirstDiff(expected, actual));
+    } else {
+      unchanged++;
+      console.log(`  [PASS] ${relPath}`);
+    }
+  }
+
+  if (mode === 'write') {
+    console.log(`\nMetadata sync complete: ${written} updated, ${unchanged} unchanged (${outputs.length} total).`);
+    process.exit(0);
+  }
+
+  if (drifted > 0) {
+    console.error(
+      `\nMetadata drift detected in ${drifted} file(s). Run: node scripts/sync-metadata.mjs --write`
+    );
+    process.exit(1);
+  }
+
+  console.log(`\nMetadata check passed: ${unchanged}/${outputs.length} generated targets match ${MANIFEST_REL}.`);
+}
+
+main();

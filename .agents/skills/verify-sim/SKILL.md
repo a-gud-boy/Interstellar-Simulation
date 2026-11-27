@@ -10,7 +10,7 @@ description: >-
 
 # Verify Simulation (`verify-sim`)
 
-Execute the three-tier verification sequence for one target simulation directory (`<sim>` ∈ `blackhole-sim`, `wormhole-sim`, `binary-bh-sim`, `warp-drive-sim`, `supernova-sim`, `pulsar-sim`, `starflight-sim`), or run unified verification via `node scripts/run-tests.mjs` (`--physics`, `--desktop`, `--browser`, `--firefox`, `--all`, `--sim <name>`). Always run commands from the **repository root**.
+Execute the three-tier verification sequence for one target simulation directory (`<sim>` ∈ `sims/blackhole`, `sims/wormhole`, `sims/binary`, `sims/warp`, `sims/supernova`, `sims/pulsar`, `sims/starflight`), or run unified verification via `node scripts/run-tests.mjs` (`--physics`, `--desktop`, `--browser`, `--firefox`, `--all`, `--sim <name>`). Always run commands from the **repository root**.
 
 ## Rules
 
@@ -23,7 +23,7 @@ Execute the three-tier verification sequence for one target simulation directory
 
 ### 1. Resolve Target Simulation
 
-Identify `<sim>` from the user's request or the active edited simulation directory (`blackhole-sim`, `wormhole-sim`, `binary-bh-sim`, `warp-drive-sim`, `supernova-sim`, `pulsar-sim`, `starflight-sim`, or `shared/` / `desktop/`). If ambiguous, ask before running.
+Identify `<sim>` from the user's request or the active edited simulation directory (`sims/blackhole`, `sims/wormhole`, `sims/binary`, `sims/warp`, `sims/supernova`, `sims/pulsar`, `sims/starflight`, or `shared/` / `desktop/`). If ambiguous, ask before running.
 
 ### 2. Stage 1 — Physics & Dual-Backend Contract Suite (Fail Fast)
 

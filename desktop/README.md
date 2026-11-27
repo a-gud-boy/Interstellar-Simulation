@@ -32,7 +32,7 @@ cargo build --release
 
 ## Windows Build & Executable
 
-Pre-configured cross-compilation from Linux (using `cargo-xwin`, `x86_64-pc-windows-msvc`, and `-C target-feature=+crt-static`):
+Pre-configured cross-compilation from Linux (using `cargo-xwin`, `x86_64-pc-windows-msvc`, and `-C target-feature=+crt-static`) is available via the local Linux helper script (not required on Windows CI, where [`.github/workflows/release-desktop.yml`](../.github/workflows/release-desktop.yml) builds Linux x86_64 and Windows MSVC binaries natively on `ubuntu-latest` and `windows-latest`):
 
 ```bash
 cd desktop

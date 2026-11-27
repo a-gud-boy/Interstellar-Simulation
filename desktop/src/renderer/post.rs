@@ -314,8 +314,13 @@ impl PostPipeline {
             &mod_bloom_down,
             hdr_format,
         );
-        let bloom_up_pipeline =
-            make_fs_pipe(device, "bloom-up-pipe", &bloom_up_bgl, &mod_bloom_up, hdr_format);
+        let bloom_up_pipeline = make_fs_pipe(
+            device,
+            "bloom-up-pipe",
+            &bloom_up_bgl,
+            &mod_bloom_up,
+            hdr_format,
+        );
         let ana_pipeline = make_fs_pipe(
             device,
             "ana-pipe",
@@ -323,13 +328,8 @@ impl PostPipeline {
             &mod_ana,
             hdr_format,
         );
-        let comp_pipeline = make_fs_pipe(
-            device,
-            "comp-pipe",
-            &comp_bgl,
-            &mod_comp,
-            composite_format,
-        );
+        let comp_pipeline =
+            make_fs_pipe(device, "comp-pipe", &comp_bgl, &mod_comp, composite_format);
         let glass_blur_pipeline = make_fs_pipe(
             device,
             "glass-blur-pipe",
@@ -337,13 +337,7 @@ impl PostPipeline {
             &mod_glass,
             composite_format,
         );
-        let blit_pipeline = make_fs_pipe(
-            device,
-            "blit-pipe",
-            &blit_bgl,
-            &mod_blit,
-            target_format,
-        );
+        let blit_pipeline = make_fs_pipe(device, "blit-pipe", &blit_bgl, &mod_blit, target_format);
 
         let make_ubo = |label: &str, size: u64| {
             device.create_buffer(&wgpu::BufferDescriptor {
@@ -362,8 +356,14 @@ impl PostPipeline {
         let bloom_up_ubos = (0..(BLOOM_MIP_COUNT - 1))
             .map(|i| make_ubo(&format!("bloom-up-ubo-{i}"), 16))
             .collect::<Vec<_>>();
-        let ana_ubo_0 = make_ubo("ana-ubo-0", std::mem::size_of::<AnamorphicUniforms>() as u64);
-        let ana_ubo_1 = make_ubo("ana-ubo-1", std::mem::size_of::<AnamorphicUniforms>() as u64);
+        let ana_ubo_0 = make_ubo(
+            "ana-ubo-0",
+            std::mem::size_of::<AnamorphicUniforms>() as u64,
+        );
+        let ana_ubo_1 = make_ubo(
+            "ana-ubo-1",
+            std::mem::size_of::<AnamorphicUniforms>() as u64,
+        );
         let comp_ubo = make_ubo("comp-ubo", std::mem::size_of::<CompositeUniforms>() as u64);
         let glass_ubo_0 = make_ubo("glass-ubo-0", 16);
         let glass_ubo_1 = make_ubo("glass-ubo-1", 16);
@@ -1165,31 +1165,29 @@ fn create_bind_groups(
     let comp_bgs = [make_comp_bg(0), make_comp_bg(1)];
 
     let mut bloom_down_bgs = vec![None];
-    for i in 1..BLOOM_MIP_COUNT {
-        bloom_down_bgs.push(Some(device.create_bind_group(
-            &wgpu::BindGroupDescriptor {
-                label: Some(&format!("bloom-down-bg-{i}")),
-                layout: single_src_bgl,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: bloom_down_ubos[i].as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&t.bloom_down_rts[i - 1].view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(s_linear),
-                    },
-                ],
-            },
-        )));
+    for (i, ubo) in bloom_down_ubos.iter().enumerate().skip(1) {
+        bloom_down_bgs.push(Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&format!("bloom-down-bg-{i}")),
+            layout: single_src_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: ubo.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&t.bloom_down_rts[i - 1].view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(s_linear),
+                },
+            ],
+        })));
     }
 
     let mut bloom_up_bgs = Vec::with_capacity(BLOOM_MIP_COUNT - 1);
-    for i in 0..(BLOOM_MIP_COUNT - 1) {
+    for (i, ubo) in bloom_up_ubos.iter().enumerate().take(BLOOM_MIP_COUNT - 1) {
         let low_src = if i == BLOOM_MIP_COUNT - 2 {
             &t.bloom_down_rts[i + 1].view
         } else {
@@ -1202,7 +1200,7 @@ fn create_bind_groups(
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: bloom_up_ubos[i].as_entire_binding(),
+                    resource: ubo.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,

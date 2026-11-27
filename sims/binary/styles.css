@@ -1,0 +1,15 @@
+/* Theme & layout overrides for Binary Black Hole Simulator (shared HUD in ../../shared/ui/base.css) */
+:root {
+  --text-muted: rgba(203, 213, 225, 0.64);
+  --slider-track-color: rgba(255, 255, 255, 0.24);
+
+  --accent: #a78bfa;
+  --accent-bright: #c4b5fd;
+  --accent-soft: rgba(167, 139, 250, 0.18);
+  --accent-border: rgba(167, 139, 250, 0.52);
+  --pill-open-bg: rgba(34, 24, 58, 0.75);
+  --keycap-active-border: rgba(167, 139, 250, 0.45);
+  --keycap-active-color: var(--accent-bright);
+
+  --hud-pad: clamp(12px, 1.5dvw, 20px);
+}

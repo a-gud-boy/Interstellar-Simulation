@@ -2,13 +2,12 @@ use std::f32::consts::{PI, TAU};
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::renderer::post::{make_fs_pipe, run_fs_pass, PostFrameParams, PostTuning};
 use crate::renderer::SharedGpuAssets;
+use crate::renderer::post::{PostFrameParams, PostTuning, make_fs_pipe, run_fs_pass};
 use crate::shaders;
 use crate::sims::{
-    ease_out_cubic, step_critically_damped, wrap_angle_delta, ControlItem, ControlKind,
-    ControlSection, HudMetadata, PresetMeta, SimId, SimInput, Simulation, StepOutcome,
-    TelemetryCell,
+    ControlItem, ControlKind, ControlSection, HudMetadata, PresetMeta, SimId, SimInput, Simulation,
+    StepOutcome, TelemetryCell, ease_out_cubic, step_critically_damped, wrap_angle_delta,
 };
 
 const DEG2RAD: f32 = PI / 180.0;
@@ -267,7 +266,11 @@ pub struct KerrTelemetry {
     pub shadow_angular_deg: f64,
 }
 
-pub fn compute_kerr_telemetry(spin: f64, radius_euclidean: f64, elevation_rad: f64) -> KerrTelemetry {
+pub fn compute_kerr_telemetry(
+    spin: f64,
+    radius_euclidean: f64,
+    elevation_rad: f64,
+) -> KerrTelemetry {
     let a = if spin.is_finite() {
         spin.clamp(0.0, 0.998)
     } else {
@@ -519,8 +522,8 @@ impl OrbitCamera {
         if input.scroll_y.abs() > 0.0 {
             interacting = true;
             let delta = input.scroll_y.clamp(-240.0, 240.0);
-            self.target_log_radius = (self.target_log_radius + delta * 0.00115)
-                .clamp(MIN_RADIUS.ln(), MAX_RADIUS.ln());
+            self.target_log_radius =
+                (self.target_log_radius + delta * 0.00115).clamp(MIN_RADIUS.ln(), MAX_RADIUS.ln());
             self.mark_interaction();
         }
 
@@ -975,7 +978,7 @@ impl Simulation for BlackholeSim {
     }
 
     fn presets(&self) -> Vec<PresetMeta> {
-        PRESETS.iter().map(|p| p.meta.clone()).collect()
+        PRESETS.iter().map(|p| p.meta).collect()
     }
 
     fn active_preset_index(&self) -> Option<usize> {
@@ -1385,8 +1388,7 @@ impl Simulation for BlackholeSim {
         if !self.paused {
             self.sim_time += dt.clamp(0.0, 0.05);
         }
-        self.camera
-            .update(dt, self.paused, self.auto_orbit, input);
+        self.camera.update(dt, self.paused, self.auto_orbit, input);
         StepOutcome {
             camera_moved: self.camera.moved,
             sim_time: self.sim_time,

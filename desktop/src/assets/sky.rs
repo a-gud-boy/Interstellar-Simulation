@@ -396,7 +396,8 @@ pub fn synthesize_procedural_sky_a(width: usize, height: usize) -> RgbaImageData
 
         let p = rand.next_f64().max(1e-5);
         let clamped_brightness = (0.04 * p.powf(-0.78)).min(8.5);
-        let [sr, sg, sb] = spectral_temp_to_linear_rgb(sample_spectral_temperature(&mut rand, false));
+        let [sr, sg, sb] =
+            spectral_temp_to_linear_rgb(sample_spectral_temperature(&mut rand, false));
         splat_star_on_equirect(
             &mut accum,
             width,
@@ -550,7 +551,8 @@ pub fn synthesize_exotic_nebula_b(width: usize, height: usize) -> RgbaImageData 
 
         let p = rand.next_f64().max(1e-5);
         let clamped_brightness = (0.055 * p.powf(-0.78)).min(10.0);
-        let [sr, sg, sb] = spectral_temp_to_linear_rgb(sample_spectral_temperature(&mut rand, true));
+        let [sr, sg, sb] =
+            spectral_temp_to_linear_rgb(sample_spectral_temperature(&mut rand, true));
         splat_star_on_equirect(
             &mut accum,
             width,

@@ -7,27 +7,51 @@ cd "$ROOT"
 declare -A CHANGED_SIMS=()
 SHARED_CHANGED=0
 DESKTOP_CHANGED=0
+WGSL_CHANGED=0
+META_CHANGED=0
 
 while IFS= read -r file; do
-  if [[ "$file" =~ ^([a-z0-9-]+-sim)/src/(engine|shaders)/ ]]; then
+  if [[ "$file" =~ ^(sims/[a-z0-9-]+)/src/(engine|shaders)/ ]]; then
     sim="${BASH_REMATCH[1]}"
     if [[ -f "${sim}/tests/physics_check.mjs" ]]; then
       CHANGED_SIMS["$sim"]=1
     fi
-  elif [[ "$file" =~ ^shared/(shaders|assets|ui)/ ]] || [[ "$file" == "shared/simRegistry.js" ]] || [[ "$file" == "scripts/run-tests.mjs" ]]; then
+  elif [[ "$file" =~ ^shared/(shaders|assets|ui)/ ]] || [[ "$file" == "shared/simRegistry.js" ]] || [[ "$file" == "shared/sims.json" ]] || [[ "$file" == "scripts/run-tests.mjs" ]] || [[ "$file" == "scripts/sync-wgsl.mjs" ]] || [[ "$file" == "scripts/sync-metadata.mjs" ]]; then
     SHARED_CHANGED=1
   fi
 
-  if [[ "$file" =~ ^desktop/ ]] || [[ "$file" == "shared/assets/milkyway_4k.jpg" ]]; then
+  if [[ "$file" =~ \.wgsl(\.js)?$ ]] || [[ "$file" == "scripts/sync-wgsl.mjs" ]]; then
+    WGSL_CHANGED=1
+  fi
+
+  if [[ "$file" == "shared/sims.json" ]] || [[ "$file" == "shared/simRegistry.js" ]] || [[ "$file" == "home/catalogData.js" ]] || [[ "$file" == "desktop/src/sims/registry.rs" ]] || [[ "$file" == "scripts/sync-metadata.mjs" ]]; then
+    META_CHANGED=1
+  fi
+
+  if [[ "$file" =~ ^desktop/ ]] || [[ "$file" == "shared/assets/milkyway_4k.jpg" ]] || [[ "$file" == "shared/sims.json" ]] || [[ "$file" =~ ^shared/shaders/.*\.wgsl$ ]] || [[ "$file" =~ ^sims/[a-z0-9-]+/src/shaders/.*\.wgsl$ ]]; then
     DESKTOP_CHANGED=1
   fi
 done < <(git diff --cached --name-only --diff-filter=ACMR)
 
-if [[ "${#CHANGED_SIMS[@]}" -eq 0 && "$SHARED_CHANGED" -eq 0 && "$DESKTOP_CHANGED" -eq 0 ]]; then
+if [[ "${#CHANGED_SIMS[@]}" -eq 0 && "$SHARED_CHANGED" -eq 0 && "$DESKTOP_CHANGED" -eq 0 && "$WGSL_CHANGED" -eq 0 && "$META_CHANGED" -eq 0 ]]; then
   exit 0
 fi
 
 failed=0
+if [[ "$META_CHANGED" -eq 1 || "$SHARED_CHANGED" -eq 1 ]]; then
+  echo "[pre-commit] Running node scripts/sync-metadata.mjs --check ..."
+  if ! node scripts/sync-metadata.mjs --check; then
+    echo "[pre-commit] FAILED: scripts/sync-metadata.mjs --check" >&2
+    failed=1
+  fi
+fi
+if [[ "$WGSL_CHANGED" -eq 1 ]]; then
+  echo "[pre-commit] Running node scripts/sync-wgsl.mjs --check ..."
+  if ! node scripts/sync-wgsl.mjs --check; then
+    echo "[pre-commit] FAILED: scripts/sync-wgsl.mjs --check" >&2
+    failed=1
+  fi
+fi
 if [[ "$SHARED_CHANGED" -eq 1 ]]; then
   echo "[pre-commit] Running node scripts/run-tests.mjs --physics ..."
   if ! node scripts/run-tests.mjs --physics; then
