@@ -29,12 +29,9 @@ pub(crate) fn draw_restore_hud_pill(
         .order(Order::Foreground)
         .show(ctx, |ui| {
             let font = FontId::new(12.0, semibold_family());
-            let label_g = ui.painter().layout_job(tracked_job(
-                "Show UI",
-                font.clone(),
-                theme.text_primary,
-                0.2,
-            ));
+            let label_g =
+                ui.painter()
+                    .layout_job(tracked_job("Show UI", font, Color32::PLACEHOLDER, 0.2));
             let w = 12.0 * 2.0 + 20.0 + label_g.size().x + 22.0;
             let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, 36.0), Sense::click());
             if resp.hovered() {
@@ -65,12 +62,12 @@ pub(crate) fn draw_restore_hud_pill(
             let mut x = rect.left() + 12.0;
             draw_eye_icon(ui.painter(), Pos2::new(x + 7.0, cy), fg, false);
             x += 20.0;
-            let g = ui
-                .painter()
-                .layout_job(tracked_job("Show UI", font, fg, 0.2));
-            let gw = g.size().x;
-            ui.painter()
-                .galley(Pos2::new(x, cy - g.size().y * 0.5), g, fg);
+            let gw = label_g.size().x;
+            ui.painter().galley_with_override_text_color(
+                Pos2::new(x, cy - label_g.size().y * 0.5),
+                label_g,
+                fg,
+            );
             x += gw + 6.0;
 
             let k_rect = Rect::from_center_size(Pos2::new(x + 8.0, cy), Vec2::new(16.0, 16.0));

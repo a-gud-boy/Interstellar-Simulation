@@ -74,7 +74,15 @@ fn agxLookPunchy(val: vec3f) -> vec3f {
   return max(vec3f(0.0), vec3f(luma) + 1.18 * (graded - vec3f(luma)));
 }
 
-fn agxToneMap(linearColor: vec3f) -> vec3f {
+// Fold AgX display EOTF pow(v, 2.2) with linear-to-sRGB pow(c, 1/2.4) inside an explicit branch
+fn agxDisplayToSrgbChannel(v: f32) -> f32 {
+  if (v >= 0.07272128) {
+    return clamp(1.055 * pow(v, 0.91666667) - 0.055, 0.0, 1.0);
+  }
+  return clamp(12.92 * pow(max(v, 0.0), 2.2), 0.0, 1.0);
+}
+
+fn agxToneMapToSrgb(linearColor: vec3f) -> vec3f {
   var val = max(linearColor, vec3f(0.0));
   let maxChannel = max(val.r, max(val.g, val.b));
   if (maxChannel <= 1e-7) {
@@ -91,14 +99,11 @@ fn agxToneMap(linearColor: vec3f) -> vec3f {
   val = agxLookPunchy(val);
   val = clamp(AGX_OUTSET_MATRIX * val, vec3f(0.0), vec3f(1.0));
 
-  return pow(val, vec3f(2.2));
-}
-
-fn linearToSrgb(linearColor: vec3f) -> vec3f {
-  let c = clamp(linearColor, vec3f(0.0), vec3f(1.0));
-  let low = c * 12.92;
-  let high = 1.055 * pow(c, vec3f(1.0 / 2.4)) - 0.055;
-  return mix(low, high, step(vec3f(0.0031308), c));
+  return vec3f(
+    agxDisplayToSrgbChannel(val.r),
+    agxDisplayToSrgbChannel(val.g),
+    agxDisplayToSrgbChannel(val.b)
+  );
 }
 
 fn hash12(p: vec2f) -> f32 {
@@ -112,11 +117,13 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   let centered = in.uv - 0.5;
   let r2 = dot(centered, centered);
 
-  let caOffset = centered * (r2 * 0.0024);
-  let sr = textureSampleLevel(uSceneTex, sLinear, clamp(in.uv + caOffset, vec2f(0.0), vec2f(1.0)), 0.0).r;
-  let sg = textureSampleLevel(uSceneTex, sLinear, in.uv, 0.0).g;
-  let sb = textureSampleLevel(uSceneTex, sLinear, clamp(in.uv - caOffset, vec2f(0.0), vec2f(1.0)), 0.0).b;
-  let scene = max(sanitizeVec3Zero(vec3f(sr, sg, sb)), vec3f(0.0));
+  var sceneRaw = textureSampleLevel(uSceneTex, sLinear, in.uv, 0.0).rgb;
+  if (r2 > 0.04) {
+    let caOffset = centered * (r2 * 0.0024);
+    sceneRaw.r = textureSampleLevel(uSceneTex, sLinear, clamp(in.uv + caOffset, vec2f(0.0), vec2f(1.0)), 0.0).r;
+    sceneRaw.b = textureSampleLevel(uSceneTex, sLinear, clamp(in.uv - caOffset, vec2f(0.0), vec2f(1.0)), 0.0).b;
+  }
+  let scene = max(sanitizeVec3Zero(sceneRaw), vec3f(0.0));
 
   let bloom = max(textureSampleLevel(uBloomTex, sLinear, in.uv, 0.0).rgb, vec3f(0.0));
   let anamorphic = max(textureSampleLevel(uAnamorphicTex, sLinear, in.uv, 0.0).rgb, vec3f(0.0));
@@ -137,8 +144,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   let vignette = 1.0 - smoothstep(0.36, 1.18, length(vigCoord)) * 0.24;
   hdr *= vignette;
 
-  let displayLinear = agxToneMap(hdr);
-  var srgb = linearToSrgb(displayLinear);
+  var srgb = agxToneMapToSrgb(hdr);
 
   // Match pixel noise orientation & scale
   let pix = vec2f(in.pos.x, res.y - in.pos.y);

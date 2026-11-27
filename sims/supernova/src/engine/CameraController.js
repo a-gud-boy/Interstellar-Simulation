@@ -18,6 +18,7 @@ import {
   stepCriticallyDamped,
   isEditableElement,
   applyLocalLookTriad as applyLocalLook,
+  createCanvasRectCache,
 } from '../../../../shared/engine/BaseCamera.js';
 
 const MIN_DISTANCE = 0.0;
@@ -108,7 +109,8 @@ export class SupernovaCamera {
     this._forward = [0, 0, -1];
     this._basis = new Float32Array(9);
     this._moved = true;
-    this._prevSignature = null;
+    this._hasPrevSignature = false;
+    this._prevSignature = new Float64Array(13);
 
     this._pointers = new Map();
     this._pinchPrevDist = null;
@@ -116,6 +118,7 @@ export class SupernovaCamera {
     this._keys = new Set();
     this._windowBound = false;
     this._canvasBoundTo = null;
+    this._rectCache = createCanvasRectCache(() => this.canvas);
 
     this._recomputeBasis();
     this._bindEvents();
@@ -367,9 +370,7 @@ export class SupernovaCamera {
         return;
       }
 
-      const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
-      const vh = typeof window !== 'undefined' ? window.innerHeight : 720;
-      const rect = this.canvas ? this.canvas.getBoundingClientRect() : { width: vw, height: vh };
+      const rect = this._rectCache.getRect();
       const scale = 1.0 / Math.max(Math.min(rect.width, rect.height), 320);
 
       if (this._dragMode === 'roll') {
@@ -502,6 +503,7 @@ export class SupernovaCamera {
     if (this.canvas) {
       this._bindCanvasEvents(this.canvas);
     }
+    this._rectCache?.invalidate();
     this._moved = true;
   }
 
@@ -735,25 +737,38 @@ export class SupernovaCamera {
     b[7] = pose.forward[1];
     b[8] = pose.forward[2];
 
-    const sig = [
-      this._pos[0], this._pos[1], this._pos[2],
-      this._right[0], this._right[1], this._right[2],
-      this._up[0], this._up[1], this._up[2],
-      this._forward[0], this._forward[1], this._forward[2],
-      this.fov,
-    ];
-    if (!this._prevSignature) {
+    const prev = this._prevSignature;
+    if (!this._hasPrevSignature) {
       this._moved = true;
-      this._prevSignature = sig;
+      this._hasPrevSignature = true;
+      prev[0] = this._pos[0]; prev[1] = this._pos[1]; prev[2] = this._pos[2];
+      prev[3] = this._right[0]; prev[4] = this._right[1]; prev[5] = this._right[2];
+      prev[6] = this._up[0]; prev[7] = this._up[1]; prev[8] = this._up[2];
+      prev[9] = this._forward[0]; prev[10] = this._forward[1]; prev[11] = this._forward[2];
+      prev[12] = this.fov;
     } else {
-      let maxDiff = 0;
-      for (let i = 0; i < sig.length; i++) {
-        const d = Math.abs(sig[i] - this._prevSignature[i]);
-        if (d > maxDiff) maxDiff = d;
-      }
+      const maxDiff = Math.max(
+        Math.abs(this._pos[0] - prev[0]),
+        Math.abs(this._pos[1] - prev[1]),
+        Math.abs(this._pos[2] - prev[2]),
+        Math.abs(this._right[0] - prev[3]),
+        Math.abs(this._right[1] - prev[4]),
+        Math.abs(this._right[2] - prev[5]),
+        Math.abs(this._up[0] - prev[6]),
+        Math.abs(this._up[1] - prev[7]),
+        Math.abs(this._up[2] - prev[8]),
+        Math.abs(this._forward[0] - prev[9]),
+        Math.abs(this._forward[1] - prev[10]),
+        Math.abs(this._forward[2] - prev[11]),
+        Math.abs(this.fov - prev[12])
+      );
       this._moved = maxDiff > 1e-6;
       if (this._moved) {
-        this._prevSignature = sig;
+        prev[0] = this._pos[0]; prev[1] = this._pos[1]; prev[2] = this._pos[2];
+        prev[3] = this._right[0]; prev[4] = this._right[1]; prev[5] = this._right[2];
+        prev[6] = this._up[0]; prev[7] = this._up[1]; prev[8] = this._up[2];
+        prev[9] = this._forward[0]; prev[10] = this._forward[1]; prev[11] = this._forward[2];
+        prev[12] = this.fov;
       }
     }
   }
@@ -771,6 +786,7 @@ export class SupernovaCamera {
   }
 
   dispose() {
+    this._rectCache?.dispose();
     if (this.canvas) {
       this._unbindCanvasEvents(this.canvas);
     }

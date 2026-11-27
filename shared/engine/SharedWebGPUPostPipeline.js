@@ -73,6 +73,7 @@ export class SharedWebGPUPostPipeline {
     this.context = opts.context;
     this.canvasFormat = opts.canvasFormat;
     this.hdrFormat = opts.hdrFormat;
+    this.taaFormat = 'rgba16float';
     this.sLinearClamp = opts.sLinearClamp;
     this.opticsProfile = opts.opticsProfile || 'default';
     this.optics = resolvePostOpticsProfile(this.opticsProfile);
@@ -95,6 +96,7 @@ export class SharedWebGPUPostPipeline {
     this.compBindGroups = [null, null];
 
     this._taaF32 = new Float32Array(4);
+    this._lastTaaState = [NaN, NaN, NaN, NaN];
     this._bloomPreF32 = new Float32Array(8);
     this._bloomDownF32 = Array.from({ length: BLOOM_MIP_COUNT }, () => new Float32Array(4));
     this._bloomUpF32 = Array.from({ length: BLOOM_MIP_COUNT - 1 }, () => new Float32Array(4));
@@ -137,7 +139,7 @@ export class SharedWebGPUPostPipeline {
         fragment: {
           module: modTaa,
           entryPoint: 'fs_main',
-          targets: [{ format: this.hdrFormat }],
+          targets: [{ format: this.taaFormat }],
         },
         primitive: { topology: 'triangle-list' },
       });
@@ -261,13 +263,13 @@ export class SharedWebGPUPostPipeline {
     this.compUniformBuf = makeUbo('comp-ubo', 48);
   }
 
-  createRenderTarget(label, width, height) {
+  createRenderTarget(label, width, height, format = this.hdrFormat) {
     const w = Math.max(1, width | 0);
     const h = Math.max(1, height | 0);
     const texture = this.device.createTexture({
       label,
       size: [w, h, 1],
-      format: this.hdrFormat,
+      format,
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
     });
     return { texture, view: texture.createView(), width: w, height: h };
@@ -485,11 +487,12 @@ export class SharedWebGPUPostPipeline {
 
   resize(nextW, nextH) {
     this.destroyTargets();
+    this._lastTaaState[0] = NaN;
 
-    this.sceneRt = this.createRenderTarget('scene-rt', nextW, nextH);
+    this.sceneRt = this.createRenderTarget('scene-rt', nextW, nextH, this.hdrFormat);
     this.taaRts = [
-      this.createRenderTarget('taa-rt-0', nextW, nextH),
-      this.createRenderTarget('taa-rt-1', nextW, nextH),
+      this.createRenderTarget('taa-rt-0', nextW, nextH, this.taaFormat),
+      this.createRenderTarget('taa-rt-1', nextW, nextH, this.taaFormat),
     ];
 
     let mipW = Math.max(1, nextW >> 1);
@@ -517,11 +520,26 @@ export class SharedWebGPUPostPipeline {
 
   encodeTaa(encoder, width, height, blendFactor, isProgressive) {
     if (!this.sceneRt) return;
-    this._taaF32[0] = 1.0 / width;
-    this._taaF32[1] = 1.0 / height;
-    this._taaF32[2] = blendFactor;
-    this._taaF32[3] = isProgressive ? 1.0 : 0.0;
-    this.device.queue.writeBuffer(this.taaUniformBuf, 0, this._taaF32);
+    const invW = 1.0 / width;
+    const invH = 1.0 / height;
+    const progFlag = isProgressive ? 1.0 : 0.0;
+    const prev = this._lastTaaState;
+    if (
+      prev[0] !== invW ||
+      prev[1] !== invH ||
+      prev[2] !== blendFactor ||
+      prev[3] !== progFlag
+    ) {
+      prev[0] = invW;
+      prev[1] = invH;
+      prev[2] = blendFactor;
+      prev[3] = progFlag;
+      this._taaF32[0] = invW;
+      this._taaF32[1] = invH;
+      this._taaF32[2] = blendFactor;
+      this._taaF32[3] = progFlag;
+      this.device.queue.writeBuffer(this.taaUniformBuf, 0, this._taaF32);
+    }
 
     const outputRt = this.taaRts[this.taaWriteIdx];
     const taaBg = this.taaBindGroups[this.taaReadIdx];

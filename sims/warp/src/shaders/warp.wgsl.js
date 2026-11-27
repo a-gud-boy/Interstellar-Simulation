@@ -63,16 +63,38 @@ fn sanitizeVec3Zero(v: vec3f) -> vec3f {
 // 1. NVIDIA-SAFE HYPERBOLIC HELPERS & ADM WARP METRIC JACOBIANS
 // ============================================================================
 
+struct WarpConsts {
+  R           : f32,
+  invR        : f32,
+  sigma       : f32,
+  sigma2      : f32,
+  v_s         : f32,
+  frameBlend  : f32,
+  extShiftZ   : f32,
+  invDenom2   : f32,
+  sigmaInvD2  : f32,
+  sigma2InvD1 : f32,
+  dfOverR0    : f32,
+  dhOverR0    : f32,
+  wallStep    : f32,
+  invSigma16  : f32,
+  weakTailR   : f32,
+  rFlatIn     : f32,
+  lentzEps2   : f32,
+  advZWall    : f32,
+  advZDust    : f32,
+  bridgeAtten : f32,
+  scaleGain   : f32,
+  speedGain   : f32,
+  rDustInner  : f32,
+  rDustKnee   : f32,
+  rDustOuter  : f32,
+  invDustFall : f32,
+  metricType  : i32,
+};
+
 fn safeTanh(x: f32) -> f32 {
   return tanh(clamp(x, -15.0, 15.0));
-}
-
-fn safeSech2(x: f32) -> f32 {
-  if (abs(x) > 15.0) {
-    return 0.0;
-  }
-  let c = cosh(x);
-  return 1.0 / (c * c);
 }
 
 struct ShapeResult {
@@ -82,40 +104,27 @@ struct ShapeResult {
   dfOverR : f32,
 };
 
-fn evalShape(r: f32, R: f32, sigma: f32) -> ShapeResult {
-  let sr = sigma * R;
-  let tanhSR = safeTanh(sr);
-  let denom2 = max(2.0 * tanhSR, 1e-5);
-  let denom1 = max(tanhSR, 1e-5);
-
-  let a = sigma * (r + R);
-  let b = sigma * (r - R);
+fn evalShape(r: f32, wc: WarpConsts, needD2f: bool) -> ShapeResult {
+  let a = wc.sigma * (r + wc.R);
+  let b = wc.sigma * (r - wc.R);
   let ta = safeTanh(a);
   let tb = safeTanh(b);
-  let sa = safeSech2(a);
-  let sb = safeSech2(b);
+  let sa = max(1.0 - ta * ta, 0.0);
+  let sb = max(1.0 - tb * tb, 0.0);
 
   var s: ShapeResult;
-  s.f = (ta - tb) / denom2;
-  s.df = (sigma / denom2) * (sa - sb);
-  s.d2f = (sigma * sigma / denom1) * (-sa * ta + sb * tb);
+  s.f = (ta - tb) * wc.invDenom2;
+  s.df = wc.sigmaInvD2 * (sa - sb);
+  s.d2f = 0.0;
+  if (needD2f) {
+    s.d2f = wc.sigma2InvD1 * (-sa * ta + sb * tb);
+  }
   if (r < 1e-3) {
-    s.dfOverR = -2.0 * sigma * sigma * safeSech2(sr);
+    s.dfOverR = wc.dfOverR0;
   } else {
     s.dfOverR = s.df / r;
   }
   return s;
-}
-
-fn evalLentzR(pos: vec3f, R: f32) -> f32 {
-  const p : f32 = 1.38;
-  const halfP : f32 = 0.69;
-  let eps = 0.12 * R;
-  let eps2 = eps * eps;
-  let rho2 = pos.x * pos.x + pos.y * pos.y;
-  let uVal = rho2 + eps2;
-  let vVal = pos.z * pos.z + eps2;
-  return pow(pow(uVal, halfP) + pow(vVal, halfP), 1.0 / p);
 }
 
 struct MetricSample {
@@ -128,54 +137,52 @@ struct MetricSample {
   rEff  : f32,
 };
 
-fn evalMetric(pos: vec3f, R: f32, sigma: f32, v_s: f32, metricType: i32, frameBlend: f32) -> MetricSample {
+fn evalMetric(pos: vec3f, wc: WarpConsts) -> MetricSample {
   var m: MetricSample;
   let r2 = dot(pos, pos);
   let r = sqrt(r2);
 
-  if (metricType == 0) {
-    let sh = evalShape(r, R, sigma);
-    m.beta = vec3f(0.0, 0.0, v_s * (1.0 - sh.f));
-    m.dBdx = vec3f(0.0, 0.0, -v_s * sh.dfOverR * pos.x);
-    m.dBdy = vec3f(0.0, 0.0, -v_s * sh.dfOverR * pos.y);
-    m.dBdz = vec3f(0.0, 0.0, -v_s * sh.dfOverR * pos.z);
+  if (wc.metricType == 0) {
+    let sh = evalShape(r, wc, false);
+    m.beta = vec3f(0.0, 0.0, wc.v_s * (1.0 - sh.f));
+    m.dBdx = vec3f(0.0, 0.0, -wc.v_s * sh.dfOverR * pos.x);
+    m.dBdy = vec3f(0.0, 0.0, -wc.v_s * sh.dfOverR * pos.y);
+    m.dBdz = vec3f(0.0, 0.0, -wc.v_s * sh.dfOverR * pos.z);
     m.theta = -m.dBdz.z;
     m.t00 = -(m.dBdx.z * m.dBdx.z + m.dBdy.z * m.dBdy.z) / (32.0 * PI);
     m.rEff = r;
-  } else if (metricType == 1) {
-    let sh = evalShape(r, R, sigma);
+  } else if (wc.metricType == 1) {
+    let sh = evalShape(r, wc, true);
     let h = sh.dfOverR;
     var dhOverR : f32;
     if (r < 2e-3) {
-      let s2 = sigma * sigma;
-      let sech2SR = safeSech2(sigma * R);
-      dhOverR = (8.0 / 3.0) * (s2 * s2) * sech2SR * (3.0 * sech2SR - 1.0);
+      dhOverR = wc.dhOverR0;
     } else {
       dhOverR = (sh.d2f - h) / (r * r);
     }
-    let halfVs = 0.5 * v_s;
+    let halfVs = 0.5 * wc.v_s;
     let rho2 = pos.x * pos.x + pos.y * pos.y;
 
     m.beta = vec3f(
       halfVs * h * pos.x * pos.z,
       halfVs * h * pos.y * pos.z,
-      v_s * (1.0 - sh.f) - halfVs * h * rho2
+      wc.v_s * (1.0 - sh.f) - halfVs * h * rho2
     );
 
     m.dBdx = vec3f(
       halfVs * (dhOverR * pos.x * pos.x * pos.z + h * pos.z),
       halfVs * (dhOverR * pos.x * pos.y * pos.z),
-      -2.0 * v_s * h * pos.x - halfVs * dhOverR * pos.x * rho2
+      -2.0 * wc.v_s * h * pos.x - halfVs * dhOverR * pos.x * rho2
     );
     m.dBdy = vec3f(
       halfVs * (dhOverR * pos.y * pos.x * pos.z),
       halfVs * (dhOverR * pos.y * pos.y * pos.z + h * pos.z),
-      -2.0 * v_s * h * pos.y - halfVs * dhOverR * pos.y * rho2
+      -2.0 * wc.v_s * h * pos.y - halfVs * dhOverR * pos.y * rho2
     );
     m.dBdz = vec3f(
       halfVs * (dhOverR * pos.z * pos.x * pos.z + h * pos.x),
       halfVs * (dhOverR * pos.z * pos.y * pos.z + h * pos.y),
-      -v_s * h * pos.z - halfVs * dhOverR * pos.z * rho2
+      -wc.v_s * h * pos.z - halfVs * dhOverR * pos.z * rho2
     );
 
     m.theta = 0.0;
@@ -192,11 +199,9 @@ fn evalMetric(pos: vec3f, R: f32, sigma: f32, v_s: f32, metricType: i32, frameBl
   } else {
     const p : f32 = 1.38;
     const halfP : f32 = 0.69;
-    let eps = 0.12 * R;
-    let eps2 = eps * eps;
     let rho2 = pos.x * pos.x + pos.y * pos.y;
-    let uVal = rho2 + eps2;
-    let vVal = pos.z * pos.z + eps2;
+    let uVal = rho2 + wc.lentzEps2;
+    let vVal = pos.z * pos.z + wc.lentzEps2;
     let aTerm = pow(uVal, halfP);
     let bTerm = pow(vVal, halfP);
     let sTerm = aTerm + bTerm;
@@ -208,13 +213,12 @@ fn evalMetric(pos: vec3f, R: f32, sigma: f32, v_s: f32, metricType: i32, frameBl
     let drdy = kRho * pos.y;
     let drdz = kZ * pos.z;
 
-    let sh = evalShape(rL, R, sigma);
+    let sh = evalShape(rL, wc, true);
     let invRL = 1.0 / max(rL, 1e-3);
-    let c = -0.28 * v_s;
-    let invR = 1.0 / max(R, 1e-3);
-    let zArg = 2.0 * pos.z * invR;
+    let c = -0.28 * wc.v_s;
+    let zArg = 2.0 * pos.z * wc.invR;
     let tz = safeTanh(zArg);
-    let dtz = 2.0 * invR * safeSech2(zArg);
+    let dtz = 2.0 * wc.invR * max(1.0 - tz * tz, 0.0);
     let gL = sh.df * invRL;
     let dgL = (sh.d2f - gL) * invRL;
 
@@ -223,10 +227,10 @@ fn evalMetric(pos: vec3f, R: f32, sigma: f32, v_s: f32, metricType: i32, frameBl
     let dscdy = c * tz * dgL * drdy;
     let dscdz = c * (tz * dgL * drdz + gL * dtz);
 
-    m.beta = vec3f(sc * pos.x, sc * pos.y, v_s * (1.0 - sh.f));
-    m.dBdx = vec3f(sc + pos.x * dscdx, pos.y * dscdx, -v_s * sh.df * drdx);
-    m.dBdy = vec3f(pos.x * dscdy, sc + pos.y * dscdy, -v_s * sh.df * drdy);
-    m.dBdz = vec3f(pos.x * dscdz, pos.y * dscdz, -v_s * sh.df * drdz);
+    m.beta = vec3f(sc * pos.x, sc * pos.y, wc.v_s * (1.0 - sh.f));
+    m.dBdx = vec3f(sc + pos.x * dscdx, pos.y * dscdx, -wc.v_s * sh.df * drdx);
+    m.dBdy = vec3f(pos.x * dscdy, sc + pos.y * dscdy, -wc.v_s * sh.df * drdy);
+    m.dBdz = vec3f(pos.x * dscdz, pos.y * dscdz, -wc.v_s * sh.df * drdz);
 
     m.theta = -(m.dBdx.x + m.dBdy.y + m.dBdz.z);
     let k01 = 0.5 * (m.dBdx.y + m.dBdy.x);
@@ -241,7 +245,7 @@ fn evalMetric(pos: vec3f, R: f32, sigma: f32, v_s: f32, metricType: i32, frameBl
     m.rEff = rL;
   }
 
-  m.beta.z -= (1.0 - frameBlend) * v_s;
+  m.beta.z -= wc.extShiftZ;
   return m;
 }
 
@@ -253,8 +257,8 @@ struct GeodesicDeriv {
   rEff  : f32,
 };
 
-fn evalGeodesicRHS(pos: vec3f, k: vec3f, R: f32, sigma: f32, v_s: f32, metricType: i32, frameBlend: f32) -> GeodesicDeriv {
-  let m = evalMetric(pos, R, sigma, v_s, metricType, frameBlend);
+fn evalGeodesicRHS(pos: vec3f, k: vec3f, wc: WarpConsts) -> GeodesicDeriv {
+  let m = evalMetric(pos, wc);
   let kLen = max(length(k), 1e-6);
   let khat = k / kLen;
 
@@ -359,16 +363,10 @@ struct WallSample {
 
 fn evalWallShimmer(
   pos: vec3f,
-  R: f32,
-  sigma: f32,
-  v_s: f32,
   t00: f32,
   theta: f32,
   kLen: f32,
-  frameBlend: f32,
-  metricType: i32,
-  time: f32,
-  flowSpeed: f32,
+  wc: WarpConsts,
   wallShimmer: f32
 ) -> WallSample {
   var ws: WallSample;
@@ -383,9 +381,8 @@ fn evalWallShimmer(
     return ws;
   }
 
-  let advZ = time * flowSpeed;
-  let uv1 = pos * 0.26 + vec3f(0.0, 0.0, advZ * 0.34);
-  let uv2 = pos * 0.64 + vec3f(0.17, 0.41, advZ * 0.72);
+  let uv1 = pos * 0.26 + vec3f(0.0, 0.0, wc.advZWall * 0.34);
+  let uv2 = pos * 0.64 + vec3f(0.17, 0.41, wc.advZWall * 0.72);
   let n1 = textureSampleLevel(uVolumeNoise, sVolume, uv1, 0.0);
   let n2 = textureSampleLevel(uVolumeNoise, sVolume, uv2, 0.0);
 
@@ -412,70 +409,59 @@ fn evalWallShimmer(
   );
 
   let energyCol = select(negCol, posCol, t00 > 0.0);
-  let energyWeight = select(normT00 * 1.08, normT00 * 0.72, metricType == 1);
+  let energyWeight = select(normT00 * 1.08, normT00 * 0.72, wc.metricType == 1);
 
   let yorkCol = select(
     vec3f(0.62, 0.24, 0.82),
     vec3f(0.22, 0.82, 1.00),
     theta < 0.0
   );
-  let yorkWeight = normTheta * 0.24 * (1.0 - frameBlend);
+  let yorkWeight = normTheta * 0.24 * (1.0 - wc.frameBlend);
 
-  let bridgeAtten = mix(1.0, 0.18, frameBlend);
   var causalAtten : f32 = 1.0;
-  if (frameBlend > 0.5) {
+  if (wc.frameBlend > 0.5) {
     causalAtten = pow(clamp(1.0 / max(kLen, 1.0), 1e-5, 1.0), 2.2);
   }
 
-  let scaleGain = mix(1.0, 0.80, clamp((sigma - 2.2) / 3.5, 0.0, 1.0));
-  ws.emit = (energyCol * energyWeight + yorkCol * yorkWeight) * turbMod * wallShimmer * bridgeAtten * causalAtten * scaleGain * 0.19;
+  ws.emit = (energyCol * energyWeight + yorkCol * yorkWeight) * turbMod * wallShimmer * wc.bridgeAtten * causalAtten * wc.scaleGain * 0.19;
   return ws;
 }
 
 fn evalDustStreak(
   pos: vec3f,
-  R: f32,
-  v_s: f32,
+  r: f32,
   kLen: f32,
-  frameBlend: f32,
-  time: f32,
-  flowSpeed: f32,
+  wc: WarpConsts,
   starStreaks: f32
 ) -> vec3f {
-  if (starStreaks <= 0.001) {
-    return vec3f(0.0);
-  }
-  let r = length(pos);
-  if (r <= R * 1.04 || r >= R * 2.85) {
+  if (starStreaks <= 0.001 || r <= wc.rDustInner || r >= wc.rDustOuter) {
     return vec3f(0.0);
   }
 
-  let rInner = R * 1.04;
-  let rKnee = R * 1.28;
-  let radialEnv = smoothstep(rInner, rKnee, r) * exp(-max(r - rKnee, 0.0) / max(R * 0.68, 0.5));
+  let radialEnv = smoothstep(wc.rDustInner, wc.rDustKnee, r) * exp(-max(r - wc.rDustKnee, 0.0) * wc.invDustFall);
   if (radialEnv < 0.002) {
     return vec3f(0.0);
   }
 
-  let advZ = time * flowSpeed * (0.45 + 0.18 * min(v_s, 3.5));
-  let uvw = vec3f(pos.x * 0.28, pos.y * 0.28, pos.z * 0.055 + advZ);
+  let uvw = vec3f(pos.x * 0.28, pos.y * 0.28, pos.z * 0.055 + wc.advZDust);
   let sn = textureSampleLevel(uVolumeNoise, sVolume, uvw, 0.0);
   var streak = smoothstep(0.60, 0.95, sn.g * 0.62 + sn.a * 0.48);
   streak = streak * streak;
 
-  let causalAtten = select(1.0, smoothstep(3.8, 1.3, kLen), frameBlend > 0.5);
+  let causalAtten = select(1.0, smoothstep(3.8, 1.3, kLen), wc.frameBlend > 0.5);
 
   var col = mix(vec3f(0.32, 0.72, 1.00), vec3f(0.84, 0.95, 1.00), sn.a);
   if (pos.z < 0.0) {
-    col = mix(col, vec3f(0.70, 0.44, 0.92), smoothstep(0.0, -R * 1.5, pos.z) * 0.45);
+    col = mix(col, vec3f(0.70, 0.44, 0.92), smoothstep(0.0, -1.5 * wc.R, pos.z) * 0.45);
   }
-  let speedGain = 0.35 + 0.25 * min(v_s, 3.5);
-  return col * (streak * radialEnv * starStreaks * speedGain * causalAtten * 0.18);
+  return col * (streak * radialEnv * starStreaks * wc.speedGain * causalAtten * 0.18);
 }
 
 // ============================================================================
 // 4. SKY BACKGROUND & CAUSTIC / HAWKING RIM COMPOSITOR
 // ============================================================================
+
+const INV_BB_5800 : vec3f = vec3f(1.0, 1.137223, 1.209106);
 
 fn sampleSkyBackground(
   rawDir: vec3f,
@@ -534,8 +520,7 @@ fn sampleSkyBackground(
   skyLin += brightCores * brightCores * 2.6;
 
   let tObsMw = 5800.0 * gEff;
-  let bbRef = max(sampleBlackbody(5800.0), vec3f(0.08));
-  var bbMw = sampleBlackbody(tObsMw) / bbRef;
+  var bbMw = sampleBlackbody(tObsMw) * INV_BB_5800;
   if (gEff > 1.0) {
     bbMw = mix(bbMw, vec3f(0.58, 0.86, 1.24), smoothstep(1.2, 3.2, gEff) * 0.35);
   }
@@ -572,7 +557,7 @@ fn sampleSkyBackground(
 }
 
 // ============================================================================
-// 5. MAIN ADAPTIVE ADM NULL GEODESIC RK4 RAY-MARCHER
+// 5. MAIN ADAPTIVE ADM NULL GEODESIC RK4 / RK2 RAY-MARCHER
 // ============================================================================
 
 @fragment
@@ -615,6 +600,42 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   let flowSpeed = max(u.qualityParams.y, 0.0);
   let frameBlend = clamp(u.qualityParams.z, 0.0, 1.0);
 
+  let invR = 1.0 / max(R, 1e-3);
+  let sigma2 = sigma * sigma;
+  let tanhSR = safeTanh(sigma * R);
+  let sech2SR = max(1.0 - tanhSR * tanhSR, 0.0);
+  let invDenom2 = 1.0 / max(2.0 * tanhSR, 1e-5);
+  let lentzEps = 0.12 * R;
+
+  var wc: WarpConsts;
+  wc.R = R;
+  wc.invR = invR;
+  wc.sigma = sigma;
+  wc.sigma2 = sigma2;
+  wc.v_s = v_s;
+  wc.frameBlend = frameBlend;
+  wc.extShiftZ = (1.0 - frameBlend) * v_s;
+  wc.invDenom2 = invDenom2;
+  wc.sigmaInvD2 = sigma * invDenom2;
+  wc.sigma2InvD1 = sigma2 / max(tanhSR, 1e-5);
+  wc.dfOverR0 = -2.0 * sigma2 * sech2SR;
+  wc.dhOverR0 = (8.0 / 3.0) * (sigma2 * sigma2) * sech2SR * (3.0 * sech2SR - 1.0);
+  wc.wallStep = 0.14 / sigma;
+  wc.invSigma16 = 1.6 / sigma;
+  wc.weakTailR = 2.0 / sigma;
+  wc.rFlatIn = R - 4.0 / sigma;
+  wc.lentzEps2 = lentzEps * lentzEps;
+  wc.advZWall = simTime * flowSpeed;
+  wc.advZDust = simTime * flowSpeed * (0.45 + 0.18 * min(v_s, 3.5));
+  wc.bridgeAtten = mix(1.0, 0.18, frameBlend);
+  wc.scaleGain = mix(1.0, 0.80, clamp((sigma - 2.2) / 3.5, 0.0, 1.0));
+  wc.speedGain = 0.35 + 0.25 * min(v_s, 3.5);
+  wc.rDustInner = R * 1.04;
+  wc.rDustKnee = R * 1.28;
+  wc.rDustOuter = R * 2.85;
+  wc.invDustFall = 1.0 / max(R * 0.68, 0.5);
+  wc.metricType = metricType;
+
   let bnCoord = vec2i(in.pos.xy) & vec2i(127);
   let bnRaw = textureLoad(uBlueNoise, bnCoord, 0);
   let fIdx = f32(frameIndex & 1023);
@@ -631,7 +652,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   }
 
   let escapeR = max(R + 7.5 / sigma, max(R + 4.5, 2.2 * R));
-  let dustR = max(escapeR, R * 2.85);
+  let dustR = max(escapeR, wc.rDustOuter);
 
   var pos = u.camPos_metric.xyz;
   var k = -rayDir;
@@ -661,7 +682,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
           for (var s: i32 = 0; s < 16; s++) {
             let tS = tStart + (f32(s) + bn.x) * dtDust;
             let dPos = pos + rayDir * tS;
-            radiance += transmittance * evalDustStreak(dPos, R, v_s, 1.0, frameBlend, simTime, flowSpeed, starStreaks) * dtDust;
+            radiance += transmittance * evalDustStreak(dPos, length(dPos), 1.0, wc, starStreaks) * dtDust;
           }
         }
       } else {
@@ -673,7 +694,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
             for (var s: i32 = 0; s < 12; s++) {
               let tS = tEntDust + (f32(s) + bn.x) * dtDust;
               let dPos = pos + rayDir * tS;
-              radiance += transmittance * evalDustStreak(dPos, R, v_s, 1.0, frameBlend, simTime, flowSpeed, starStreaks) * dtDust;
+              radiance += transmittance * evalDustStreak(dPos, length(dPos), 1.0, wc, starStreaks) * dtDust;
             }
           }
         }
@@ -691,8 +712,27 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
       break;
     }
 
-    let k1 = evalGeodesicRHS(pos, k, R, sigma, v_s, metricType, frameBlend);
     let r = length(pos);
+    // Flat-space inner core analytic jump (skipped for Lentz, stays strictly inside rFlatIn < rDustInner)
+    if (metricType != 2 && wc.rFlatIn > 0.25 && r < wc.rFlatIn - 0.05) {
+      let kHat = k / max(kLen, 1e-6);
+      let vFlat = -kHat + vec3f(0.0, 0.0, -wc.extShiftZ);
+      let vFlatLen = length(vFlat);
+      if (vFlatLen > 1e-4) {
+        let vFlatDir = vFlat / vFlatLen;
+        let bDot = dot(pos, vFlatDir);
+        let disc = bDot * bDot - (dot(pos, pos) - wc.rFlatIn * wc.rFlatIn);
+        if (disc > 0.0) {
+          let tExit = -bDot + sqrt(disc);
+          if (tExit > 0.05) {
+            pos += vFlatDir * tExit;
+            continue;
+          }
+        }
+      }
+    }
+
+    let k1 = evalGeodesicRHS(pos, k, wc);
     if (r > escapeR && dot(pos, k1.dp) > 0.0) {
       escaped = true;
       break;
@@ -700,56 +740,76 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
 
     let speedCap = max(length(k1.dp), 1.0);
     let wallDist = abs(k1.rEff - R);
-    let wallStep = 0.14 / sigma;
-    let safeDistStep = wallStep + 0.40 * max(wallDist - 1.6 / sigma, 0.0);
+    let safeDistStep = wc.wallStep + 0.40 * max(wallDist - wc.invSigma16, 0.0);
     let maxSp = min(0.32 * R, safeDistStep) * qualScale;
     let ds = maxSp / speedCap;
 
-    let k2 = evalGeodesicRHS(pos + (0.5 * ds) * k1.dp, k + (0.5 * ds) * k1.dk, R, sigma, v_s, metricType, frameBlend);
-    let k3 = evalGeodesicRHS(pos + (0.5 * ds) * k2.dp, k + (0.5 * ds) * k2.dk, R, sigma, v_s, metricType, frameBlend);
-    let k4 = evalGeodesicRHS(pos + ds * k3.dp, k + ds * k3.dk, R, sigma, v_s, metricType, frameBlend);
+    var posNext: vec3f;
+    var kNext: vec3f;
+    var endT00: f32;
+    var endTheta: f32;
+    if (wallDist > wc.weakTailR && kLen < 8.0) {
+      let k2 = evalGeodesicRHS(pos + (0.5 * ds) * k1.dp, k + (0.5 * ds) * k1.dk, wc);
+      posNext = pos + ds * k2.dp;
+      kNext = k + ds * k2.dk;
+      integratedNegTheta += -k2.theta * ds;
+      endT00 = k2.t00;
+      endTheta = k2.theta;
+    } else {
+      let k2 = evalGeodesicRHS(pos + (0.5 * ds) * k1.dp, k + (0.5 * ds) * k1.dk, wc);
+      let k3 = evalGeodesicRHS(pos + (0.5 * ds) * k2.dp, k + (0.5 * ds) * k2.dk, wc);
+      let k4 = evalGeodesicRHS(pos + ds * k3.dp, k + ds * k3.dk, wc);
 
-    let posNext = pos + (ds / 6.0) * (k1.dp + 2.0 * k2.dp + 2.0 * k3.dp + k4.dp);
-    let kNext = k + (ds / 6.0) * (k1.dk + 2.0 * k2.dk + 2.0 * k3.dk + k4.dk);
-
-    integratedNegTheta += (-0.5 * (k1.theta + k4.theta)) * ds;
+      posNext = pos + (ds / 6.0) * (k1.dp + 2.0 * k2.dp + 2.0 * k3.dp + k4.dp);
+      kNext = k + (ds / 6.0) * (k1.dk + 2.0 * k2.dk + 2.0 * k3.dk + k4.dk);
+      integratedNegTheta += (-0.5 * (k1.theta + k4.theta)) * ds;
+      endT00 = k4.t00;
+      endTheta = k4.theta;
+    }
 
     let segLen = length(posNext - pos);
-    let nVol = clamp(i32(ceil(segLen / 0.18)), 1, 5);
-    let subLen = segLen / f32(nVol);
     let bnStep = fract(bn.y + f32(step) * 0.61803399);
     let kNextLen = length(kNext);
 
-    for (var vsIdx: i32 = 0; vsIdx < 5; vsIdx++) {
-      if (vsIdx >= nVol) { break; }
-      let subBn = fract(bnStep + f32(vsIdx) * 0.61803399);
-      let uSub = (f32(vsIdx) + subBn) / f32(nVol);
-      let sPos = mix(pos, posNext, uSub);
-      let kSubLen = mix(kLen, kNextLen, uSub);
-      let t00Sub = mix(k1.t00, k4.t00, uSub);
-      let thetaSub = mix(k1.theta, k4.theta, uSub);
+    let hasWall = (wallShimmer > 0.001) && (max(abs(k1.t00), abs(endT00)) > 1e-5 || max(abs(k1.theta), abs(endTheta)) > 1e-3);
+    if (hasWall) {
+      let nVol = clamp(i32(ceil(segLen / 0.18)), 1, 5);
+      let subLen = segLen / f32(nVol);
+      for (var vsIdx: i32 = 0; vsIdx < 5; vsIdx++) {
+        if (vsIdx >= nVol) { break; }
+        let subBn = fract(bnStep + f32(vsIdx) * 0.61803399);
+        let uSub = (f32(vsIdx) + subBn) / f32(nVol);
+        let sPos = mix(pos, posNext, uSub);
+        let kSubLen = mix(kLen, kNextLen, uSub);
+        let t00Sub = mix(k1.t00, endT00, uSub);
+        let thetaSub = mix(k1.theta, endTheta, uSub);
 
-      let ws = evalWallShimmer(
-        sPos, R, sigma, v_s, t00Sub, thetaSub, kSubLen, frameBlend, metricType, simTime, flowSpeed, wallShimmer
-      );
-      var volEmit = ws.emit;
-      if (starStreaks > 0.001 && length(sPos) > R * 1.04) {
-        volEmit += evalDustStreak(sPos, R, v_s, kSubLen, frameBlend, simTime, flowSpeed, starStreaks);
-      }
-
-      let ext = select(0.0, min(abs(t00Sub), 0.4) * (0.04 + 0.22 * ws.ridge) * wallShimmer, frameBlend < 0.5);
-      if (dot(volEmit, volEmit) > 1e-10 || ext > 1e-6) {
-        let tau = ext * subLen;
-        let stepT = exp(-tau);
-        var stepRad: vec3f;
-        if (tau > 1e-4) {
-          stepRad = volEmit * ((1.0 - stepT) / max(ext, 1e-5));
-        } else {
-          stepRad = volEmit * subLen;
+        let ws = evalWallShimmer(sPos, t00Sub, thetaSub, kSubLen, wc, wallShimmer);
+        let volEmit = ws.emit;
+        let ext = select(0.0, min(abs(t00Sub), 0.4) * (0.04 + 0.22 * ws.ridge) * wallShimmer, frameBlend < 0.5);
+        if (dot(volEmit, volEmit) > 1e-10 || ext > 1e-6) {
+          let tau = ext * subLen;
+          let stepT = exp(-tau);
+          var stepRad: vec3f;
+          if (tau > 1e-4) {
+            stepRad = volEmit * ((1.0 - stepT) / max(ext, 1e-5));
+          } else {
+            stepRad = volEmit * subLen;
+          }
+          radiance += transmittance * stepRad;
+          transmittance *= stepT;
+          if (transmittance < 0.01) { break; }
         }
-        radiance += transmittance * stepRad;
-        transmittance *= stepT;
-        if (transmittance < 0.01) { break; }
+      }
+    }
+
+    if (starStreaks > 0.001 && transmittance > 0.01) {
+      let dFrac = fract(bnStep + 0.38196601);
+      let dPos = mix(pos, posNext, dFrac);
+      let dR = length(dPos);
+      if (dR > wc.rDustInner && dR < wc.rDustOuter) {
+        let dKLen = mix(kLen, kNextLen, dFrac);
+        radiance += transmittance * evalDustStreak(dPos, dR, dKLen, wc, starStreaks) * segLen;
       }
     }
 
@@ -773,7 +833,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   let finalDir = -k / kFinal;
 
   if (runLoop && escaped && !captured && starStreaks > 0.001 && length(pos) < dustR) {
-    let dEnd = evalGeodesicRHS(pos, k, R, sigma, v_s, metricType, frameBlend);
+    let dEnd = evalGeodesicRHS(pos, k, wc);
     let dEndLen = length(dEnd.dp);
     if (dEndLen > 1e-4) {
       let exitVel = dEnd.dp / dEndLen;
@@ -785,7 +845,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
         for (var s: i32 = 0; s < 12; s++) {
           let tS = (f32(s) + bn.z) * dtDust;
           let dPos = pos + exitVel * tS;
-          radiance += transmittance * evalDustStreak(dPos, R, v_s, kFinal, frameBlend, simTime, flowSpeed, starStreaks) * dtDust;
+          radiance += transmittance * evalDustStreak(dPos, length(dPos), kFinal, wc, starStreaks) * dtDust;
         }
       }
     }

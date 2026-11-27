@@ -1,9 +1,10 @@
 use std::f32::consts::PI;
+use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::renderer::SharedGpuAssets;
-use crate::renderer::post::{PostFrameParams, PostTuning, make_fs_pipe, run_fs_pass};
+use crate::renderer::post::{PostFrameParams, PostTuning, run_fs_pass};
+use crate::renderer::{SharedGpuAssets, SimBglKind};
 use crate::shaders;
 use crate::sims::{
     ControlItem, ControlKind, ControlSection, HudMetadata, PresetMeta, SimId, SimInput, Simulation,
@@ -1218,7 +1219,7 @@ pub struct WarpDriveSim {
     sim_time: f32,
 
     camera: WarpCamera,
-    pipeline: wgpu::RenderPipeline,
+    pipeline: Arc<wgpu::RenderPipeline>,
     ubo: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
 }
@@ -1226,18 +1227,11 @@ pub struct WarpDriveSim {
 impl WarpDriveSim {
     pub fn new(assets: &mut SharedGpuAssets) -> Self {
         let p = &PRESETS[2]; // Default preset is 'superluminal' (index 2)
-        let shader = assets
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("warp-wgsl"),
-                source: wgpu::ShaderSource::Wgsl(shaders::WARP.into()),
-            });
-        let pipeline = make_fs_pipe(
-            &assets.device,
-            "warp-pipe",
-            &assets.standard_sim_bgl,
-            &shader,
-            wgpu::TextureFormat::Rgba16Float,
+        let pipeline = assets.get_or_create_sim_pipeline(
+            SimId::WarpDrive,
+            "warp",
+            SimBglKind::Standard,
+            shaders::WARP,
         );
         let ubo = assets.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("warp-ubo"),
@@ -1361,8 +1355,16 @@ impl Simulation for WarpDriveSim {
         }
     }
 
-    fn presets(&self) -> Vec<PresetMeta> {
-        PRESETS.iter().map(|p| p.meta).collect()
+    fn presets(&self) -> &'static [PresetMeta] {
+        const METAS: [PresetMeta; 6] = [
+            PRESETS[0].meta,
+            PRESETS[1].meta,
+            PRESETS[2].meta,
+            PRESETS[3].meta,
+            PRESETS[4].meta,
+            PRESETS[5].meta,
+        ];
+        &METAS
     }
 
     fn active_preset_index(&self) -> Option<usize> {
@@ -1393,25 +1395,25 @@ impl Simulation for WarpDriveSim {
         }
     }
 
-    fn control_sections(&self) -> Vec<ControlSection> {
-        vec![
+    fn control_sections(&self) -> &'static [ControlSection] {
+        const SECTIONS: &[ControlSection] = &[
             ControlSection {
                 id: "metric",
-                title: "Warp Metric & Velocity",
+                title: "WARP METRIC & VELOCITY",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "metricType",
                         label: "Spacetime Metric",
                         kind: ControlKind::Segmented {
-                            options: vec![(0, "Alcubierre"), (1, "Natário"), (2, "Lentz")],
+                            options: &[(0, "Alcubierre"), (1, "Natário"), (2, "Lentz")],
                         },
                     },
                     ControlItem {
                         key: "cameraMode",
                         label: "Observer Frame",
                         kind: ControlKind::Segmented {
-                            options: vec![(0, "External Chase"), (1, "Inside Bridge")],
+                            options: &[(0, "External Chase"), (1, "Inside Bridge")],
                         },
                     },
                     ControlItem {
@@ -1458,9 +1460,9 @@ impl Simulation for WarpDriveSim {
             },
             ControlSection {
                 id: "exotic",
-                title: "Exotic Wall & Starfield",
+                title: "EXOTIC WALL & STARFIELD",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "wallShimmer",
                         label: "Exotic Wall Shimmer",
@@ -1505,9 +1507,9 @@ impl Simulation for WarpDriveSim {
             },
             ControlSection {
                 id: "optics",
-                title: "Optics, Sky & Quality",
+                title: "OPTICS, SKY & QUALITY",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "exposure",
                         label: "Exposure",
@@ -1552,7 +1554,7 @@ impl Simulation for WarpDriveSim {
                         key: "skyMode",
                         label: "Background Sky Source",
                         kind: ControlKind::Select {
-                            options: vec![
+                            options: &[
                                 (0, "Hybrid 4K + Micro-Stars"),
                                 (1, "4K NASA/ESO Map"),
                                 (2, "Procedural Deep Field"),
@@ -1563,19 +1565,20 @@ impl Simulation for WarpDriveSim {
                         key: "quality",
                         label: "Ray-Trace Quality",
                         kind: ControlKind::Segmented {
-                            options: vec![(0, "Medium"), (1, "High"), (2, "Ultra Cinema")],
+                            options: &[(0, "Medium"), (1, "High"), (2, "Ultra Cinema")],
                         },
                     },
                     ControlItem {
                         key: "resolutionScale",
                         label: "Render Resolution",
                         kind: ControlKind::Segmented {
-                            options: vec![(50, "0.5×"), (75, "0.75×"), (100, "1.0×")],
+                            options: &[(50, "0.5×"), (75, "0.75×"), (100, "1.0×")],
                         },
                     },
                 ],
             },
-        ]
+        ];
+        SECTIONS
     }
 
     fn get_f32(&self, key: &str) -> f32 {
@@ -1749,7 +1752,7 @@ impl Simulation for WarpDriveSim {
             preset_badge,
             secondary_badge,
             secondary_badge_warm: false,
-            drawer_title: "Warp Physics & Optics",
+            drawer_title: "WARP PHYSICS & OPTICS",
             drawer_subtitle: format!("{} · T00 {}", tel.metric_label, t00_str),
             hint_text: "Drag to orbit/look · Scroll to zoom · T Bridge/Chase · Space Still · H HUD",
             telemetry: [

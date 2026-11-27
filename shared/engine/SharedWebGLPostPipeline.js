@@ -48,12 +48,87 @@ export function formatShaderError(name, stage, source, infoLog) {
   return `[WebGLRenderer] ${name} (${stage}) compile failed:\n${infoLog || 'Unknown error'}\n${errorLines.join('\n')}`;
 }
 
+/**
+ * Probes WebGL2 Hybrid HDR formats:
+ * - hdrSpec: R11F_G11F_B10F (4 B/px, gated on EXT_color_buffer_float) -> RGBA16F -> RGBA8
+ * - taaSpec: RGBA16F (8 B/px for 128-sample accumulation & signed velocity targets) -> RGBA8
+ */
+export function detectWebGLHdrFormats(gl, extColorBufferFloat, extColorBufferHalfFloat) {
+  const hdrCandidates = [];
+  if (extColorBufferFloat) {
+    hdrCandidates.push({
+      name: 'R11F_G11F_B10F',
+      internalFormat: gl.R11F_G11F_B10F,
+      format: gl.RGB,
+      type: gl.HALF_FLOAT,
+    });
+  }
+  if (extColorBufferFloat || extColorBufferHalfFloat) {
+    hdrCandidates.push({
+      name: 'RGBA16F',
+      internalFormat: gl.RGBA16F,
+      format: gl.RGBA,
+      type: gl.HALF_FLOAT,
+    });
+  }
+  const rgba8Fallback = {
+    name: 'RGBA8',
+    internalFormat: gl.RGBA8,
+    format: gl.RGBA,
+    type: gl.UNSIGNED_BYTE,
+  };
+  hdrCandidates.push(rgba8Fallback);
+
+  const taaCandidates = [];
+  if (extColorBufferFloat || extColorBufferHalfFloat) {
+    taaCandidates.push({
+      name: 'RGBA16F',
+      internalFormat: gl.RGBA16F,
+      format: gl.RGBA,
+      type: gl.HALF_FLOAT,
+    });
+  }
+  taaCandidates.push(rgba8Fallback);
+
+  const probeFbo = gl.createFramebuffer();
+  const probeTex = gl.createTexture();
+
+  const pickFirstComplete = (candidates) => {
+    for (const spec of candidates) {
+      gl.bindTexture(gl.TEXTURE_2D, probeTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texImage2D(gl.TEXTURE_2D, 0, spec.internalFormat, 4, 4, 0, spec.format, spec.type, null);
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, probeFbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, probeTex, 0);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+        return spec;
+      }
+    }
+    return rgba8Fallback;
+  };
+
+  const hdrSpec = pickFirstComplete(hdrCandidates);
+  const taaSpec = hdrSpec.name === 'RGBA16F' ? hdrSpec : pickFirstComplete(taaCandidates);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.bindTexture(gl.TEXTURE_2D, null);
+  gl.deleteTexture(probeTex);
+  gl.deleteFramebuffer(probeFbo);
+
+  return { hdrSpec, taaSpec };
+}
+
 export class SharedWebGLPostPipeline {
   /**
    * @param {{
    *   gl: WebGL2RenderingContext,
    *   emptyVao: WebGLVertexArrayObject | null,
    *   hdrSpec: { internalFormat: number, format: number, type: number },
+   *   taaSpec?: { internalFormat: number, format: number, type: number },
    *   opticsProfile?: string,
    *   compileProgram: (name: string, vertSrc: string, fragSrc: string) => any,
    *   getUniform: (progEntry: any, name: string) => WebGLUniformLocation | null,
@@ -65,6 +140,7 @@ export class SharedWebGLPostPipeline {
     this.gl = opts.gl;
     this.emptyVao = opts.emptyVao;
     this.hdrSpec = opts.hdrSpec;
+    this.taaSpec = opts.taaSpec || opts.hdrSpec;
     this.optics = resolvePostOpticsProfile(opts.opticsProfile || 'default');
     this._getUniform = opts.getUniform;
     this._drawFullscreen = opts.drawFullscreen;
@@ -89,11 +165,78 @@ export class SharedWebGLPostPipeline {
     this.anamorphicFboB = null;
     this.taaReadIdx = 0;
     this.taaWriteIdx = 1;
+
+    this._initStaticUniforms();
   }
 
-  createRenderTarget(width, height) {
+  _initStaticUniforms() {
     const gl = this.gl;
-    const spec = this.hdrSpec;
+    const set1i = (prog, name, v) => {
+      const loc = this._getUniform(prog, name);
+      if (loc) gl.uniform1i(loc, v);
+    };
+    const set1f = (prog, name, v) => {
+      const loc = this._getUniform(prog, name);
+      if (loc) gl.uniform1f(loc, v);
+    };
+
+    const { taa, bloomPrefilter, bloomDownsample, bloomUpsample, anamorphic, composite } =
+      this.programs;
+
+    if (taa) {
+      gl.useProgram(taa.program);
+      set1i(taa, 'uCurrentTex', 0);
+      set1i(taa, 'uHistoryTex', 1);
+    }
+    if (bloomPrefilter) {
+      gl.useProgram(bloomPrefilter.program);
+      set1i(bloomPrefilter, 'uSrcTex', 0);
+      set1f(bloomPrefilter, 'uThreshold', this.optics.prefilterThreshold);
+      set1f(bloomPrefilter, 'uKnee', this.optics.prefilterKnee);
+      set1f(bloomPrefilter, 'uClampMax', this.optics.prefilterClampMax);
+    }
+    if (bloomDownsample) {
+      gl.useProgram(bloomDownsample.program);
+      set1i(bloomDownsample, 'uSrcTex', 0);
+    }
+    if (bloomUpsample) {
+      gl.useProgram(bloomUpsample.program);
+      set1i(bloomUpsample, 'uLowTex', 0);
+      set1i(bloomUpsample, 'uHighTex', 1);
+      set1f(bloomUpsample, 'uFilterRadius', this.optics.upsampleRadius);
+      set1f(bloomUpsample, 'uMipWeight', this.optics.upsampleWeight);
+    }
+    if (anamorphic) {
+      gl.useProgram(anamorphic.program);
+      set1i(anamorphic, 'uSrcTex', 0);
+      gl.uniform4f(
+        this._getUniform(anamorphic, 'uTintInnerEdge'),
+        this.optics.coreTint[0],
+        this.optics.coreTint[1],
+        this.optics.coreTint[2],
+        this.optics.fringeStart
+      );
+      gl.uniform4f(
+        this._getUniform(anamorphic, 'uTintOuterMix'),
+        this.optics.outerTint[0],
+        this.optics.outerTint[1],
+        this.optics.outerTint[2],
+        this.optics.fringeMix
+      );
+    }
+    if (composite) {
+      gl.useProgram(composite.program);
+      set1i(composite, 'uSceneTex', 0);
+      set1i(composite, 'uBloomTex', 1);
+      set1i(composite, 'uAnamorphicTex', 2);
+      set1f(composite, 'uBloomGain', this.optics.bloomGain);
+      set1f(composite, 'uAnamorphicGain', this.optics.anamorphicGain);
+    }
+    gl.useProgram(null);
+  }
+
+  createRenderTarget(width, height, spec = this.hdrSpec) {
+    const gl = this.gl;
     const w = Math.max(1, width | 0);
     const h = Math.max(1, height | 0);
 
@@ -143,18 +286,18 @@ export class SharedWebGLPostPipeline {
   resize(nextW, nextH) {
     this.destroyTargets();
 
-    this.sceneFbo = this.createRenderTarget(nextW, nextH);
+    this.sceneFbo = this.createRenderTarget(nextW, nextH, this.hdrSpec);
     this.taaFbos = [
-      this.createRenderTarget(nextW, nextH),
-      this.createRenderTarget(nextW, nextH),
+      this.createRenderTarget(nextW, nextH, this.taaSpec),
+      this.createRenderTarget(nextW, nextH, this.taaSpec),
     ];
 
     let mipW = Math.max(1, nextW >> 1);
     let mipH = Math.max(1, nextH >> 1);
     for (let i = 0; i < BLOOM_MIP_COUNT; i++) {
-      this.bloomDownFbos.push(this.createRenderTarget(mipW, mipH));
+      this.bloomDownFbos.push(this.createRenderTarget(mipW, mipH, this.hdrSpec));
       if (i < BLOOM_MIP_COUNT - 1) {
-        this.bloomUpFbos.push(this.createRenderTarget(mipW, mipH));
+        this.bloomUpFbos.push(this.createRenderTarget(mipW, mipH, this.hdrSpec));
       }
       mipW = Math.max(1, mipW >> 1);
       mipH = Math.max(1, mipH >> 1);
@@ -162,8 +305,27 @@ export class SharedWebGLPostPipeline {
 
     const anaW = Math.max(1, nextW >> 2);
     const anaH = Math.max(1, nextH >> 2);
-    this.anamorphicFboA = this.createRenderTarget(anaW, anaH);
-    this.anamorphicFboB = this.createRenderTarget(anaW, anaH);
+    this.anamorphicFboA = this.createRenderTarget(anaW, anaH, this.hdrSpec);
+    this.anamorphicFboB = this.createRenderTarget(anaW, anaH, this.hdrSpec);
+
+    // Sync resolution-dependent uniforms once per resize
+    const gl = this.gl;
+    if (this.programs.taa) {
+      gl.useProgram(this.programs.taa.program);
+      const loc = this._getUniform(this.programs.taa, 'uTexelSize');
+      if (loc) gl.uniform2f(loc, 1.0 / nextW, 1.0 / nextH);
+    }
+    if (this.programs.bloomPrefilter) {
+      gl.useProgram(this.programs.bloomPrefilter.program);
+      const loc = this._getUniform(this.programs.bloomPrefilter, 'uTexelSize');
+      if (loc) gl.uniform2f(loc, 1.0 / nextW, 1.0 / nextH);
+    }
+    if (this.programs.composite) {
+      gl.useProgram(this.programs.composite.program);
+      const loc = this._getUniform(this.programs.composite, 'uResolution');
+      if (loc) gl.uniform2f(loc, nextW, nextH);
+    }
+    gl.useProgram(null);
   }
 
   getSceneFbo() {
@@ -184,16 +346,8 @@ export class SharedWebGLPostPipeline {
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.sceneFbo.texture);
-    const uCurrentTex = this._getUniform(prog, 'uCurrentTex');
-    if (uCurrentTex) gl.uniform1i(uCurrentTex, 0);
-
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, historyRt.texture);
-    const uHistoryTex = this._getUniform(prog, 'uHistoryTex');
-    if (uHistoryTex) gl.uniform1i(uHistoryTex, 1);
-
-    const uTexelSize = this._getUniform(prog, 'uTexelSize');
-    if (uTexelSize) gl.uniform2f(uTexelSize, 1.0 / width, 1.0 / height);
 
     const uBlendFactor = this._getUniform(prog, 'uBlendFactor');
     if (uBlendFactor) gl.uniform1f(uBlendFactor, blendFactor);
@@ -233,11 +387,6 @@ export class SharedWebGLPostPipeline {
 
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, hdrTex);
-      gl.uniform1i(this._getUniform(preProg, 'uSrcTex'), 0);
-      gl.uniform2f(this._getUniform(preProg, 'uTexelSize'), 1.0 / width, 1.0 / height);
-      gl.uniform1f(this._getUniform(preProg, 'uThreshold'), this.optics.prefilterThreshold);
-      gl.uniform1f(this._getUniform(preProg, 'uKnee'), this.optics.prefilterKnee);
-      gl.uniform1f(this._getUniform(preProg, 'uClampMax'), this.optics.prefilterClampMax);
       this._drawFullscreen();
     }
 
@@ -245,7 +394,6 @@ export class SharedWebGLPostPipeline {
     const downProg = this.programs.bloomDownsample;
     if (downProg) {
       gl.useProgram(downProg.program);
-      const uSrc = this._getUniform(downProg, 'uSrcTex');
       const uTexel = this._getUniform(downProg, 'uTexelSize');
       const uKaris = this._getUniform(downProg, 'uUseKaris');
 
@@ -258,7 +406,6 @@ export class SharedWebGLPostPipeline {
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, src.texture);
-        gl.uniform1i(uSrc, 0);
         gl.uniform2f(uTexel, 1.0 / src.width, 1.0 / src.height);
         gl.uniform1i(uKaris, i === 1 ? 1 : 0);
         this._drawFullscreen();
@@ -269,11 +416,7 @@ export class SharedWebGLPostPipeline {
     const upProg = this.programs.bloomUpsample;
     if (needBloom && upProg) {
       gl.useProgram(upProg.program);
-      const uLow = this._getUniform(upProg, 'uLowTex');
-      const uHigh = this._getUniform(upProg, 'uHighTex');
       const uTexel = this._getUniform(upProg, 'uTexelSize');
-      const uRadius = this._getUniform(upProg, 'uFilterRadius');
-      const uWeight = this._getUniform(upProg, 'uMipWeight');
 
       for (let i = BLOOM_MIP_COUNT - 2; i >= 0; i--) {
         const lowSrc = i === BLOOM_MIP_COUNT - 2 ? this.bloomDownFbos[i + 1] : this.bloomUpFbos[i + 1];
@@ -285,15 +428,11 @@ export class SharedWebGLPostPipeline {
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, lowSrc.texture);
-        gl.uniform1i(uLow, 0);
 
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_2D, highSrc.texture);
-        gl.uniform1i(uHigh, 1);
 
         gl.uniform2f(uTexel, 1.0 / lowSrc.width, 1.0 / lowSrc.height);
-        gl.uniform1f(uRadius, this.optics.upsampleRadius);
-        gl.uniform1f(uWeight, this.optics.upsampleWeight);
         this._drawFullscreen();
       }
     }
@@ -302,32 +441,16 @@ export class SharedWebGLPostPipeline {
     const anaProg = this.programs.anamorphic;
     if (needAnamorphic && anaProg) {
       gl.useProgram(anaProg.program);
-      const uSrc = this._getUniform(anaProg, 'uSrcTex');
       const uTexel = this._getUniform(anaProg, 'uTexelSize');
       const uThresh = this._getUniform(anaProg, 'uThreshold');
       const uSpread = this._getUniform(anaProg, 'uSpread');
       const uPass = this._getUniform(anaProg, 'uPass');
-      gl.uniform4f(
-        this._getUniform(anaProg, 'uTintInnerEdge'),
-        this.optics.coreTint[0],
-        this.optics.coreTint[1],
-        this.optics.coreTint[2],
-        this.optics.fringeStart
-      );
-      gl.uniform4f(
-        this._getUniform(anaProg, 'uTintOuterMix'),
-        this.optics.outerTint[0],
-        this.optics.outerTint[1],
-        this.optics.outerTint[2],
-        this.optics.fringeMix
-      );
 
       const src0 = this.bloomDownFbos[1];
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.anamorphicFboA.fbo);
       gl.viewport(0, 0, this.anamorphicFboA.width, this.anamorphicFboA.height);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, src0.texture);
-      gl.uniform1i(uSrc, 0);
       gl.uniform2f(uTexel, 1.0 / src0.width, 1.0 / src0.height);
       gl.uniform1f(uThresh, this.optics.anaThreshold);
       gl.uniform1f(uSpread, this.optics.anaSpread0);
@@ -338,7 +461,6 @@ export class SharedWebGLPostPipeline {
       gl.viewport(0, 0, this.anamorphicFboB.width, this.anamorphicFboB.height);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.anamorphicFboA.texture);
-      gl.uniform1i(uSrc, 0);
       gl.uniform2f(uTexel, 1.0 / this.anamorphicFboA.width, 1.0 / this.anamorphicFboA.height);
       gl.uniform1f(uThresh, 0.0);
       gl.uniform1f(uSpread, this.optics.anaSpread1);
@@ -366,22 +488,16 @@ export class SharedWebGLPostPipeline {
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.taaFbos[this.taaReadIdx].texture);
-    gl.uniform1i(this._getUniform(prog, 'uSceneTex'), 0);
 
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.bloomUpFbos[0].texture);
-    gl.uniform1i(this._getUniform(prog, 'uBloomTex'), 1);
 
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, this.anamorphicFboB.texture);
-    gl.uniform1i(this._getUniform(prog, 'uAnamorphicTex'), 2);
 
-    gl.uniform2f(this._getUniform(prog, 'uResolution'), width, height);
     gl.uniform1f(this._getUniform(prog, 'uExposure'), exposure);
     gl.uniform1f(this._getUniform(prog, 'uBloomIntensity'), bloomIntensity);
     gl.uniform1f(this._getUniform(prog, 'uAnamorphicIntensity'), anamorphicIntensity);
-    gl.uniform1f(this._getUniform(prog, 'uBloomGain'), this.optics.bloomGain);
-    gl.uniform1f(this._getUniform(prog, 'uAnamorphicGain'), this.optics.anamorphicGain);
     gl.uniform1f(this._getUniform(prog, 'uTime'), Number.isFinite(simTime) ? simTime : 0.0);
     gl.uniform1i(this._getUniform(prog, 'uFrameIndex'), frameIndex);
 

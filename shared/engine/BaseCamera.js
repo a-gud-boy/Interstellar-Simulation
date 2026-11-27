@@ -60,7 +60,22 @@ export function normalizeWheelDelta(e) {
  * Applies local lookYaw, lookPitch, and roll around an orthonormal triad (r0, u0, f0),
  * preserving exact right-handedness cross(right, forward) === up without divisions.
  */
-export function applyLocalLookTriad(r0, u0, f0, lookYaw, lookPitch, roll) {
+/**
+ * Zero-allocation critically damped spring step writing [next, nextVel] into `outPair`.
+ */
+export function stepCriticallyDampedInto(outPair, current, velocity, target, omega, dt) {
+  const delta = current - target;
+  const temp = (velocity + omega * delta) * dt;
+  const exp = Math.exp(-omega * dt);
+  outPair[0] = target + (delta + temp) * exp;
+  outPair[1] = (velocity - omega * temp) * exp;
+  return outPair;
+}
+
+/**
+ * Zero-allocation local look triad writing column-major mat3 [right, up, forward] into Float32Array(9).
+ */
+export function applyLocalLookTriadInto(outBasisF32, r0, u0, f0, lookYaw, lookPitch, roll) {
   const cosY = Math.cos(lookYaw);
   const sinY = Math.sin(lookYaw);
 
@@ -86,26 +101,34 @@ export function applyLocalLookTriad(r0, u0, f0, lookYaw, lookPitch, roll) {
   const cosR = Math.cos(roll);
   const sinR = Math.sin(roll);
 
-  const rx = cosR * rYx + sinR * uPx;
-  const ry = cosR * rYy + sinR * uPy;
-  const rz = cosR * rYz + sinR * uPz;
+  outBasisF32[0] = cosR * rYx + sinR * uPx;
+  outBasisF32[1] = cosR * rYy + sinR * uPy;
+  outBasisF32[2] = cosR * rYz + sinR * uPz;
+  outBasisF32[3] = -sinR * rYx + cosR * uPx;
+  outBasisF32[4] = -sinR * rYy + cosR * uPy;
+  outBasisF32[5] = -sinR * rYz + cosR * uPz;
+  outBasisF32[6] = fx;
+  outBasisF32[7] = fy;
+  outBasisF32[8] = fz;
+  return outBasisF32;
+}
 
-  const ux = -sinR * rYx + cosR * uPx;
-  const uy = -sinR * rYy + cosR * uPy;
-  const uz = -sinR * rYz + cosR * uPz;
-
+/**
+ * Applies local yaw/pitch/roll around an orthonormal camera triad [r0, u0, f0].
+ */
+export function applyLocalLookTriad(r0, u0, f0, lookYaw, lookPitch, roll) {
+  const m = applyLocalLookTriadInto(new Float32Array(9), r0, u0, f0, lookYaw, lookPitch, roll);
   return {
-    right: [rx, ry, rz],
-    up: [ux, uy, uz],
-    forward: [fx, fy, fz],
+    right: [m[0], m[1], m[2]],
+    up: [m[3], m[4], m[5]],
+    forward: [m[6], m[7], m[8]],
   };
 }
 
 /**
- * Computes pole-free right-handed orbital triad looking toward the origin at (azimuth, elevation)
- * with Dutch roll applied around forward. Column-major mat3: [right, up, forward].
+ * Zero-allocation orbital triad writer: fills `outPos3` and column-major `outBasisF32` (9 floats).
  */
-export function computeSphericalOrbitBasis(azimuth, elevation, roll) {
+export function computeSphericalOrbitBasisInto(outPos3, outBasisF32, azimuth, elevation, roll) {
   const cosEl = Math.cos(elevation);
   const sinEl = Math.sin(elevation);
   const cosAz = Math.cos(azimuth);
@@ -142,10 +165,113 @@ export function computeSphericalOrbitBasis(azimuth, elevation, roll) {
   const cosR = Math.cos(roll);
   const sinR = Math.sin(roll);
 
+  outPos3[0] = uxDir;
+  outPos3[1] = uyDir;
+  outPos3[2] = uzDir;
+  outBasisF32[0] = cosR * r0x + sinR * u0x;
+  outBasisF32[1] = cosR * r0y + sinR * u0y;
+  outBasisF32[2] = cosR * r0z + sinR * u0z;
+  outBasisF32[3] = -sinR * r0x + cosR * u0x;
+  outBasisF32[4] = -sinR * r0y + cosR * u0y;
+  outBasisF32[5] = -sinR * r0z + cosR * u0z;
+  outBasisF32[6] = fx;
+  outBasisF32[7] = fy;
+  outBasisF32[8] = fz;
+  return outBasisF32;
+}
+
+/**
+ * Computes pole-free right-handed orbital triad looking toward the origin at (azimuth, elevation)
+ * with Dutch roll applied around forward. Column-major mat3: [right, up, forward].
+ */
+export function computeSphericalOrbitBasis(azimuth, elevation, roll) {
+  const pos = [0, 0, 0];
+  const m = computeSphericalOrbitBasisInto(pos, new Float32Array(9), azimuth, elevation, roll);
   return {
-    posUnit: [uxDir, uyDir, uzDir],
-    right: [cosR * r0x + sinR * u0x, cosR * r0y + sinR * u0y, cosR * r0z + sinR * u0z],
-    up: [-sinR * r0x + cosR * u0x, -sinR * r0y + cosR * u0y, -sinR * r0z + cosR * u0z],
-    forward: [fx, fy, fz],
+    posUnit: pos,
+    right: [m[0], m[1], m[2]],
+    up: [m[3], m[4], m[5]],
+    forward: [m[6], m[7], m[8]],
+  };
+}
+
+/**
+ * Caches canvas CSS dimensions across pointer moves and invalidates on ResizeObserver / window resize
+ * to prevent forced synchronous DOM layout reflows inside input handlers.
+ */
+export function createCanvasRectCache(getCanvas) {
+  const cachedRect = { width: 1280, height: 720 };
+  let dirty = true;
+  let observer = null;
+  let observedCanvas = null;
+
+  const invalidate = () => {
+    dirty = true;
+  };
+
+  const attachObserver = (canvas) => {
+    if (observedCanvas === canvas) return;
+    if (observer && observedCanvas) {
+      try {
+        observer.unobserve(observedCanvas);
+      } catch (_) {}
+    }
+    observedCanvas = canvas || null;
+    if (canvas && typeof ResizeObserver !== 'undefined') {
+      if (!observer) {
+        observer = new ResizeObserver(invalidate);
+      }
+      observer.observe(canvas);
+    }
+  };
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('resize', invalidate, { passive: true });
+  }
+
+  const measure = () => {
+    const canvas = typeof getCanvas === 'function' ? getCanvas() : getCanvas;
+    attachObserver(canvas);
+    if (canvas) {
+      const cw = canvas.clientWidth;
+      const ch = canvas.clientHeight;
+      if (cw > 0 && ch > 0) {
+        cachedRect.width = cw;
+        cachedRect.height = ch;
+      } else {
+        const r = canvas.getBoundingClientRect();
+        cachedRect.width = r.width || 1280;
+        cachedRect.height = r.height || 720;
+      }
+    } else if (typeof window !== 'undefined') {
+      cachedRect.width = window.innerWidth || 1280;
+      cachedRect.height = window.innerHeight || 720;
+    } else {
+      cachedRect.width = 1280;
+      cachedRect.height = 720;
+    }
+    dirty = false;
+  };
+
+  return {
+    getRect() {
+      const canvas = typeof getCanvas === 'function' ? getCanvas() : getCanvas;
+      if (canvas !== observedCanvas || dirty || cachedRect.width <= 0 || cachedRect.height <= 0) {
+        measure();
+      }
+      return cachedRect;
+    },
+    invalidate,
+    dispose() {
+      if (observer) {
+        observer.disconnect();
+        observer = null;
+      }
+      observedCanvas = null;
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('resize', invalidate);
+      }
+      dirty = true;
+    },
   };
 }

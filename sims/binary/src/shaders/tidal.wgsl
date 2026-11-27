@@ -45,10 +45,9 @@ struct StreamEval {
 };
 
 fn evalBezierStream(p: vec2f, p0: vec2f, p1: vec2f, p2: vec2f, p3: vec2f) -> StreamEval {
-  var outS: StreamEval;
-  outS.minDist = 1e6;
-  outS.bestS = 0.0;
-  outS.bestTan = vec2f(1.0, 0.0);
+  var minDistSq : f32 = 1e12;
+  var bestS : f32 = 0.0;
+  var bestVec = vec2f(1.0, 0.0);
 
   var prev = p0;
   const SEGS : i32 = 6;
@@ -60,15 +59,24 @@ fn evalBezierStream(p: vec2f, p0: vec2f, p1: vec2f, p2: vec2f, p3: vec2f) -> Str
             + (3.0 * it * t * t) * p2
             + (t * t * t) * p3;
     let cl = closestOnSegment(p, prev, cur);
-    let dist = length(p - cl.pt);
-    if (dist < outS.minDist) {
-      outS.minDist = dist;
-      outS.bestS = (f32(i - 1) + cl.segT) / f32(SEGS);
-      let dVec = cur - prev;
-      let dLen = length(dVec);
-      outS.bestTan = select(vec2f(1.0, 0.0), dVec / dLen, dLen > 1e-5);
+    let dp = p - cl.pt;
+    let distSq = dot(dp, dp);
+    if (distSq < minDistSq) {
+      minDistSq = distSq;
+      bestS = (f32(i - 1) + cl.segT) / f32(SEGS);
+      bestVec = cur - prev;
     }
     prev = cur;
+  }
+
+  var outS: StreamEval;
+  outS.minDist = sqrt(minDistSq);
+  outS.bestS = bestS;
+  let dLenSq = dot(bestVec, bestVec);
+  if (dLenSq > 1e-10) {
+    outS.bestTan = bestVec * inverseSqrt(dLenSq);
+  } else {
+    outS.bestTan = vec2f(1.0, 0.0);
   }
   return outS;
 }
@@ -116,7 +124,8 @@ fn evalEquilibrium(posRot: vec2f) -> vec4f {
     let radProf = pow(clamp(rPeak / max(r, rPeak * 0.72), 0.10, 1.45), 0.72);
 
     let spiralArg = 2.0 * (phi - 1.95 * log(max(r / max(rCav, 1.0), 0.45)));
-    let spiralShock = pow(max(0.5 + 0.5 * cos(spiralArg), 0.0), 3.0);
+    let sCos = max(0.5 + 0.5 * cos(spiralArg), 0.0);
+    let spiralShock = sCos * sCos * sCos;
 
     let cavSpan = max(0.26 * rCav, 0.5);
     let lumpDist = (r - rCavEff * 1.07) / cavSpan;
@@ -141,10 +150,12 @@ fn evalEquilibrium(posRot: vec2f) -> vec4f {
   var miniTemp2 : f32 = 1.0;
   var vMini1 = vec2f(0.0);
   var vMini2 = vec2f(0.0);
+  var d1 : f32 = 0.0;
+  var d2 : f32 = 0.0;
 
   if (bridgeIntensity > 0.001) {
     let dVec1 = posRot - c1;
-    let d1 = length(dVec1);
+    d1 = length(dVec1);
     let rIn1 = 1.75 * m1;
     let rOut1 = max(rIn1 + 0.45, min(0.84 * max(rocheL1, 0.5), 0.45 * d));
     if (d1 < rOut1 * 1.15 && d1 > 0.45 * m1) {
@@ -163,7 +174,7 @@ fn evalEquilibrium(posRot: vec2f) -> vec4f {
     }
 
     let dVec2 = posRot - c2;
-    let d2 = length(dVec2);
+    d2 = length(dVec2);
     let rIn2 = 1.75 * m2;
     let rOut2 = max(rIn2 + 0.35, min(0.84 * max(rocheL2, 0.35), 0.44 * d));
     if (d2 < rOut2 * 1.15 && d2 > 0.45 * m2) {
@@ -229,9 +240,7 @@ fn evalEquilibrium(posRot: vec2f) -> vec4f {
     let maskL = exp(-(stLEval.minDist * stLEval.minDist) / max(wL * wL, 1e-4))
               * smoothstep(0.0, 0.15, stLEval.bestS) * (1.0 - smoothstep(0.85, 1.0, stLEval.bestS));
 
-    let d1Hor = length(posRot - c1);
-    let d2Hor = length(posRot - c2);
-    let horCut = smoothstep(0.85 * m1, 1.35 * m1, d1Hor) * smoothstep(0.85 * m2, 1.35 * m2, d2Hor);
+    let horCut = smoothstep(0.85 * m1, 1.35 * m1, d1) * smoothstep(0.85 * m2, 1.35 * m2, d2);
 
     let st1 = mask1 * clumps1 * horCut;
     let st2 = mask2 * clumps2 * horCut;

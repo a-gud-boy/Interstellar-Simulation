@@ -43,15 +43,10 @@ pub(crate) fn draw_bottom_dock(
                         for (idx, preset) in presets.iter().enumerate() {
                             let is_act = active_preset == Some(idx);
                             let font = FontId::new(11.5, semibold_family());
-                            let fg = if is_act {
-                                theme.accent_bright
-                            } else {
-                                theme.text_secondary
-                            };
                             let label_g = ui.painter().layout_job(tracked_job(
                                 preset.short_label,
-                                font.clone(),
-                                fg,
+                                font,
+                                Color32::PLACEHOLDER,
                                 0.0,
                             ));
                             let k_w = 16.0;
@@ -123,18 +118,12 @@ pub(crate) fn draw_bottom_dock(
                                 theme.text_muted,
                             );
 
-                            let t_g = ui.painter().layout_job(tracked_job(
-                                preset.short_label,
-                                font,
-                                text_c,
-                                0.0,
-                            ));
-                            ui.painter().galley(
+                            ui.painter().galley_with_override_text_color(
                                 Pos2::new(
                                     k_rect.right() + 5.0,
-                                    rect.center().y - t_g.size().y * 0.5,
+                                    rect.center().y - label_g.size().y * 0.5,
                                 ),
-                                t_g,
+                                label_g,
                                 text_c,
                             );
 
@@ -285,24 +274,19 @@ pub(crate) fn draw_bottom_left_hint(ctx: &Context, hint_text: &str, screen_size:
         .order(Order::Middle)
         .show(ctx, |ui| {
             let font = FontId::proportional(11.0);
-            let shadow = ui.painter().layout_job(tracked_job(
-                hint_text,
-                font.clone(),
-                Color32::from_rgba_unmultiplied(0, 0, 0, 200),
-                0.2,
-            ));
-            let main = ui.painter().layout_job(tracked_job(
-                hint_text,
-                font,
-                Color32::from_rgba_unmultiplied(226, 232, 240, 126),
-                0.2,
-            ));
-            let (rect, _) = ui.allocate_exact_size(main.size(), Sense::hover());
-            ui.painter().galley(
+            let galley =
+                ui.painter()
+                    .layout_job(tracked_job(hint_text, font, Color32::PLACEHOLDER, 0.2));
+            let (rect, _) = ui.allocate_exact_size(galley.size(), Sense::hover());
+            ui.painter().galley_with_override_text_color(
                 rect.min + Vec2::new(0.0, 1.0),
-                shadow,
+                galley.clone(),
                 Color32::from_rgba_unmultiplied(0, 0, 0, 200),
             );
-            ui.painter().galley(rect.min, main, Color32::WHITE);
+            ui.painter().galley_with_override_text_color(
+                rect.min,
+                galley,
+                Color32::from_rgba_unmultiplied(226, 232, 240, 126),
+            );
         });
 }

@@ -1,9 +1,10 @@
 use std::f32::consts::PI;
+use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::renderer::SharedGpuAssets;
-use crate::renderer::post::{PostFrameParams, PostTuning, make_fs_pipe, run_fs_pass};
+use crate::renderer::post::{PostFrameParams, PostTuning, run_fs_pass};
+use crate::renderer::{SharedGpuAssets, SimBglKind};
 use crate::shaders;
 use crate::sims::blackhole::format_thousands;
 use crate::sims::{
@@ -983,7 +984,7 @@ pub struct SupernovaSim {
     sim_time: f32,
 
     camera: SupernovaCamera,
-    pipeline: wgpu::RenderPipeline,
+    pipeline: Arc<wgpu::RenderPipeline>,
     ubo: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
 }
@@ -991,18 +992,11 @@ pub struct SupernovaSim {
 impl SupernovaSim {
     pub fn new(assets: &mut SharedGpuAssets) -> Self {
         let p = &PRESETS[0];
-        let shader = assets
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("supernova-wgsl"),
-                source: wgpu::ShaderSource::Wgsl(shaders::SUPERNOVA.into()),
-            });
-        let pipeline = make_fs_pipe(
-            &assets.device,
-            "supernova-pipe",
-            &assets.standard_sim_bgl,
-            &shader,
-            wgpu::TextureFormat::Rgba16Float,
+        let pipeline = assets.get_or_create_sim_pipeline(
+            SimId::Supernova,
+            "supernova",
+            SimBglKind::Standard,
+            shaders::SUPERNOVA,
         );
         let ubo = assets.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("supernova-ubo"),
@@ -1149,8 +1143,16 @@ impl Simulation for SupernovaSim {
         }
     }
 
-    fn presets(&self) -> Vec<PresetMeta> {
-        PRESETS.iter().map(|p| p.meta).collect()
+    fn presets(&self) -> &'static [PresetMeta] {
+        const METAS: [PresetMeta; 6] = [
+            PRESETS[0].meta,
+            PRESETS[1].meta,
+            PRESETS[2].meta,
+            PRESETS[3].meta,
+            PRESETS[4].meta,
+            PRESETS[5].meta,
+        ];
+        &METAS
     }
 
     fn active_preset_index(&self) -> Option<usize> {
@@ -1183,18 +1185,18 @@ impl Simulation for SupernovaSim {
         }
     }
 
-    fn control_sections(&self) -> Vec<ControlSection> {
-        vec![
+    fn control_sections(&self) -> &'static [ControlSection] {
+        const SECTIONS: &[ControlSection] = &[
             ControlSection {
                 id: "blast",
-                title: "Blast Wave & Ionization",
+                title: "BLAST WAVE & IONIZATION",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "paletteMode",
                         label: "Emission Palette",
                         kind: ControlKind::Segmented {
-                            options: vec![(0, "Hubble SHO"), (1, "True Color")],
+                            options: &[(0, "Hubble SHO"), (1, "True Color")],
                         },
                     },
                     ControlItem {
@@ -1231,9 +1233,9 @@ impl Simulation for SupernovaSim {
             },
             ControlSection {
                 id: "scatter",
-                title: "Dust & Multi-Scattering",
+                title: "DUST & MULTI-SCATTERING",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "dustOpacity",
                         label: "Dust Absorption Opacity",
@@ -1298,9 +1300,9 @@ impl Simulation for SupernovaSim {
             },
             ControlSection {
                 id: "optics",
-                title: "Optics, Sky & Quality",
+                title: "OPTICS, SKY & QUALITY",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "exposure",
                         label: "Exposure",
@@ -1345,7 +1347,7 @@ impl Simulation for SupernovaSim {
                         key: "skyMode",
                         label: "Background Sky Source",
                         kind: ControlKind::Select {
-                            options: vec![
+                            options: &[
                                 (0, "Hybrid 4K + Micro-Stars"),
                                 (1, "4K NASA/ESO Map"),
                                 (2, "Procedural Deep Field"),
@@ -1356,19 +1358,20 @@ impl Simulation for SupernovaSim {
                         key: "quality",
                         label: "Ray-Trace Quality",
                         kind: ControlKind::Segmented {
-                            options: vec![(0, "Medium"), (1, "High"), (2, "Ultra Cinema")],
+                            options: &[(0, "Medium"), (1, "High"), (2, "Ultra Cinema")],
                         },
                     },
                     ControlItem {
                         key: "resolutionScale",
                         label: "Render Resolution",
                         kind: ControlKind::Segmented {
-                            options: vec![(50, "0.5×"), (75, "0.75×"), (100, "1.0×")],
+                            options: &[(50, "0.5×"), (75, "0.75×"), (100, "1.0×")],
                         },
                     },
                 ],
             },
-        ]
+        ];
+        SECTIONS
     }
 
     fn get_f32(&self, key: &str) -> f32 {
@@ -1524,7 +1527,7 @@ impl Simulation for SupernovaSim {
             preset_badge,
             secondary_badge,
             secondary_badge_warm: false,
-            drawer_title: "Nebula Physics & Optics",
+            drawer_title: "NEBULA PHYSICS & OPTICS",
             drawer_subtitle: format!("{} · τ {:.2}", tel.palette_label, tel.optical_depth),
             hint_text: "Drag to orbit · W/S fly through shell · Scroll zoom · Space 128× Still · H HUD",
             telemetry: [

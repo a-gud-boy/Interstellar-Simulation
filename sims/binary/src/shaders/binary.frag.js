@@ -76,6 +76,14 @@ uniform int   uSkyMode;
 uniform vec2  uSkyRotation;
 uniform int   uQuality;
 
+// Hoisted frame invariants (matching WebGPU BinaryUniforms)
+uniform float uTanHalfFov;
+uniform float uEscapeR;
+uniform float uMaxDiskSlabY;
+uniform vec4  uFlowConsts;
+uniform vec2  uOrbTrig;
+uniform vec4  uSkyTrig;
+
 const float PI       = 3.14159265359;
 const float TAU      = 6.28318530718;
 const float INV_PI   = 0.31830988618;
@@ -90,6 +98,7 @@ const float INV_LOG_T_SPAN = 1.0 / 3.91202300543;
 
 struct GwConsts {
   float r0;
+  float r0Sq;
   float invSpan;
   float A0;
   float twoPhase;
@@ -139,14 +148,14 @@ GeodesicFull evalGeodesicFull(vec3 pos, vec3 dir) {
   vec3 gradPhi = k1 * d1 + k2 * d2;
 
   float phiC = min(phi, 0.95);
-  float opPhi = 1.0 + phiC;
-  float invN = min(max(1.0 - phiC, 0.05) / (opPhi * opPhi * opPhi), 1.0);
   float blFactor = uLensingStrength * ((4.0 - 2.0 * phiC) / max(1.0 - phiC * phiC, 0.05));
   vec3 gradTot = blFactor * gradPhi;
 
   vec3 dv = gradTot - dot(gradTot, dir) * dir;
 
-  if (uLensingStrength > 1e-6) {
+  if (uLensingStrength > 1e-6 && phi > 0.012) {
+    float opPhi = 1.0 + phiC;
+    float invN = min(max(1.0 - phiC, 0.05) / (opPhi * opPhi * opPhi), 1.0);
     vec3 Bg = 8.0 * (k1 * cross(d1, uBh1Vel) + k2 * cross(d2, uBh2Vel));
     dv += (uLensingStrength * invN) * cross(dir, Bg);
   }
@@ -388,7 +397,8 @@ void evalDiskVolume(
   float T_obs = clamp(T_local * gColor, T_MIN, T_MAX);
   vec3 bbColor = sampleBlackbody(T_obs);
 
-  float thermalPower = pow(clamp(T_local / 4900.0, 0.15, 4.0), 1.85);
+  float tr = clamp(T_local / 4900.0, 0.15, 4.0);
+  float thermalPower = (tr * tr) * inversesqrt(sqrt(sqrt(tr)));
   float heightComp = 1.0 / pow(max(H * 2.8, 0.28), 0.36);
 
   float emitStrength = localDensity * thermalPower * beaming * heightComp * 1.18;
@@ -411,10 +421,10 @@ void evalDiskVolume(
 // 4. SEAMLESS 4K MILKY WAY LENSING + CRISP 3D MICRO-STARS + GW ISW MODULATION
 // ============================================================================
 
-vec3 rotateSkyDir(vec3 d, vec2 rot) {
-  float cy = cos(rot.x), sy = sin(rot.x);
+vec3 rotateSkyDir(vec3 d) {
+  float cy = uSkyTrig.x, sy = uSkyTrig.y;
   vec3 r1 = vec3(cy * d.x + sy * d.z, d.y, -sy * d.x + cy * d.z);
-  float cp = cos(rot.y), sp = sin(rot.y);
+  float cp = uSkyTrig.z, sp = uSkyTrig.w;
   return vec3(r1.x, cp * r1.y - sp * r1.z, sp * r1.y + cp * r1.z);
 }
 
@@ -453,7 +463,7 @@ vec3 evalMicroStarLayer(vec3 dir, float scale, float densityThresh, float boost,
 }
 
 vec3 sampleSkyBackground(vec3 rawDir, bool escaped, float edgeMask, float deltaISW) {
-  vec3 dir = normalize(rotateSkyDir(rawDir, uSkyRotation));
+  vec3 dir = normalize(rotateSkyDir(rawDir));
 
   // Wrap-safe & pole-safe equirectangular coordinates (computed in uniform control flow!)
   float u1 = atan(dir.z, dir.x) * INV_TAU + 0.5;
@@ -512,7 +522,7 @@ void main() {
   vec2 ndc = (pixelCoord / res) * 2.0 - 1.0;
 
   float aspect = res.x / res.y;
-  float tanHalfFov = tan(clamp(uFovY, 0.1, 2.8) * 0.5);
+  float tanHalfFov = uTanHalfFov;
   vec3 localRay = normalize(vec3(ndc.x * aspect * tanHalfFov, ndc.y * tanHalfFov, 1.0));
 
   vec3 pos = uCamPos;
@@ -534,11 +544,10 @@ void main() {
 
   float rOuter = max(uDiskOuterRadius, uRCavity + 4.0);
   float invFieldSpan = 1.0 / (2.0 * max(uFieldHalfSize, 1.0));
-  float camR = length(uCamPos);
-  float escapeR = max(max(rOuter * 1.85, camR * 1.65), 62.0);
+  float escapeR = uEscapeR;
   float rH1 = 0.5 * uMass1;
   float rH2 = 0.5 * uMass2;
-  float maxDiskSlabY = (0.054 + 0.033 * rOuter * 1.30) * max(uDiskThickness, 0.15) * 2.75;
+  float maxDiskSlabY = uMaxDiskSlabY;
 
   bool hasDisk = (uDiskDensity > 0.001 || uBridgeIntensity > 0.001);
   bool hasGw   = (abs(uGwAmplitude) > 0.01 && uEta > 1e-6);
@@ -549,24 +558,21 @@ void main() {
   float r1Gw = 2.2 * uSeparation;
   GwConsts gwc;
   gwc.r0 = r0Gw;
+  gwc.r0Sq = r0Gw * r0Gw;
   gwc.invSpan = 1.0 / max(r1Gw - r0Gw, 1e-5);
   gwc.A0 = uGwAmplitude * (4.0 * uEta) * 0.035;
   gwc.twoPhase = 2.0 * uPhase;
   gwc.twoGwOmega = 2.0 * uGwWaveOmega;
   gwc.hasGw = hasGw;
 
-  const float FLOW_CYCLE = 15.0;
-  float tNorm0 = uTime / FLOW_CYCLE;
-  float phase0 = fract(tNorm0);
-  float phase1 = fract(tNorm0 + 0.5);
   FlowConsts fc;
-  fc.blend = 0.5 - 0.5 * cos(TAU * phase0);
-  fc.dt0 = (phase0 - 0.5) * FLOW_CYCLE;
-  fc.dt1 = (phase1 - 0.5) * FLOW_CYCLE;
-  fc.globalRot = uTime * 0.038;
+  fc.blend = uFlowConsts.x;
+  fc.dt0 = uFlowConsts.y;
+  fc.dt1 = uFlowConsts.z;
+  fc.globalRot = uFlowConsts.w;
 
-  float cosOrb = cos(uPhase);
-  float sinOrb = sin(uPhase);
+  float cosOrb = uOrbTrig.x;
+  float sinOrb = uOrbTrig.y;
 
   vec3 radiance = vec3(0.0);
   float transmittance = 1.0;
@@ -574,6 +580,10 @@ void main() {
   float deltaISW = 0.0;
   bool captured = false;
   bool escaped = false;
+  bool hasPrevRot = false;
+  vec2 prevRotXZ = vec2(0.0);
+  bool hasPrevSig = false;
+  float prevSig = 0.0;
 
   for (int step = 0; step < 400; ++step) {
     if (step >= maxSteps) break;
@@ -591,6 +601,13 @@ void main() {
       break;
     }
 
+    bool hasCurRot = hasPrevRot;
+    vec2 curRotXZ = prevRotXZ;
+    bool hasCurSig = hasPrevSig;
+    float curSig = prevSig;
+    hasPrevRot = false;
+    hasPrevSig = false;
+
     float clear1 = (uMass1 > 0.0) ? (k1.r1 - 0.82 * rH1) : 1e6;
     float clear2 = (uMass2 > 0.0) ? (k1.r2 - 0.82 * rH2) : 1e6;
     float minClear = min(clear1, clear2);
@@ -599,7 +616,7 @@ void main() {
     bool farOut = outbound && rCom > max(rOuter * 1.15, uSeparation * 2.5) && k1.phi < 0.02;
     float h = clamp((farOut ? 0.36 : 0.15) * max(minClear, 0.005) * qualScale, minH, farOut ? 13.0 : 5.2);
 
-    if (hasGw) {
+    if (hasGw && rCom > gwc.r0) {
       float gwLim = gwBaseStep * (1.0 + 0.022 * max(rCom - 2.4 * uSeparation, 0.0));
       h = min(h, gwLim);
     }
@@ -610,13 +627,22 @@ void main() {
       if (absY < localH * 2.90) {
         bool skipCavRefine = false;
         if (rCom < uRCavity * 0.80) {
-          vec2 uv0 = rotOrbXZ(pos.xz, cosOrb, sinOrb) * invFieldSpan + 0.5;
-          vec2 uv1 = rotOrbXZ(pos.xz + dir.xz * min(h, 1.2), cosOrb, sinOrb) * invFieldSpan + 0.5;
-          float sig0 = textureLod(uTidalField, clamp(uv0, vec2(0.002), vec2(0.998)), 0.0).r;
-          float sig1 = textureLod(uTidalField, clamp(uv1, vec2(0.002), vec2(0.998)), 0.0).r;
-          if (max(sig0, sig1) < 1e-4) {
-            h = min(h, 0.85 * qualScale);
-            skipCavRefine = true;
+          if (!hasCurRot) {
+            curRotXZ = rotOrbXZ(pos.xz, cosOrb, sinOrb);
+            hasCurRot = true;
+          }
+          if (!hasCurSig) {
+            vec2 uv0 = curRotXZ * invFieldSpan + 0.5;
+            curSig = textureLod(uTidalField, clamp(uv0, vec2(0.002), vec2(0.998)), 0.0).r;
+            hasCurSig = true;
+          }
+          if (curSig < 1e-4) {
+            vec2 uv1 = rotOrbXZ(pos.xz + dir.xz * min(h, 1.2), cosOrb, sinOrb) * invFieldSpan + 0.5;
+            float sig1 = textureLod(uTidalField, clamp(uv1, vec2(0.002), vec2(0.998)), 0.0).r;
+            if (sig1 < 1e-4) {
+              h = min(h, 0.85 * qualScale);
+              skipCavRefine = true;
+            }
           }
         }
         if (!skipCavRefine) {
@@ -675,11 +701,13 @@ void main() {
     float iswMid = 0.0;
     if (hasGw) {
       vec3 midPosGw = 0.5 * (pos + posNext);
-      vec3 midDirGw = normalize(dir + dirNext);
-      vec4 gwKick = evalGwKick(midPosGw, midDirGw, gwc);
-      posNext += (0.5 * h * h) * gwKick.xyz;
-      dirNext = normalize(dirNext + h * gwKick.xyz);
-      iswMid = gwKick.w;
+      if (dot(midPosGw, midPosGw) > gwc.r0Sq) {
+        vec3 midDirGw = normalize(dir + dirNext);
+        vec4 gwKick = evalGwKick(midPosGw, midDirGw, gwc);
+        posNext += (0.5 * h * h) * gwKick.xyz;
+        dirNext = normalize(dirNext + h * gwKick.xyz);
+        iswMid = gwKick.w;
+      }
     }
 
     float segLen = length(posNext - pos);
@@ -708,23 +736,34 @@ void main() {
             if (needCrossSub || segLen > targetDs) {
               nSub = clamp(int(ceil(segLen / targetDs)), needCrossSub ? 2 : 1, uQuality >= 2 ? 3 : 2);
             }
-            vec2 p0Rot = rotOrbXZ(pos.xz, cosOrb, sinOrb);
+            vec2 p0Rot = hasCurRot ? curRotXZ : rotOrbXZ(pos.xz, cosOrb, sinOrb);
             vec2 p1Rot = rotOrbXZ(posNext.xz, cosOrb, sinOrb);
+            prevRotXZ = p1Rot;
+            hasPrevRot = true;
 
             bool skipSub = false;
             if (nSub > 1 && rMidCom < uRCavity * 0.82) {
-              vec2 p0Uv = clamp(p0Rot * invFieldSpan + 0.5, vec2(0.002), vec2(0.998));
-              vec2 pmUv = clamp((0.5 * (p0Rot + p1Rot)) * invFieldSpan + 0.5, vec2(0.002), vec2(0.998));
-              vec2 p1Uv = clamp(p1Rot * invFieldSpan + 0.5, vec2(0.002), vec2(0.998));
-              float s0 = textureLod(uTidalField, p0Uv, 0.0).r;
-              float s1 = textureLod(uTidalField, pmUv, 0.0).r;
-              float s2 = textureLod(uTidalField, p1Uv, 0.0).r;
-              skipSub = (max(s0, max(s1, s2)) < 1e-4);
+              float s0;
+              if (hasCurSig) {
+                s0 = curSig;
+              } else {
+                vec2 p0Uv = clamp(p0Rot * invFieldSpan + 0.5, vec2(0.002), vec2(0.998));
+                s0 = textureLod(uTidalField, p0Uv, 0.0).r;
+              }
+              if (s0 < 1e-4) {
+                vec2 p1Uv = clamp(p1Rot * invFieldSpan + 0.5, vec2(0.002), vec2(0.998));
+                float s2 = textureLod(uTidalField, p1Uv, 0.0).r;
+                prevSig = s2;
+                hasPrevSig = true;
+                if (s2 < 1e-4) {
+                  vec2 pmUv = clamp((0.5 * (p0Rot + p1Rot)) * invFieldSpan + 0.5, vec2(0.002), vec2(0.998));
+                  float s1 = textureLod(uTidalField, pmUv, 0.0).r;
+                  skipSub = (s1 < 1e-4);
+                }
+              }
             }
 
             if (!skipSub) {
-              float d1Mid = length(midPos - uBh1Pos);
-              float d2Mid = length(midPos - uBh2Pos);
               float dsSub = segLen / float(nSub);
               float jitterBase = fract(bn.y + float(step) * 0.61803399);
               bool lowDet = lowDetailBase || (transmittance < 0.14);
@@ -735,8 +774,8 @@ void main() {
                 vec3 sPos = mix(pos, posNext, frac);
                 vec2 sRotXZ = mix(p0Rot, p1Rot, frac);
                 vec3 sDir = normalize(mix(dir, dirNext, frac));
-                float sr1 = (nSub == 1) ? d1Mid : length(sPos - uBh1Pos);
-                float sr2 = (nSub == 1) ? d2Mid : length(sPos - uBh2Pos);
+                float sr1 = (nSub == 1) ? length(midPos - uBh1Pos) : length(sPos - uBh1Pos);
+                float sr2 = (nSub == 1) ? length(midPos - uBh2Pos) : length(sPos - uBh2Pos);
                 float sPhi = ((uMass1 > 0.0) ? (0.5 * uMass1 / max(sr1, 1e-4)) : 0.0)
                            + ((uMass2 > 0.0) ? (0.5 * uMass2 / max(sr2, 1e-4)) : 0.0);
 

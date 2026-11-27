@@ -160,18 +160,126 @@ const ffRunnerMod = await import(path.join(REPO_ROOT, 'shared/testing/firefoxQaR
 
 assert(
   typeof baseCamMod.stepCriticallyDamped === 'function' &&
+    typeof baseCamMod.stepCriticallyDampedInto === 'function' &&
     typeof baseCamMod.computeSphericalOrbitBasis === 'function' &&
+    typeof baseCamMod.computeSphericalOrbitBasisInto === 'function' &&
     typeof baseCamMod.applyLocalLookTriad === 'function' &&
+    typeof baseCamMod.applyLocalLookTriadInto === 'function' &&
+    typeof baseCamMod.createCanvasRectCache === 'function' &&
     typeof baseCamMod.normalizeWheelDelta === 'function' &&
     typeof baseCamMod.clamp === 'function' &&
     typeof baseCamMod.wrapAngleDelta === 'function' &&
     typeof baseCamMod.easeOutCubic === 'function' &&
     typeof baseCamMod.easeInOutCubic === 'function' &&
     typeof glPostMod.SharedWebGLPostPipeline === 'function' &&
+    typeof glPostMod.detectWebGLHdrFormats === 'function' &&
     typeof gpuPostMod.SharedWebGPUPostPipeline === 'function' &&
     typeof appShellMod.createSimApp === 'function' &&
     typeof ffRunnerMod.runSimFirefoxQA === 'function',
   'shared/engine/*.js and shared/testing/firefoxQaRunner.mjs export all required APIs'
+);
+
+// Verify zero-alloc BaseCamera helpers match allocating counterparts and cache canvas rects
+{
+  const pairOut = [0, 0];
+  const pairRef = baseCamMod.stepCriticallyDamped(1.2, -0.4, 2.5, 13.5, 0.016);
+  baseCamMod.stepCriticallyDampedInto(pairOut, 1.2, -0.4, 2.5, 13.5, 0.016);
+  const posOut = [0, 0, 0];
+  const matOut = new Float32Array(9);
+  const orbRef = baseCamMod.computeSphericalOrbitBasis(0.7, 0.35, -0.15);
+  baseCamMod.computeSphericalOrbitBasisInto(posOut, matOut, 0.7, 0.35, -0.15);
+  const lookOut = new Float32Array(9);
+  const lookRef = baseCamMod.applyLocalLookTriad(orbRef.right, orbRef.up, orbRef.forward, 0.4, -0.2, 0.1);
+  baseCamMod.applyLocalLookTriadInto(lookOut, orbRef.right, orbRef.up, orbRef.forward, 0.4, -0.2, 0.1);
+
+  let widthReads = 0;
+  const mockCanvas = {
+    get clientWidth() {
+      widthReads++;
+      return 1280;
+    },
+    clientHeight: 720,
+    getBoundingClientRect: () => ({ width: 1280, height: 720 }),
+  };
+  const rectCache = baseCamMod.createCanvasRectCache(() => mockCanvas);
+  const r1 = rectCache.getRect();
+  const r2 = rectCache.getRect();
+  rectCache.invalidate();
+  const r3 = rectCache.getRect();
+  rectCache.dispose();
+
+  const approxEq = (a, b) => Math.abs(a - b) < 1e-5;
+  assert(
+    approxEq(pairOut[0], pairRef[0]) &&
+      approxEq(pairOut[1], pairRef[1]) &&
+      approxEq(posOut[0], orbRef.posUnit[0]) &&
+      approxEq(matOut[0], orbRef.right[0]) &&
+      approxEq(matOut[8], orbRef.forward[2]) &&
+      approxEq(lookOut[0], lookRef.right[0]) &&
+      approxEq(lookOut[8], lookRef.forward[2]) &&
+      r1 === r2 &&
+      r1.width === 1280 &&
+      r1.height === 720 &&
+      r3.width === 1280 &&
+      widthReads === 2,
+    'Zero-alloc BaseCamera helpers match references & createCanvasRectCache caches DOM reads'
+  );
+}
+
+// Verify detectWebGLHdrFormats splits hdrSpec (R11F_G11F_B10F) and taaSpec (RGBA16F)
+{
+  let probeInternalFmt = 0;
+  const mockHdrGl = {
+    RGBA16F: 0x881a,
+    R11F_G11F_B10F: 0x8c3a,
+    RGBA8: 0x8058,
+    RGBA: 0x1908,
+    RGB: 0x1907,
+    HALF_FLOAT: 0x140b,
+    UNSIGNED_BYTE: 0x1401,
+    TEXTURE_2D: 0x0de1,
+    TEXTURE_MIN_FILTER: 0x2801,
+    TEXTURE_MAG_FILTER: 0x2800,
+    TEXTURE_WRAP_S: 0x2802,
+    TEXTURE_WRAP_T: 0x2803,
+    LINEAR: 0x2601,
+    CLAMP_TO_EDGE: 0x812f,
+    FRAMEBUFFER: 0x8d40,
+    COLOR_ATTACHMENT0: 0x8ce0,
+    FRAMEBUFFER_COMPLETE: 0x8cd5,
+    createFramebuffer: () => ({}),
+    createTexture: () => ({}),
+    bindTexture: () => {},
+    texParameteri: () => {},
+    texImage2D: (_t, _l, internalFormat) => {
+      probeInternalFmt = internalFormat;
+    },
+    bindFramebuffer: () => {},
+    framebufferTexture2D: () => {},
+    checkFramebufferStatus: () => (probeInternalFmt ? 0x8cd5 : 0),
+    deleteTexture: () => {},
+    deleteFramebuffer: () => {},
+  };
+  const fmts = glPostMod.detectWebGLHdrFormats(mockHdrGl, true, true);
+  assert(
+    fmts.hdrSpec?.name === 'R11F_G11F_B10F' && fmts.taaSpec?.name === 'RGBA16F',
+    'detectWebGLHdrFormats selects hybrid R11F_G11F_B10F HDR + RGBA16F TAA targets'
+  );
+}
+
+// Verify all 7 CameraController.js use createCanvasRectCache without pointermove reflows
+const camReflowFree = SIMULATORS.every((sim) => {
+  const src = fs.readFileSync(path.join(REPO_ROOT, sim.dir, 'src/engine/CameraController.js'), 'utf8');
+  return src.includes('createCanvasRectCache') && !src.includes('getBoundingClientRect');
+});
+const appShellSrc = fs.readFileSync(path.join(REPO_ROOT, 'shared/engine/SimAppShell.js'), 'utf8');
+assert(
+  camReflowFree &&
+    appShellSrc.includes('fpsRing') &&
+    !appShellSrc.includes('frameTimestamps.shift') &&
+    appShellSrc.includes('reduced-glass') &&
+    appShellSrc.includes('setInteractiveDragScale'),
+  'All 7 CameraController.js eliminate getBoundingClientRect reflows & SimAppShell uses O(1) fpsRing + perf toggles'
 );
 
 const sharedGlPostSrc = fs.readFileSync(path.join(REPO_ROOT, 'shared/engine/SharedWebGLPostPipeline.js'), 'utf8');
@@ -235,21 +343,40 @@ const mockGl = {
   },
 };
 
+const lutStartMs = performance.now();
+const bb512 = lutsMod.getBlackbodyData(512);
+const bn128 = lutsMod.getBlueNoiseData(128);
+const lutElapsedMs = performance.now() - lutStartMs;
+assert(
+  lutElapsedMs < 50 &&
+    bb512.halfData instanceof Uint16Array &&
+    bb512.halfData.length === 512 * 4 &&
+    bb512.byteData instanceof Uint8Array &&
+    bb512.byteData.length === 512 * 4 &&
+    bn128 instanceof Uint8Array &&
+    bn128.length === 128 * 128 * 4 &&
+    new Set(bn128.subarray(0, 256)).size > 32,
+  'Pre-baked getBlackbodyData(512) & getBlueNoiseData(128) decode cleanly in <50ms',
+  `${lutElapsedMs.toFixed(2)}ms`
+);
+
 const gpuBb = lutsMod.createBlackbodyLUT(mockDevice, 512);
 const glBb = lutsMod.createBlackbodyLUT(mockGl, 512);
 const gpuBn = lutsMod.createBlueNoiseLUT(mockDevice, 128);
 const glBn = lutsMod.createBlueNoiseLUT(mockGl, 128);
+const phGpu = skyMod.createPlaceholderSkyTextureWebGPU(mockDevice);
+const phGl = skyMod.createPlaceholderSkyTextureWebGL(mockGl);
 const texAGpu = skyMod.createProceduralSkyTextureWebGPU(mockDevice, null, 64, 32);
 const texBGpu = skyMod.createExoticNebulaTextureBWebGPU(mockDevice, null, 64, 32);
 const texAGl = skyMod.createProceduralSkyTextureWebGL(mockGl, 64, 32);
 const texBGl = skyMod.createExoticNebulaTextureBWebGL(mockGl, 64, 32);
 
 assert(
-  Boolean(gpuBb && glBb && gpuBn && glBn && texAGpu && texBGpu && texAGl && texBGl) &&
-    gpuCalls.length === 4 &&
-    glCalls.length === 4 &&
+  Boolean(gpuBb && glBb && gpuBn && glBn && phGpu && phGl && texAGpu && texBGpu && texAGl && texBGl) &&
+    gpuCalls.length === 5 &&
+    glCalls.length === 5 &&
     skyMod.DEFAULT_SKY_URL.endsWith('/shared/assets/milkyway_4k.jpg'),
-  'physicalLuts.js and skyLoader.js support single- and dual-universe WebGL2 + WebGPU uploads'
+  'physicalLuts.js and skyLoader.js support placeholders + single- and dual-universe WebGL2 + WebGPU uploads'
 );
 
 const forbiddenGlsl = /\b(isnan|isinf|inversesqrt|dFdx|dFdy|gl_FragCoord|gl_VertexID|texelFetch|textureGrad)\s*\(/;
@@ -286,13 +413,49 @@ for (const profileName of Object.keys(POST_OPTICS_PROFILES)) {
   );
 }
 
+const postGlDefault = postGlslMod.createPostShadersGLSL('default');
+const postWgDefault = postWgslMod.createPostShadersWGSL('default');
+const postContractOk =
+  !postGlslAll.includes('exp(-abs(float(i))') &&
+  !postGlDefault.ANAMORPHIC_FRAG.includes('exp(') &&
+  !postWgDefault.ANAMORPHIC_WGSL.includes('exp(') &&
+  postGlDefault.COMPOSITE_FRAG.includes('r2 > 0.04') &&
+  postWgDefault.COMPOSITE_WGSL.includes('r2 > 0.04') &&
+  !postGlDefault.BLOOM_DOWNSAMPLE_FRAG.includes('isBadFloat') &&
+  !postWgDefault.BLOOM_DOWNSAMPLE_WGSL.includes('isBadFloat');
+assert(
+  postContractOk,
+  'Phase P2 post shaders eliminate anamorphic exp(), guard composite CA (r2 > 0.04), and drop redundant downsample NaN guards'
+);
+
+const expectedGradTable = [
+  [1, 1, 0], [-1, 1, 0], [1, -1, 0], [-1, -1, 0],
+  [1, 0, 1], [-1, 0, 1], [1, 0, -1], [-1, 0, -1],
+  [0, 1, 1], [0, -1, 1], [0, 1, -1], [0, -1, -1],
+  [1, 1, 0], [-1, 1, 0], [0, -1, 1], [0, -1, -1],
+];
+const gradMaskOk = expectedGradTable.every(([ex, ey, ez], idx) => {
+  const shift = idx << 1;
+  const gx = ((0x52552222 >>> shift) & 3) - 1;
+  const gy = ((0x0a22550a >>> shift) & 3) - 1;
+  const gz = ((0x250a0a55 >>> shift) & 3) - 1;
+  return gx === ex && gy === ey && gz === ez;
+});
+
 assert(
   commonGlsl.FULLSCREEN_VERT.includes('#version 300 es') &&
     commonGlsl.NOISE_BAKE_FRAG.includes('#version 300 es') &&
+    commonGlsl.NOISE_BAKE_FRAG.includes('0x52552222u') &&
+    commonGlsl.SKY_BAKE_FRAG.includes('#version 300 es') &&
+    commonGlsl.SKY_BAKE_FRAG.includes('uniform int uUniverse;') &&
     commonWgsl.MIPMAP_WGSL.includes('@fragment') &&
     commonWgsl.NOISE_BAKE_COMPUTE_WGSL.includes('@compute') &&
-    !forbiddenGlsl.test(commonWgsl.NOISE_BAKE_COMPUTE_WGSL),
-  'Shared common.glsl.js & common.wgsl.js shader contracts valid'
+    commonWgsl.NOISE_BAKE_COMPUTE_WGSL.includes('0x52552222u') &&
+    commonWgsl.SKY_BAKE_WGSL.includes('@fragment') &&
+    !forbiddenGlsl.test(commonWgsl.NOISE_BAKE_COMPUTE_WGSL) &&
+    !forbiddenGlsl.test(commonWgsl.SKY_BAKE_WGSL) &&
+    gradMaskOk,
+  'Shared common.glsl.js & common.wgsl.js shader contracts + branchless grad masks valid'
 );
 
 console.log('\n=== 5. Observatory Homepage Contract, Catalog & Preview Assets ===');

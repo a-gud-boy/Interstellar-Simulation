@@ -164,7 +164,8 @@ fn evalHG(cosTheta: f32, g: f32) -> f32 {
   let gc = clamp(g, -0.95, 0.95);
   let mu = clamp(cosTheta, -1.0, 1.0);
   let denom = max(1.0 + gc * gc - 2.0 * gc * mu, 1e-4);
-  return ((1.0 - gc * gc) * INV_4_PI) / (denom * sqrt(denom));
+  let invS = inverseSqrt(denom);
+  return ((1.0 - gc * gc) * INV_4_PI) * (invS * invS * invS);
 }
 
 fn evalDualHG(cosTheta: f32, g: f32) -> f32 {
@@ -194,46 +195,63 @@ fn evalWrenningeMultiScatter(tauShadow: f32, cosTheta: f32, g: f32) -> f32 {
 // 3. 3D RAYLEIGH–TAYLOR FILAMENT SCULPTING, IONIZATION ZONES & SHADOW TAPS
 // ============================================================================
 
-fn gaussianBand(x: f32, center: f32, width: f32) -> f32 {
-  let u = (x - center) / max(width, 1e-4);
+struct SupernovaConsts {
+  invRShock     : f32,
+  qBaseScale    : f32,
+  adv065        : f32,
+  adv115        : f32,
+  rtTurb028     : f32,
+  rtTurb012     : f32,
+  rtTurb038     : f32,
+  dustAgeScale  : f32,
+  pwnAgeScale   : f32,
+  filBlend      : f32,
+  bokDensity    : f32,
+  emissionGain  : f32,
+  gasExtScale   : f32,
+  invWShadow    : f32,
+  invWOIII      : f32,
+  invWHa        : f32,
+  invWSII       : f32,
+  pwnColor      : vec3f,
+  cOIII         : vec3f,
+  cHa           : vec3f,
+  cSII          : vec3f,
+  ambientBounce : vec3f,
+};
+
+fn gaussianBandInv(x: f32, center: f32, invWidth: f32) -> f32 {
+  let u = (x - center) * invWidth;
   return exp(-min(u * u, 40.0));
 }
 
 fn evalShadowExtinction(
-  p: vec3f,
-  rShock: f32,
-  shockAgeNorm: f32,
-  rtTurbulence: f32,
-  dustOpacity: f32,
-  bokDensity: f32,
-  shellThickness: f32,
-  emissionGain: f32,
-  simTime: f32,
-  expansionSpeed: f32
+  qBaseTap: vec3f,
+  uTap: f32,
+  dipoleAsym: f32,
+  sc: SupernovaConsts
 ) -> f32 {
-  let r2 = dot(p, p);
-  let r = sqrt(r2);
-  let u = r / max(rShock, 0.5);
-  if (u > 1.66) {
+  if (uTap > 1.66) {
     return 0.0;
   }
 
-  let rHat = select(vec3f(0.0, 1.0, 0.0), p / max(r, 1e-5), r > 1e-5);
-  let adv = simTime * expansionSpeed * 0.028;
+  let n1 = textureSampleLevel(uVolumeNoise, sVolume, qBaseTap, 0.0);
 
-  let qBase = p * (0.14 / max(rShock / 3.2, 0.5)) - rHat * (adv * 0.65);
-  let n1 = textureSampleLevel(uVolumeNoise, sVolume, qBase, 0.0);
+  let asym = 1.0 + dipoleAsym + 0.14 * (n1.r - 0.5);
+  let uWarp = (uTap / max(asym, 0.55)) + (n1.r - 0.5) * sc.rtTurb028;
 
-  let asym = 1.0 + 0.08 * (rHat.x * rHat.y - 0.55 * rHat.z) + 0.14 * (n1.r - 0.5);
-  let uWarp = (u / max(asym, 0.55)) + (n1.r - 0.5) * 0.28 * rtTurbulence;
+  let shellEnv = gaussianBandInv(uWarp, 0.94, sc.invWShadow);
+  let gasExt = sc.gasExtScale * shellEnv * (0.55 + 0.45 * n1.g);
 
-  let shellEnv = gaussianBand(uWarp, 0.94, 0.24 * shellThickness);
-  let dustBand = smoothstep(0.74, 1.02, uWarp) * (1.0 - smoothstep(1.34, 1.64, uWarp));
-  let clump = smoothstep(0.32, 0.88, n1.r * 0.58 + (1.0 - n1.b) * 0.42);
-  let bokKnot = smoothstep(0.56, 0.90, (1.0 - n1.b) * 0.72 + n1.g * 0.28) * dustBand * bokDensity;
-
-  let gasExt = 0.09 * shellEnv * emissionGain * (0.55 + 0.45 * n1.g);
-  let dustExt = (0.82 * clump * dustBand + 2.35 * bokKnot) * dustOpacity * (0.75 + 0.45 * shockAgeNorm);
+  var dustExt : f32 = 0.0;
+  if (sc.dustAgeScale > 1e-5) {
+    let dustBand = smoothstep(0.74, 1.02, uWarp) * (1.0 - smoothstep(1.34, 1.64, uWarp));
+    if (dustBand > 1e-4) {
+      let clump = smoothstep(0.32, 0.88, n1.r * 0.58 + (1.0 - n1.b) * 0.42);
+      let bokKnot = smoothstep(0.56, 0.90, (1.0 - n1.b) * 0.72 + n1.g * 0.28) * dustBand * sc.bokDensity;
+      dustExt = (0.82 * clump * dustBand + 2.35 * bokKnot) * sc.dustAgeScale;
+    }
+  }
   return gasExt + dustExt;
 }
 
@@ -246,19 +264,12 @@ struct VolSample {
 
 fn evalVolumeSample(
   p: vec3f,
-  rShock: f32,
-  shockAgeNorm: f32,
-  rtTurbulence: f32,
-  dustOpacity: f32,
-  filamentContrast: f32,
-  cavityGlow: f32,
-  bokDensity: f32,
-  shellThickness: f32,
-  emissionGain: f32,
-  paletteMode: i32,
-  centralTempK: f32,
-  simTime: f32,
-  expansionSpeed: f32
+  u: f32,
+  rHat: vec3f,
+  pBase: vec3f,
+  advShift: vec3f,
+  dipoleAsym: f32,
+  sc: SupernovaConsts
 ) -> VolSample {
   var vs: VolSample;
   vs.emission = vec3f(0.0);
@@ -266,74 +277,57 @@ fn evalVolumeSample(
   vs.sigmaScat = 0.0;
   vs.sigmaExt = 0.0;
 
-  let r2 = dot(p, p);
-  let r = sqrt(r2);
-  let u = r / max(rShock, 0.5);
-  if (u > 1.68) {
-    return vs;
-  }
-
-  let rHat = select(vec3f(0.0, 1.0, 0.0), p / max(r, 1e-5), r > 1e-5);
-  let adv = simTime * expansionSpeed * 0.028;
-
-  let qBase = p * (0.14 / max(rShock / 3.2, 0.5)) - rHat * (adv * 0.65);
+  // Tap 1: Low-frequency domain warp + natural dipolar asymmetry
+  let qBase = pBase - advShift;
   let n1 = textureSampleLevel(uVolumeNoise, sVolume, qBase, 0.0);
 
-  let asym = 1.0 + 0.08 * (rHat.x * rHat.y - 0.55 * rHat.z) + 0.14 * (n1.r - 0.5);
-  let uWarp = (u / max(asym, 0.55)) + (n1.r - 0.5) * 0.28 * rtTurbulence + (n1.g - 0.5) * 0.12 * rtTurbulence;
+  let asym = 1.0 + dipoleAsym + 0.14 * (n1.r - 0.5);
+  let uWarp = (u / max(asym, 0.55)) + (n1.r - 0.5) * sc.rtTurb028 + (n1.g - 0.5) * sc.rtTurb012;
 
-  let qRadial = rHat * (1.35 + 0.52 * log(1.0 + 2.1 * u))
-              + (n1.rgb - vec3f(0.5)) * (0.38 * rtTurbulence)
-              - rHat * (adv * 1.15);
+  // Tap 2: Pole-free 3D spherical Rayleigh–Taylor stretched coordinates
+  let qRadial = rHat * (1.35 + 0.52 * log(1.0 + 2.1 * u) - sc.adv115)
+              + (n1.rgb - vec3f(0.5)) * sc.rtTurb038;
   let qRT = mix(p * 0.45, qRadial * 0.48, smoothstep(0.03, 0.18, u));
   let n2 = textureSampleLevel(uVolumeNoise, sVolume, qRT, 0.0);
 
+  // Sculpted Rayleigh-Taylor filaments and cellular shock fronts
   let rtBase = clamp(n2.g * 0.64 + (1.0 - n2.b) * 0.36, 0.0, 1.0);
   let rtSharp = smoothstep(0.32, 0.92, rtBase);
-  let rtFine = mix(rtSharp, rtSharp * rtSharp * (0.55 + 0.45 * n2.a), clamp(filamentContrast - 0.5, 0.0, 1.0));
+  let rtFine = mix(rtSharp, rtSharp * rtSharp * (0.55 + 0.45 * n2.a), sc.filBlend);
   let rtFingers = (0.28 + 1.45 * rtFine) * (0.55 + 0.45 * n1.g);
 
   let pwnBand = smoothstep(0.04, 0.16, u) * (1.0 - smoothstep(0.34, 0.64, u));
   let pwnWisp = smoothstep(0.28, 0.88, n1.g * 0.52 + n2.a * 0.48);
-  let pwnVal = pwnBand * (0.25 + 0.95 * pwnWisp) * cavityGlow * (1.20 - 0.45 * shockAgeNorm);
+  let pwnVal = pwnBand * (0.25 + 0.95 * pwnWisp) * sc.pwnAgeScale;
 
-  let oiiiBand = gaussianBand(uWarp, 0.72, 0.21 * shellThickness);
+  let oiiiBand = gaussianBandInv(uWarp, 0.72, sc.invWOIII);
   let oiiiVal = oiiiBand * (0.35 + 0.85 * n2.r) * (0.75 + 0.45 * rtSharp);
 
-  let haBand = gaussianBand(uWarp, 0.96, 0.15 * shellThickness);
+  let haBand = gaussianBandInv(uWarp, 0.96, sc.invWHa);
   let haVal = haBand * rtFingers;
 
-  let siiBand = gaussianBand(uWarp, 1.09, 0.11 * shellThickness);
+  let siiBand = gaussianBandInv(uWarp, 1.09, sc.invWSII);
   let siiVal = siiBand * (0.30 + 1.25 * rtFine) * smoothstep(0.35, 0.85, n2.g + 0.22 * n1.g);
 
-  let dustBand = smoothstep(0.74, 1.02, uWarp) * (1.0 - smoothstep(1.34, 1.64, uWarp));
-  let dustClump = smoothstep(0.30, 0.86, n1.r * 0.54 + (1.0 - n2.b) * 0.46);
-  let bokRaw = clamp((1.0 - n2.b) * 0.65 + (1.0 - n1.b) * 0.35, 0.0, 1.0);
-  let bokKnot = smoothstep(0.58, 0.91, bokRaw) * dustBand * bokDensity;
-
-  let sigmaDust = (0.78 * dustClump * dustBand + 2.45 * bokKnot) * dustOpacity * (0.75 + 0.45 * shockAgeNorm);
-
-  var cOIII : vec3f;
-  var cHa   : vec3f;
-  var cSII  : vec3f;
-  if (paletteMode == 0) {
-    cSII  = vec3f(1.00, 0.56, 0.10);
-    cHa   = vec3f(0.28, 0.88, 0.40);
-    cOIII = vec3f(0.08, 0.72, 1.00);
-  } else {
-    cHa   = vec3f(1.00, 0.14, 0.24);
-    cOIII = vec3f(0.06, 0.88, 0.78);
-    cSII  = vec3f(0.98, 0.42, 0.10);
+  var sigmaDust : f32 = 0.0;
+  if (sc.dustAgeScale > 1e-5) {
+    let dustBand = smoothstep(0.74, 1.02, uWarp) * (1.0 - smoothstep(1.34, 1.64, uWarp));
+    if (dustBand > 1e-4) {
+      let dustClump = smoothstep(0.30, 0.86, n1.r * 0.54 + (1.0 - n2.b) * 0.46);
+      let bokRaw = clamp((1.0 - n2.b) * 0.65 + (1.0 - n1.b) * 0.35, 0.0, 1.0);
+      let bokKnot = smoothstep(0.58, 0.91, bokRaw) * dustBand * sc.bokDensity;
+      sigmaDust = (0.78 * dustClump * dustBand + 2.45 * bokKnot) * sc.dustAgeScale;
+    }
   }
 
-  let pwnColor = mix(vec3f(0.28, 0.66, 1.00), sampleBlackbody(clamp(centralTempK * 0.28, 7000.0, 40000.0)), 0.45);
-  var gasEmit = pwnColor * (pwnVal * 0.58)
-              + cOIII * (oiiiVal * 0.66)
-              + cHa   * (haVal   * 0.92)
-              + cSII  * (siiVal  * 0.78);
-  gasEmit *= emissionGain;
+  let gasEmit = (
+    sc.pwnColor * (pwnVal * 0.58)
+    + sc.cOIII  * (oiiiVal * 0.66)
+    + sc.cHa    * (haVal   * 0.92)
+    + sc.cSII   * (siiVal  * 0.78)
+  ) * sc.emissionGain;
 
-  let gasDensity = (0.24 * pwnVal + 0.52 * oiiiVal + 0.88 * haVal + 0.60 * siiVal) * emissionGain;
+  let gasDensity = (0.24 * pwnVal + 0.52 * oiiiVal + 0.88 * haVal + 0.60 * siiVal) * sc.emissionGain;
   let sigmaGasExt = 0.085 * gasDensity;
 
   vs.emission = gasEmit;
@@ -347,13 +341,8 @@ fn evalVolumeSample(
 // 4. CENTRAL WHITE DWARF / PULSAR ILLUMINATOR (ORIGIN-SAFE)
 // ============================================================================
 
-fn evalCentralCore(camPos: vec3f, rayDir: vec3f, starLuminosity: f32, centralTempK: f32) -> vec3f {
-  if (starLuminosity <= 1e-4) {
-    return vec3f(0.0);
-  }
-
-  let tStar = -dot(camPos, rayDir);
-  if (tStar <= -0.15) {
+fn evalCentralCore(camPos: vec3f, tStar: f32, starLuminosity: f32, starCol: vec3f) -> vec3f {
+  if (starLuminosity <= 1e-4 || tStar <= -0.15) {
     return vec3f(0.0);
   }
 
@@ -367,9 +356,7 @@ fn evalCentralCore(camPos: vec3f, rayDir: vec3f, starLuminosity: f32, centralTem
   let corona = exp(-min(d2 / haloScale, 40.0));
   let distAtten = 1.0 / (1.0 + 0.045 * tFwd * tFwd);
 
-  let starCol = sampleBlackbody(centralTempK);
   let coronaCol = mix(starCol, vec3f(0.42, 0.78, 1.00), 0.38);
-
   return (starCol * (3.2 * coreDisk) + coronaCol * (0.48 * corona)) * starLuminosity * fwdFade * distAtten;
 }
 
@@ -432,8 +419,43 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   let fIdx = f32(frameIndex & 1023);
   let bn = fract(bnRaw + fIdx * vec4f(0.75487766, 0.56984029, 0.43015971, 0.61803399));
 
+  let centralStarCol = sampleBlackbody(centralTempK);
+  let starLightTint = mix(centralStarCol, vec3f(0.65, 0.88, 1.00), 0.25);
+
+  var sc: SupernovaConsts;
+  sc.invRShock = 1.0 / rShock;
+  sc.qBaseScale = 0.14 / max(rShock / 3.2, 0.5);
+  let adv = simTime * expansionSpeed * 0.028;
+  sc.adv065 = adv * 0.65;
+  sc.adv115 = adv * 1.15;
+  sc.rtTurb028 = 0.28 * rtTurbulence;
+  sc.rtTurb012 = 0.12 * rtTurbulence;
+  sc.rtTurb038 = 0.38 * rtTurbulence;
+  sc.dustAgeScale = dustOpacity * (0.75 + 0.45 * shockAgeNorm);
+  sc.pwnAgeScale = cavityGlow * (1.20 - 0.45 * shockAgeNorm);
+  sc.filBlend = clamp(filamentContrast - 0.5, 0.0, 1.0);
+  sc.bokDensity = bokDensity;
+  sc.emissionGain = emissionGain;
+  sc.gasExtScale = 0.09 * emissionGain;
+  sc.invWShadow = 1.0 / max(0.24 * shellThickness, 1e-4);
+  sc.invWOIII = 1.0 / max(0.21 * shellThickness, 1e-4);
+  sc.invWHa = 1.0 / max(0.15 * shellThickness, 1e-4);
+  sc.invWSII = 1.0 / max(0.11 * shellThickness, 1e-4);
+  sc.pwnColor = mix(vec3f(0.28, 0.66, 1.00), sampleBlackbody(clamp(centralTempK * 0.28, 7000.0, 40000.0)), 0.45);
+  if (paletteMode == 0) {
+    sc.cSII  = vec3f(1.00, 0.56, 0.10);
+    sc.cHa   = vec3f(0.28, 0.88, 0.40);
+    sc.cOIII = vec3f(0.08, 0.72, 1.00);
+  } else {
+    sc.cHa   = vec3f(1.00, 0.14, 0.24);
+    sc.cOIII = vec3f(0.06, 0.88, 0.78);
+    sc.cSII  = vec3f(0.98, 0.42, 0.10);
+  }
+  sc.ambientBounce = mix(vec3f(0.04, 0.09, 0.14), vec3f(0.11, 0.08, 0.05), f32(1 - paletteMode)) * emissionGain;
+
   let rBound = rShock * 1.68;
   let bSphere = dot(camPos, rayDir);
+  let tStar = -bSphere;
   let cSphere = dot(camPos, camPos) - rBound * rBound;
   let disc = bSphere * bSphere - cSphere;
 
@@ -442,8 +464,8 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
 
   if (disc > 0.0) {
     let sqrtDisc = sqrt(disc);
-    let tNear = max(0.0, -bSphere - sqrtDisc);
-    let tFar = -bSphere + sqrtDisc;
+    let tNear = max(0.0, tStar - sqrtDisc);
+    let tFar = tStar + sqrtDisc;
 
     if (tFar > tNear) {
       var nSteps : i32 = select(84, 112, isProgressive);
@@ -455,13 +477,10 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
 
       let marchSpan = tFar - tNear;
       let ds = marchSpan / f32(nSteps);
-      let tStar = -dot(camPos, rayDir);
       var starTransmittance : f32 = 1.0;
 
-      var tapFrac = array<f32, 6>(0.05, 0.11, 0.20, 0.34, 0.54, 0.78);
-      var tapW    = array<f32, 6>(0.07, 0.09, 0.13, 0.18, 0.23, 0.30);
-
-      let starLightTint = mix(sampleBlackbody(centralTempK), vec3f(0.65, 0.88, 1.00), 0.25);
+      var tapScale = array<f32, 6>(0.95, 0.89, 0.80, 0.66, 0.46, 0.22);
+      var tapW     = array<f32, 6>(0.07, 0.09, 0.13, 0.18, 0.23, 0.30);
 
       for (var step: i32 = 0; step < 144; step++) {
         if (step >= nSteps) { break; }
@@ -470,74 +489,58 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
         let t = tPrev + bn.x * ds;
         let p = camPos + rayDir * t;
 
-        let vs = evalVolumeSample(
-          p,
-          rShock,
-          shockAgeNorm,
-          rtTurbulence,
-          dustOpacity,
-          filamentContrast,
-          cavityGlow,
-          bokDensity,
-          shellThickness,
-          emissionGain,
-          paletteMode,
-          centralTempK,
-          simTime,
-          expansionSpeed
-        );
-
-        var stepSource = vs.emission;
-
-        if (vs.sigmaScat > 1e-4) {
-          let r2 = dot(p, p);
-          let r = sqrt(r2);
-          let rHat = select(vec3f(0.0, 1.0, 0.0), p / max(r, 1e-5), r > 1e-5);
-
-          var tauShadow : f32 = 0.0;
-          if (starLuminosity > 1e-3 && r > 0.08) {
-            let shadowSpan = min(r, rBound);
-            for (var st: i32 = 0; st < 6; st++) {
-              let pTap = p * max(1.0 - tapFrac[st], 0.0);
-              let extTap = evalShadowExtinction(
-                pTap,
-                rShock,
-                shockAgeNorm,
-                rtTurbulence,
-                dustOpacity,
-                bokDensity,
-                shellThickness,
-                emissionGain,
-                simTime,
-                expansionSpeed
-              );
-              tauShadow += extTap * (tapW[st] * shadowSpan);
-            }
-          }
-
-          let cosTheta = dot(rHat, -rayDir);
-          let wrenninge = evalWrenningeMultiScatter(tauShadow, cosTheta, hgAnisotropy);
-          let invDist2 = 1.0 / (r2 + 0.25);
-          let directScatter = starLightTint * (starLuminosity * 6.5 * invDist2 * wrenninge);
-
-          let ambientBounce = mix(vec3f(0.04, 0.09, 0.14), vec3f(0.11, 0.08, 0.05), f32(1 - paletteMode)) * emissionGain;
-
-          stepSource += vs.sigmaScat * vs.scatterAlbedo * (directScatter + ambientBounce);
-        }
+        let r2 = dot(p, p);
+        let r = sqrt(r2);
+        let u = r * sc.invRShock;
 
         let prevTrans = transmittance;
-        let sigmaT = max(vs.sigmaExt, 0.0);
-        if (sigmaT > 1e-4 || dot(stepSource, stepSource) > 1e-10) {
-          let tau = min(sigmaT * ds, 40.0);
-          let stepT = exp(-tau);
-          var stepRad : vec3f;
-          if (sigmaT > 1e-4) {
-            stepRad = stepSource * ((1.0 - stepT) / max(sigmaT, 1e-5));
-          } else {
-            stepRad = stepSource * ds;
+        if (u <= 1.68) {
+          let rHat = select(vec3f(0.0, 1.0, 0.0), p / max(r, 1e-5), r > 1e-5);
+          let pBase = p * sc.qBaseScale;
+          let advShift = rHat * sc.adv065;
+          let dipoleAsym = 0.08 * (rHat.x * rHat.y - 0.55 * rHat.z);
+
+          let vs = evalVolumeSample(p, u, rHat, pBase, advShift, dipoleAsym, sc);
+          var stepSource = vs.emission;
+
+          if (vs.sigmaScat > 1e-4) {
+            var directScatter = vec3f(0.0);
+            if (starLuminosity > 1e-3) {
+              var tauShadow : f32 = 0.0;
+              if (r > 0.08 && u >= 0.35) {
+                let shadowSpan = min(r, rBound);
+                for (var st: i32 = 0; st < 6; st++) {
+                  let s = tapScale[st];
+                  let qBaseTap = pBase * s - advShift;
+                  let uTap = u * s;
+                  let extTap = evalShadowExtinction(qBaseTap, uTap, dipoleAsym, sc);
+                  tauShadow += extTap * (tapW[st] * shadowSpan);
+                  if (tauShadow > 40.0) { break; }
+                }
+              }
+
+              let cosTheta = dot(rHat, -rayDir);
+              let wrenninge = evalWrenningeMultiScatter(tauShadow, cosTheta, hgAnisotropy);
+              let invDist2 = 1.0 / (r2 + 0.25);
+              directScatter = starLightTint * (starLuminosity * 6.5 * invDist2 * wrenninge);
+            }
+
+            stepSource += vs.sigmaScat * vs.scatterAlbedo * (directScatter + sc.ambientBounce);
           }
-          radiance += transmittance * stepRad;
-          transmittance *= stepT;
+
+          let sigmaT = max(vs.sigmaExt, 0.0);
+          if (sigmaT > 1e-4 || dot(stepSource, stepSource) > 1e-10) {
+            let tau = min(sigmaT * ds, 40.0);
+            let stepT = exp(-tau);
+            var stepRad : vec3f;
+            if (sigmaT > 1e-4) {
+              stepRad = stepSource * ((1.0 - stepT) / max(sigmaT, 1e-5));
+            } else {
+              stepRad = stepSource * ds;
+            }
+            radiance += transmittance * stepRad;
+            transmittance *= stepT;
+          }
         }
 
         if (tStar > tNear) {
@@ -555,12 +558,12 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
         }
       }
 
-      radiance += starTransmittance * evalCentralCore(camPos, rayDir, starLuminosity, centralTempK);
+      radiance += starTransmittance * evalCentralCore(camPos, tStar, starLuminosity, centralStarCol);
     } else {
-      radiance += evalCentralCore(camPos, rayDir, starLuminosity, centralTempK);
+      radiance += evalCentralCore(camPos, tStar, starLuminosity, centralStarCol);
     }
   } else {
-    radiance += evalCentralCore(camPos, rayDir, starLuminosity, centralTempK);
+    radiance += evalCentralCore(camPos, tStar, starLuminosity, centralStarCol);
   }
 
   radiance += transmittance * skyColor;

@@ -1,4 +1,4 @@
-pub const APP_VERSION: &str = "0.1.3.0 beta";
+pub const APP_VERSION: &str = "0.1.3.1 beta";
 
 pub mod assets;
 pub mod renderer;
@@ -9,6 +9,7 @@ pub mod shaders {
     pub const FULLSCREEN_VERT: &str = include_str!("../../shared/shaders/fullscreen_vert.wgsl");
     pub const MIPMAP: &str = include_str!("../../shared/shaders/mipmap.wgsl");
     pub const NOISE_BAKE: &str = include_str!("../../shared/shaders/noise_bake.wgsl");
+    pub const SKY_BAKE: &str = include_str!("../../shared/shaders/sky_bake.wgsl");
     pub const POST_TAA: &str = include_str!("../../shared/shaders/post_taa.wgsl");
     pub const POST_BLOOM_PREFILTER: &str =
         include_str!("../../shared/shaders/post_bloom_prefilter.wgsl");
@@ -35,6 +36,7 @@ pub mod shaders {
             ("fullscreen_vert", FULLSCREEN_VERT),
             ("mipmap", MIPMAP),
             ("noise_bake", NOISE_BAKE),
+            ("sky_bake", SKY_BAKE),
             ("post_taa", POST_TAA),
             ("post_bloom_prefilter", POST_BLOOM_PREFILTER),
             ("post_bloom_downsample", POST_BLOOM_DOWNSAMPLE),

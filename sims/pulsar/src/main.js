@@ -104,7 +104,7 @@ async function bootstrap() {
       }
       const camMoving = typeof ctx.camera?.hasMotion === 'function' ? ctx.camera.hasMotion() : false;
       const isMotion = Boolean(camMoving || (!ctx.state.paused && tel.omegaVis > 0));
-      return { forceComposite: false, dt: ctx.state.paused ? 0 : dt, isMotion };
+      return { forceComposite: false, dt: ctx.state.paused ? 0 : dt, isMotion, telemetry: tel };
     },
   });
 

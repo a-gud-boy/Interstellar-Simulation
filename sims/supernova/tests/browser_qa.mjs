@@ -376,6 +376,7 @@ async function main() {
     `);
     await sleep(300);
     await evalJS(`document.getElementById('ctrl-paletteMode-0')?.click()`);
+    await sleep(120);
     await waitFrames(4);
     const shoUiCheck = await evalJS(`({
       paletteMode: window.__SUPERNOVA__.getState().paletteMode,
@@ -398,6 +399,7 @@ async function main() {
     await evalJS(`document.getElementById('controls-toggle')?.click()`);
     await sleep(250);
     await evalJS(`document.getElementById('ctrl-paletteMode-1')?.click()`);
+    await sleep(120);
     await waitFrames(4);
     const trueColorUiCheck = await evalJS(`({
       paletteMode: window.__SUPERNOVA__.getState().paletteMode,

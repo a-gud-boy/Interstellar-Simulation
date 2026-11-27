@@ -640,7 +640,7 @@ async function main() {
         pulsarHopCheck = await evalJS(`(() => ({
           pathname: window.location.pathname,
           search: window.location.search,
-          starflightHref: document.querySelector('nav[aria-label="Simulation switcher"] a[data-sim-href*="starflight-sim"]')?.getAttribute('href') || null,
+          starflightHref: document.querySelector('nav[aria-label="Simulation switcher"] a[data-sim-href*="sims/starflight"]')?.getAttribute('href') || null,
         }))()`);
         if (
           pulsarHopCheck.pathname.includes('/sims/pulsar/') &&
@@ -654,7 +654,7 @@ async function main() {
       pulsarHopCheck = await evalJS(`(() => ({
         pathname: window.location.pathname,
         search: window.location.search,
-        starflightHref: document.querySelector('nav[aria-label="Simulation switcher"] a[data-sim-href*="starflight-sim"]')?.getAttribute('href') || null,
+        starflightHref: document.querySelector('nav[aria-label="Simulation switcher"] a[data-sim-href*="sims/starflight"]')?.getAttribute('href') || null,
       }))()`);
     }
 

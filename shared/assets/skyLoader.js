@@ -8,6 +8,9 @@
  * - Universe B: Exotic Golden-Amber & Teal Emission Nebula + cosmic dust pillars (Wormhole Sim)
  */
 
+import { FULLSCREEN_VERT, SKY_BAKE_FRAG } from '../shaders/common.glsl.js';
+import { SKY_BAKE_WGSL } from '../shaders/common.wgsl.js';
+
 export const DEFAULT_SKY_URL = new URL('./milkyway_4k.jpg', import.meta.url).href;
 
 const ANISOTROPY_EXT_NAMES = [
@@ -19,6 +22,8 @@ const ANISOTROPY_EXT_NAMES = [
 const cachedProceduralSkyPixelsA = new Map();
 const cachedExoticNebulaPixelsB = new Map();
 const cachedSkyBlobs = new Map();
+const glSkyBakerCache = new WeakMap();
+const gpuSkyBakerCache = new WeakMap();
 
 // Precomputed 12-bit linear-to-sRGB byte LUT for fast pixel encoding
 const SRGB_LUT_SIZE = 4096;
@@ -563,11 +568,240 @@ export function getProceduralSkyPixels(width = 2048, height = 1024) {
   return getProceduralSkyPixelsA(width, height);
 }
 
+function createGlProgram(gl, vertSrc, fragSrc) {
+  const vs = gl.createShader(gl.VERTEX_SHADER);
+  const fs = gl.createShader(gl.FRAGMENT_SHADER);
+  if (!vs || !fs) {
+    if (vs) gl.deleteShader(vs);
+    if (fs) gl.deleteShader(fs);
+    return null;
+  }
+  gl.shaderSource(vs, vertSrc);
+  gl.compileShader(vs);
+  gl.shaderSource(fs, fragSrc);
+  gl.compileShader(fs);
+  if (!gl.getShaderParameter(vs, gl.COMPILE_STATUS) || !gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    return null;
+  }
+  const program = gl.createProgram();
+  gl.attachShader(program, vs);
+  gl.attachShader(program, fs);
+  gl.linkProgram(program);
+  gl.deleteShader(vs);
+  gl.deleteShader(fs);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    gl.deleteProgram(program);
+    return null;
+  }
+  return program;
+}
+
+function getGlSkyBaker(gl) {
+  let entry = glSkyBakerCache.get(gl);
+  if (entry !== undefined) return entry;
+  const program = createGlProgram(gl, FULLSCREEN_VERT, SKY_BAKE_FRAG);
+  if (!program) {
+    glSkyBakerCache.set(gl, null);
+    return null;
+  }
+  entry = {
+    program,
+    vao: gl.createVertexArray(),
+    uUniverseLoc: gl.getUniformLocation(program, 'uUniverse'),
+  };
+  glSkyBakerCache.set(gl, entry);
+  return entry;
+}
+
+function bakeSkyWebGL(gl, universeIndex, width, height) {
+  if (
+    !gl ||
+    typeof gl.createShader !== 'function' ||
+    typeof gl.createFramebuffer !== 'function' ||
+    typeof gl.drawArrays !== 'function' ||
+    typeof gl.getParameter !== 'function' ||
+    gl.isContextLost?.()
+  ) {
+    return null;
+  }
+  const baker = getGlSkyBaker(gl);
+  if (!baker) return null;
+
+  const prevFbo = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+  const prevProg = gl.getParameter(gl.CURRENT_PROGRAM);
+  const prevVao = gl.getParameter(gl.VERTEX_ARRAY_BINDING);
+  const prevTex = gl.getParameter(gl.TEXTURE_BINDING_2D);
+  const prevVp = gl.getParameter(gl.VIEWPORT);
+
+  const texture = gl.createTexture();
+  configureSkyTextureParams(gl, texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+
+  const fbo = gl.createFramebuffer();
+  let ok = false;
+  try {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+      gl.viewport(0, 0, width, height);
+      gl.useProgram(baker.program);
+      if (baker.uUniverseLoc) gl.uniform1i(baker.uUniverseLoc, universeIndex | 0);
+      gl.bindVertexArray(baker.vao);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      ok = true;
+    }
+  } finally {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, prevFbo);
+    gl.deleteFramebuffer(fbo);
+    gl.useProgram(prevProg);
+    gl.bindVertexArray(prevVao);
+    if (prevVp && prevVp.length === 4) {
+      gl.viewport(prevVp[0], prevVp[1], prevVp[2], prevVp[3]);
+    }
+  }
+
+  if (!ok) {
+    gl.deleteTexture(texture);
+    gl.bindTexture(gl.TEXTURE_2D, prevTex);
+    return null;
+  }
+
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.bindTexture(gl.TEXTURE_2D, prevTex);
+  return texture;
+}
+
+function getGpuSkyBaker(device) {
+  let entry = gpuSkyBakerCache.get(device);
+  if (entry !== undefined) return entry;
+  try {
+    const mod = device.createShaderModule({ label: 'sky-bake-wgsl', code: SKY_BAKE_WGSL });
+    const bgl = device.createBindGroupLayout({
+      label: 'sky-bake-bgl',
+      entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }],
+    });
+    const pipeline = device.createRenderPipeline({
+      label: 'sky-bake-pipe',
+      layout: device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
+      vertex: { module: mod, entryPoint: 'vs_main' },
+      fragment: { module: mod, entryPoint: 'fs_main', targets: [{ format: 'rgba8unorm' }] },
+      primitive: { topology: 'triangle-list' },
+    });
+    const ubo = device.createBuffer({
+      label: 'sky-bake-ubo',
+      size: 16,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    const bg = device.createBindGroup({
+      label: 'sky-bake-bg',
+      layout: bgl,
+      entries: [{ binding: 0, resource: { buffer: ubo } }],
+    });
+    entry = { pipeline, ubo, bg, scratch: new Uint32Array(4) };
+    gpuSkyBakerCache.set(device, entry);
+    return entry;
+  } catch {
+    gpuSkyBakerCache.set(device, null);
+    return null;
+  }
+}
+
+function bakeSkyWebGPU(device, mipGen, universeIndex, width, height, label) {
+  if (
+    !device ||
+    typeof device.createShaderModule !== 'function' ||
+    typeof device.createRenderPipeline !== 'function' ||
+    typeof device.createCommandEncoder !== 'function' ||
+    typeof device.createBuffer !== 'function'
+  ) {
+    return null;
+  }
+  const baker = getGpuSkyBaker(device);
+  if (!baker) return null;
+
+  baker.scratch[0] = universeIndex >>> 0;
+  device.queue.writeBuffer(baker.ubo, 0, baker.scratch);
+
+  const mipLevelCount = Math.floor(Math.log2(Math.max(width, height))) + 1;
+  const texture = device.createTexture({
+    label,
+    size: [width, height, 1],
+    format: 'rgba8unorm',
+    mipLevelCount,
+    usage:
+      GPUTextureUsage.TEXTURE_BINDING |
+      GPUTextureUsage.COPY_DST |
+      GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+
+  const encoder = device.createCommandEncoder({ label: `${label}-encode` });
+  const pass = encoder.beginRenderPass({
+    colorAttachments: [
+      {
+        view: texture.createView({ baseMipLevel: 0, mipLevelCount: 1 }),
+        loadOp: 'clear',
+        storeOp: 'store',
+        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+      },
+    ],
+  });
+  pass.setPipeline(baker.pipeline);
+  pass.setBindGroup(0, baker.bg);
+  pass.draw(3);
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+
+  if (typeof mipGen === 'function') {
+    mipGen(texture, width, height, mipLevelCount);
+  }
+  return texture;
+}
+
+const PLACEHOLDER_PIXEL = new Uint8Array([0, 0, 0, 255]);
+
 /**
- * Creates Universe A's procedural Milky Way WebGL2 texture with full mip chain.
+ * Creates an instant 1x1 black WebGL2 placeholder texture for deferred procedural sky synthesis.
+ */
+export function createPlaceholderSkyTextureWebGL(gl) {
+  const texture = gl.createTexture();
+  configureSkyTextureParams(gl, texture);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, PLACEHOLDER_PIXEL);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  return texture;
+}
+
+/**
+ * Creates an instant 1x1 black WebGPU placeholder texture for deferred procedural sky synthesis.
+ */
+export function createPlaceholderSkyTextureWebGPU(device, label = 'proc-sky-placeholder') {
+  const texture = device.createTexture({
+    label,
+    size: [1, 1, 1],
+    format: 'rgba8unorm',
+    mipLevelCount: 1,
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+  });
+  device.queue.writeTexture(
+    { texture, mipLevel: 0 },
+    PLACEHOLDER_PIXEL,
+    { bytesPerRow: 4, rowsPerImage: 1 },
+    [1, 1, 1]
+  );
+  return texture;
+}
+
+/**
+ * Creates Universe A's procedural Milky Way WebGL2 texture with full mip chain (GPU-baked when available).
  */
 export function createProceduralSkyTextureAWebGL(gl, width = 2048, height = 1024) {
-  return uploadPixelsWebGL(gl, getProceduralSkyPixelsA(width, height), width, height);
+  return (
+    bakeSkyWebGL(gl, 0, width, height) ||
+    uploadPixelsWebGL(gl, getProceduralSkyPixelsA(width, height), width, height)
+  );
 }
 
 /**
@@ -578,16 +812,19 @@ export function createProceduralSkyTextureWebGL(gl, width = 2048, height = 1024)
 }
 
 /**
- * Creates Universe A's procedural Milky Way WebGPU texture with full mip chain.
+ * Creates Universe A's procedural Milky Way WebGPU texture with full mip chain (GPU-baked when available).
  */
 export function createProceduralSkyTextureAWebGPU(device, mipGen, width = 2048, height = 1024) {
-  return uploadPixelsWebGPU(
-    device,
-    mipGen,
-    getProceduralSkyPixelsA(width, height),
-    width,
-    height,
-    'proc-sky-a-map'
+  return (
+    bakeSkyWebGPU(device, mipGen, 0, width, height, 'proc-sky-a-map') ||
+    uploadPixelsWebGPU(
+      device,
+      mipGen,
+      getProceduralSkyPixelsA(width, height),
+      width,
+      height,
+      'proc-sky-a-map'
+    )
   );
 }
 
@@ -595,13 +832,16 @@ export function createProceduralSkyTextureAWebGPU(device, mipGen, width = 2048, 
  * Single-universe alias for procedural Milky Way WebGPU texture.
  */
 export function createProceduralSkyTextureWebGPU(device, mipGen, width = 2048, height = 1024) {
-  return uploadPixelsWebGPU(
-    device,
-    mipGen,
-    getProceduralSkyPixelsA(width, height),
-    width,
-    height,
-    'proc-sky-map'
+  return (
+    bakeSkyWebGPU(device, mipGen, 0, width, height, 'proc-sky-map') ||
+    uploadPixelsWebGPU(
+      device,
+      mipGen,
+      getProceduralSkyPixelsA(width, height),
+      width,
+      height,
+      'proc-sky-map'
+    )
   );
 }
 
@@ -609,20 +849,26 @@ export function createProceduralSkyTextureWebGPU(device, mipGen, width = 2048, h
  * Creates Universe B's exotic golden-amber & teal nebula WebGL2 texture with full mip chain.
  */
 export function createExoticNebulaTextureBWebGL(gl, width = 2048, height = 1024) {
-  return uploadPixelsWebGL(gl, getExoticNebulaPixelsB(width, height), width, height);
+  return (
+    bakeSkyWebGL(gl, 1, width, height) ||
+    uploadPixelsWebGL(gl, getExoticNebulaPixelsB(width, height), width, height)
+  );
 }
 
 /**
  * Creates Universe B's exotic golden-amber & teal nebula WebGPU texture with full mip chain.
  */
 export function createExoticNebulaTextureBWebGPU(device, mipGen, width = 2048, height = 1024) {
-  return uploadPixelsWebGPU(
-    device,
-    mipGen,
-    getExoticNebulaPixelsB(width, height),
-    width,
-    height,
-    'exotic-nebula-b-map'
+  return (
+    bakeSkyWebGPU(device, mipGen, 1, width, height, 'exotic-nebula-b-map') ||
+    uploadPixelsWebGPU(
+      device,
+      mipGen,
+      getExoticNebulaPixelsB(width, height),
+      width,
+      height,
+      'exotic-nebula-b-map'
+    )
   );
 }
 

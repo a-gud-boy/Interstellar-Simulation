@@ -49,9 +49,9 @@ void evalBezierStream(
   out float bestS,
   out vec2 bestTan
 ) {
-  minDist = 1e6;
+  float minDistSq = 1e12;
   bestS = 0.0;
-  bestTan = vec2(1.0, 0.0);
+  vec2 bestVec = vec2(1.0, 0.0);
 
   vec2 prev = p0;
   const int SEGS = 6;
@@ -64,16 +64,18 @@ void evalBezierStream(
              + (t * t * t) * p3;
     float segT;
     vec2 q = closestOnSegment(p, prev, cur, segT);
-    float dist = length(p - q);
-    if (dist < minDist) {
-      minDist = dist;
+    vec2 dp = p - q;
+    float distSq = dot(dp, dp);
+    if (distSq < minDistSq) {
+      minDistSq = distSq;
       bestS = (float(i - 1) + segT) / float(SEGS);
-      vec2 dVec = cur - prev;
-      float dLen = length(dVec);
-      bestTan = dLen > 1e-5 ? (dVec / dLen) : vec2(1.0, 0.0);
+      bestVec = cur - prev;
     }
     prev = cur;
   }
+  minDist = sqrt(minDistSq);
+  float dLenSq = dot(bestVec, bestVec);
+  bestTan = dLenSq > 1e-10 ? (bestVec * inversesqrt(dLenSq)) : vec2(1.0, 0.0);
 }
 
 vec4 evalEquilibrium(vec2 posRot) {
@@ -108,15 +110,18 @@ vec4 evalEquilibrium(vec2 posRot) {
 
     // Trailing m=2 Lindblad spiral shock arms (alpha decreases with phi_orb -> +alpha lags behind)
     float spiralArg = 2.0 * (phi - 1.95 * log(max(r / max(rCav, 1.0), 0.45)));
-    float spiralShock = pow(0.5 + 0.5 * cos(spiralArg), 3.0);
+    float sCos = max(0.5 + 0.5 * cos(spiralArg), 0.0);
+    float spiralShock = sCos * sCos * sCos;
 
     // Precessing overdense cavity-edge lump
-    float lumpRad = exp(-pow((r - rCavEff * 1.07) / max(0.26 * rCav, 0.5), 2.0));
-    float lumpAz = pow(0.5 + 0.5 * cos(phiPrec), 2.2);
+    float lumpDist = (r - rCavEff * 1.07) / max(0.26 * rCav, 0.5);
+    float lumpRad = exp(-lumpDist * lumpDist);
+    float lumpAz = pow(max(0.5 + 0.5 * cos(phiPrec), 0.0), 2.2);
     float lump = 0.50 * lumpRad * lumpAz;
 
     cbdSigma = uDiskDensity * cavWall * outerMask * (radProf * (0.45 + 0.58 * spiralShock) + lump);
-    cbdTemp = 1.0 + 0.34 * spiralShock + 0.28 * lump + 0.20 * exp(-pow((r - rCavEff) / max(0.24 * rCav, 0.4), 2.0));
+    float rimDist = (r - rCavEff) / max(0.24 * rCav, 0.4);
+    cbdTemp = 1.0 + 0.34 * spiralShock + 0.28 * lump + 0.20 * exp(-rimDist * rimDist);
 
     float safeR = max(r, 1.2);
     float omegaCbd = 1.0 / (safeR * sqrt(safeR) + 0.5 * (3.0 - eta) * sqrt(safeR));
@@ -131,18 +136,21 @@ vec4 evalEquilibrium(vec2 posRot) {
   float miniTemp2 = 1.0;
   vec2 vMini1 = vec2(0.0);
   vec2 vMini2 = vec2(0.0);
+  float d1 = 0.0;
+  float d2 = 0.0;
 
   if (uBridgeIntensity > 0.001) {
     // Primary mini-disk (BH1)
     vec2 dVec1 = posRot - c1;
-    float d1 = length(dVec1);
+    d1 = length(dVec1);
     float rIn1 = 1.75 * m1;
     float rOut1 = max(rIn1 + 0.45, min(0.84 * max(uRocheL1, 0.5), 0.45 * d));
     if (d1 < rOut1 * 1.15 && d1 > 0.45 * m1) {
       float mMask1 = smoothstep(rIn1 * 0.72, rIn1 * 1.16, d1)
                    * (1.0 - smoothstep(rOut1 * 0.68, rOut1 * 1.08, d1));
       float phi1 = atan(dVec1.y, dVec1.x);
-      float sp1 = pow(0.5 + 0.5 * cos(2.0 * (phi1 - 1.45 * log(max(d1 / max(rIn1, 0.1), 0.45)))), 2.0);
+      float sBase1 = max(0.5 + 0.5 * cos(2.0 * (phi1 - 1.45 * log(max(d1 / max(rIn1, 0.1), 0.45)))), 0.0);
+      float sp1 = sBase1 * sBase1;
       miniSigma1 = uBridgeIntensity * (0.62 + 0.52 * m1) * mMask1 * (0.66 + 0.44 * sp1);
       miniTemp1 = 1.68 + 0.55 * (1.0 - smoothstep(rIn1, rOut1, d1)) + 0.30 * sp1 + 0.35 * uRingdown;
 
@@ -154,14 +162,15 @@ vec4 evalEquilibrium(vec2 posRot) {
 
     // Secondary mini-disk (BH2)
     vec2 dVec2 = posRot - c2;
-    float d2 = length(dVec2);
+    d2 = length(dVec2);
     float rIn2 = 1.75 * m2;
     float rOut2 = max(rIn2 + 0.35, min(0.84 * max(uRocheL2, 0.35), 0.44 * d));
     if (d2 < rOut2 * 1.15 && d2 > 0.45 * m2) {
       float mMask2 = smoothstep(rIn2 * 0.72, rIn2 * 1.16, d2)
                    * (1.0 - smoothstep(rOut2 * 0.68, rOut2 * 1.08, d2));
       float phi2 = atan(dVec2.y, dVec2.x);
-      float sp2 = pow(0.5 + 0.5 * cos(2.0 * (phi2 - 1.45 * log(max(d2 / max(rIn2, 0.1), 0.45)))), 2.0);
+      float sBase2 = max(0.5 + 0.5 * cos(2.0 * (phi2 - 1.45 * log(max(d2 / max(rIn2, 0.1), 0.45)))), 0.0);
+      float sp2 = sBase2 * sBase2;
       miniSigma2 = uBridgeIntensity * (0.58 + 0.56 * m2) * mMask2 * (0.66 + 0.44 * sp2);
       miniTemp2 = 1.76 + 0.60 * (1.0 - smoothstep(rIn2, rOut2, d2)) + 0.30 * sp2 + 0.35 * uRingdown;
 
@@ -228,9 +237,7 @@ vec4 evalEquilibrium(vec2 posRot) {
     float maskL = exp(-(distL1 * distL1) / max(wL * wL, 1e-4)) * smoothstep(0.0, 0.15, sL1) * (1.0 - smoothstep(0.85, 1.0, sL1));
 
     // Avoid illuminating inside horizons
-    float d1Hor = length(posRot - c1);
-    float d2Hor = length(posRot - c2);
-    float horCut = smoothstep(0.85 * m1, 1.35 * m1, d1Hor) * smoothstep(0.85 * m2, 1.35 * m2, d2Hor);
+    float horCut = smoothstep(0.85 * m1, 1.35 * m1, d1) * smoothstep(0.85 * m2, 1.35 * m2, d2);
 
     float st1 = mask1 * clumps1 * horCut;
     float st2 = mask2 * clumps2 * horCut;

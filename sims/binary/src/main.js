@@ -23,15 +23,14 @@ const TIDAL_RESET_KEYS = new Set([
 
 async function bootstrap() {
   let orbitState = null;
+  const reusableBinState = { c1: [0, 0, 0], c2: [0, 0, 0], v1: [0, 0, 0], v2: [0, 0, 0] };
+  const binParamsScratch = { massRatio: 1.0, separation: 7.4 };
+  const binOptsScratch = { out: reusableBinState };
 
   function getActiveBinaryState(state) {
-    const bin = computeBinaryState(
-      {
-        massRatio: state.massRatio,
-        separation: orbitState.currentSep,
-      },
-      orbitState.phase
-    );
+    binParamsScratch.massRatio = state.massRatio;
+    binParamsScratch.separation = orbitState.currentSep;
+    const bin = computeBinaryState(binParamsScratch, orbitState.phase, binOptsScratch);
     bin.ringdownFactor = orbitState.ringdownFactor || 0.0;
     return bin;
   }

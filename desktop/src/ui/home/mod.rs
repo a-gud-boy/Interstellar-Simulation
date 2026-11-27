@@ -237,7 +237,7 @@ fn draw_stage_backdrop(ctx: &Context, state: &mut HomeState, screen: Rect, entry
     painter.rect_filled(screen, CornerRadius::ZERO, BG_VOID);
 
     let tex_id = {
-        let tex = state.previews.get_or_load(ctx, entry.sim);
+        let tex = state.previews.get_or_load_sync(ctx, entry.sim);
         let size = tex.size_vec2();
         (tex.id(), size)
     };
@@ -498,7 +498,7 @@ fn draw_floating_topbar(
                             ui.painter()
                                 .rect_filled(sep, CornerRadius::ZERO, hairline());
                             ui.label(tracked_job(
-                                "v0.1.3.0 · 7 ENGINES",
+                                "v0.1.3.1 · 7 ENGINES",
                                 FontId::new(10.5, egui::FontFamily::Monospace),
                                 TEXT_SECONDARY,
                                 0.5,
@@ -846,6 +846,8 @@ pub fn draw_homepage(
     }
 
     let active = catalog_entry(state.spotlight);
+    state.previews.poll_decoded(ctx);
+    state.previews.ensure_async_loading(active.sim, ctx);
 
     // Handle Escape cleanly for overlays
     if ctx.input(|i| i.key_pressed(Key::Escape)) {

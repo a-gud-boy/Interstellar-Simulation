@@ -86,19 +86,30 @@ pub(super) fn draw_filmstrip_dock(
                     ui.painter().rect_filled(card_rect, radius, glass_card());
 
                     // Thumbnail
-                    let tex = state.previews.get_or_load(ctx, item.sim);
-                    let tint = if is_active || card_resp.hovered() {
-                        Color32::WHITE
-                    } else {
-                        Color32::from_rgba_unmultiplied(210, 218, 230, 200)
-                    };
                     let inner_rect = card_rect.shrink(1.0);
-                    ui.painter().image(
-                        tex.id(),
-                        inner_rect,
-                        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                        tint,
-                    );
+                    if let Some(tex) = state.previews.get(item.sim) {
+                        let tint = if is_active || card_resp.hovered() {
+                            Color32::WHITE
+                        } else {
+                            Color32::from_rgba_unmultiplied(210, 218, 230, 200)
+                        };
+                        ui.painter().image(
+                            tex.id(),
+                            inner_rect,
+                            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                            tint,
+                        );
+                    } else {
+                        paint_vertical_gradient(
+                            ui.painter(),
+                            inner_rect,
+                            &[
+                                (0.0, with_alpha(item.accent, 34)),
+                                (0.55, Color32::from_rgb(7, 10, 18)),
+                                (1.0, Color32::from_rgb(3, 5, 10)),
+                            ],
+                        );
+                    }
 
                     // Top + bottom thumbnail legibility gradient
                     paint_vertical_gradient(

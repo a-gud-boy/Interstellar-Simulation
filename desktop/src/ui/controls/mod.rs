@@ -61,7 +61,7 @@ pub(crate) fn draw_controls_drawer(
                     ui.allocate_exact_size(Vec2::new(drawer_rect.width(), header_h), Sense::hover());
 
                 let title_galley = ui.painter().layout_job(tracked_job(
-                    &meta.drawer_title.to_uppercase(),
+                    meta.drawer_title,
                     FontId::new(12.0, semibold_family()),
                     theme.text_primary,
                     1.4,
@@ -177,7 +177,7 @@ pub(crate) fn draw_controls_drawer(
                                                 ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
                                             }
                                             let sec_title = ui.painter().layout_job(tracked_job(
-                                                &section.title.to_uppercase(),
+                                                section.title,
                                                 FontId::new(11.0, semibold_family()),
                                                 theme.accent_bright,
                                                 1.2,
@@ -201,8 +201,8 @@ pub(crate) fn draw_controls_drawer(
                                             }
 
                                             if is_open {
-                                                for item in &section.items {
-                                                    match &item.kind {
+                                                for item in section.items {
+                                                    match item.kind {
                                                         ControlKind::Range {
                                                             min,
                                                             max,
@@ -214,10 +214,10 @@ pub(crate) fn draw_controls_drawer(
                                                                 sim,
                                                                 item.key,
                                                                 item.label,
-                                                                *min,
-                                                                *max,
-                                                                *step,
-                                                                *hints,
+                                                                min,
+                                                                max,
+                                                                step,
+                                                                hints,
                                                                 theme,
                                                             ) {
                                                                 actions.push(

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use egui::{Pos2, RawInput, Rect, Vec2};
 
-use interstellar_desktop::renderer::post::{MAX_PROGRESSIVE_SAMPLES, PostPipeline};
+use interstellar_desktop::renderer::post::{MAX_PROGRESSIVE_SAMPLES, MAX_RENDER_DPR, PostPipeline};
 use interstellar_desktop::renderer::{
     SharedGpuAssets, format_adapter_label, readback_rgba8_texture,
 };
@@ -140,10 +140,8 @@ fn render_and_capture(
     let mut sim = create_simulation(sim_id, assets);
     post.reset_accumulation(true);
 
-    let mut hud = HudState {
-        drawer_open,
-        ..Default::default()
-    };
+    let mut hud = HudState::default();
+    hud.drawer_open = drawer_open;
 
     let mut sim_input = SimInput {
         viewport_w: WIDTH as f32,
@@ -182,11 +180,9 @@ fn render_and_capture(
         }
         if plan.run_post {
             post.encode_post_and_composite(&assets.queue, &mut encoder, &post_params, true);
-        } else {
-            post.encode_glass_blur(&assets.queue, &mut encoder);
+        } else if post.glass_blur_dirty {
+            post.encode_glass_blur(&mut encoder);
         }
-
-        post.encode_blit_to_target(&mut encoder, out_view);
 
         let raw_input = RawInput {
             screen_rect: Some(Rect::from_min_size(
@@ -227,13 +223,13 @@ fn render_and_capture(
         );
 
         if f_idx == frames - 1 {
-            let rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("headless-egui-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: out_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -243,6 +239,7 @@ fn render_and_capture(
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            post.draw_blit_into_pass(&mut rpass);
             let mut rpass_static = rpass.forget_lifetime();
             egui_renderer.render(&mut rpass_static, &paint_jobs, &screen_desc);
         }
@@ -305,9 +302,16 @@ fn render_all_seven_sims_with_hud() {
     }))
     .expect("Expected GPU adapter");
     let adapter_info = adapter.get_info();
+    let mut required_features = wgpu::Features::empty();
+    if adapter
+        .features()
+        .contains(wgpu::Features::RG11B10UFLOAT_RENDERABLE)
+    {
+        required_features |= wgpu::Features::RG11B10UFLOAT_RENDERABLE;
+    }
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("headless-render-device"),
-        required_features: wgpu::Features::empty(),
+        required_features,
         required_limits: wgpu::Limits::default(),
         memory_hints: wgpu::MemoryHints::Performance,
         trace: wgpu::Trace::Off,
@@ -320,11 +324,14 @@ fn render_all_seven_sims_with_hud() {
         Arc::new(queue),
         adapter_info,
         true, // synchronous 4K Milky Way load
+        None,
+        None,
     );
     assert!(
         assets.sky_map_loaded,
         "4K Milky Way failed to load synchronously"
     );
+    assets.ensure_procedural_sky_a();
 
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let mut post = PostPipeline::new(
@@ -334,6 +341,8 @@ fn render_all_seven_sims_with_hud() {
         format,
         WIDTH,
         HEIGHT,
+        1.0,
+        MAX_RENDER_DPR,
         1.0,
     );
 
@@ -441,6 +450,7 @@ fn render_observatory_homepage_and_dossier() {
         egui_wgpu::Renderer::new(&device, format, egui_wgpu::RendererOptions::default());
 
     let mut home = HomeState::default();
+    home.previews.preload_all_sync(&egui_ctx);
     render_home_and_capture(
         &device,
         &queue,

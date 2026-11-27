@@ -10,13 +10,18 @@
 
 import { FULLSCREEN_VERT, NOISE_BAKE_FRAG } from '../../../../shared/shaders/common.glsl.js';
 import { BLACKHOLE_FRAG } from '../shaders/blackhole.frag.js';
+import { writeBlackholeFrameConstants } from './Physics.js';
 import {
   SharedWebGLPostPipeline,
+  detectWebGLHdrFormats,
   MAX_PROGRESSIVE_SAMPLES,
   halton,
   formatShaderError,
 } from '../../../../shared/engine/SharedWebGLPostPipeline.js';
-import { createProceduralSkyTextureWebGL } from '../../../../shared/assets/skyLoader.js';
+import {
+  createProceduralSkyTextureWebGL,
+  createPlaceholderSkyTextureWebGL,
+} from '../../../../shared/assets/skyLoader.js';
 import { createBlackbodyLUTWebGL, createBlueNoiseLUTWebGL } from '../../../../shared/assets/physicalLuts.js';
 
 const VOLUME_SIZE = 128;
@@ -101,11 +106,12 @@ export class WebGLRenderer {
       blackhole: this._createProgram('blackhole', FULLSCREEN_VERT, BLACKHOLE_FRAG),
     };
 
-    // Static physical LUTs & procedural sky fallback (instant frame-0 readiness)
+    // Static physical LUTs & instant 1x1 sky placeholder (procedural sky synthesized lazily when needed)
     const blackbodyRes = createBlackbodyLUTWebGL(gl);
     this.blackbodyTex = blackbodyRes?.texture || blackbodyRes;
     this.blueNoiseTex = createBlueNoiseLUTWebGL(gl);
-    this.procSkyTex = createProceduralSkyTextureWebGL(gl, 2048, 1024);
+    this.procSkyTex = createPlaceholderSkyTextureWebGL(gl);
+    this._procSkyBaked = false;
     this.skyTex = this.procSkyTex;
 
     // Startup GPU 3D volume noise texture bake (128x128x128 RGBA8)
@@ -116,6 +122,7 @@ export class WebGLRenderer {
       gl,
       emptyVao: this.emptyVao,
       hdrSpec: this._hdrSpec,
+      taaSpec: this._taaSpec,
       opticsProfile: 'default',
       vertSrc: FULLSCREEN_VERT,
       compileProgram: (name, vs, fs) => this._createProgram(name, vs, fs),
@@ -123,68 +130,21 @@ export class WebGLRenderer {
       drawFullscreen: () => this._drawFullscreen(),
     });
 
+    this._frameConsts = new Float32Array(40);
     this._lastResizeW = 0;
     this._lastResizeH = 0;
     this.resize(1.0);
   }
 
   _detectHdrFboFormat() {
-    const gl = this.gl;
-    const candidates = [];
-
-    if (this.extColorBufferFloat || this.extColorBufferHalfFloat) {
-      candidates.push({
-        name: 'RGBA16F',
-        internalFormat: gl.RGBA16F,
-        format: gl.RGBA,
-        type: gl.HALF_FLOAT,
-      });
-    }
-    if (this.extColorBufferFloat) {
-      candidates.push({
-        name: 'R11F_G11F_B10F',
-        internalFormat: gl.R11F_G11F_B10F,
-        format: gl.RGB,
-        type: gl.HALF_FLOAT,
-      });
-    }
-    candidates.push({
-      name: 'RGBA8',
-      internalFormat: gl.RGBA8,
-      format: gl.RGBA,
-      type: gl.UNSIGNED_BYTE,
-    });
-
-    const probeFbo = gl.createFramebuffer();
-    const probeTex = gl.createTexture();
-
-    for (const spec of candidates) {
-      gl.bindTexture(gl.TEXTURE_2D, probeTex);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.texImage2D(gl.TEXTURE_2D, 0, spec.internalFormat, 4, 4, 0, spec.format, spec.type, null);
-
-      gl.bindFramebuffer(gl.FRAMEBUFFER, probeFbo);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, probeTex, 0);
-      const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
-
-      if (status === gl.FRAMEBUFFER_COMPLETE) {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.deleteTexture(probeTex);
-        gl.deleteFramebuffer(probeFbo);
-        this.hdrFormat = spec.name;
-        return spec;
-      }
-    }
-
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.deleteTexture(probeTex);
-    gl.deleteFramebuffer(probeFbo);
-    const fallback = candidates[candidates.length - 1];
-    this.hdrFormat = fallback.name;
-    return fallback;
+    const { hdrSpec, taaSpec } = detectWebGLHdrFormats(
+      this.gl,
+      this.extColorBufferFloat,
+      this.extColorBufferHalfFloat
+    );
+    this._taaSpec = taaSpec;
+    this.hdrFormat = hdrSpec.name;
+    return hdrSpec;
   }
 
   _compileShader(name, type, source) {
@@ -390,12 +350,36 @@ export class WebGLRenderer {
       this.skyDimensions = [width || 4096, height || 2048];
       this.resetAccumulation(true);
     } else {
-      // Fallback already bound via procSkyTex; avoid keeping duplicate procedural texture alive
-      if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
+      if (texture && !this._procSkyBaked) {
+        const oldPlaceholder = this.procSkyTex;
+        this.procSkyTex = texture;
+        if (!this.skyMapLoaded) {
+          this.skyTex = texture;
+        }
+        if (oldPlaceholder && oldPlaceholder !== texture) {
+          gl.deleteTexture(oldPlaceholder);
+        }
+        this._procSkyBaked = true;
+        this.resetAccumulation(true);
+      } else if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
         gl.deleteTexture(texture);
       }
       this.skyMapLoaded = false;
     }
+  }
+
+  _ensureProceduralSky() {
+    if (this._procSkyBaked || this._disposed || this.gl.isContextLost()) return;
+    const oldPlaceholder = this.procSkyTex;
+    const baked = createProceduralSkyTextureWebGL(this.gl, 2048, 1024);
+    this.procSkyTex = baked;
+    if (!this.skyMapLoaded && (!this.skyTex || this.skyTex === oldPlaceholder)) {
+      this.skyTex = baked;
+    }
+    if (oldPlaceholder && oldPlaceholder !== baked && oldPlaceholder !== this.skyTex) {
+      this.gl.deleteTexture(oldPlaceholder);
+    }
+    this._procSkyBaked = true;
   }
 
   resetAccumulation(hard = false) {
@@ -416,6 +400,9 @@ export class WebGLRenderer {
   }
 
   _runBlackholePass(state, camData, simTime, jitterX, jitterY) {
+    if ((state?.skyMode | 0) === 2 && !this._procSkyBaked) {
+      this._ensureProceduralSky();
+    }
     const gl = this.gl;
     const prog = this.programs.blackhole;
     if (!prog) return;
@@ -468,6 +455,14 @@ export class WebGLRenderer {
       if (loc) gl.uniform1i(loc, v);
     };
 
+    const set4f = (name, x, y, z, w) => {
+      const loc = this._getUniform(prog, name);
+      if (loc) gl.uniform4f(loc, x, y, z, w);
+    };
+
+    const fc = this._frameConsts;
+    writeBlackholeFrameConstants(fc, 0, state, camData, simTime);
+
     set2f('uResolution', this.width, this.height);
     set1f('uTime', simTime);
     set1i('uFrameIndex', this.frameIndex);
@@ -495,6 +490,18 @@ export class WebGLRenderer {
     set2f('uSkyRotation', skyRot[0] || 0, skyRot[1] || 0);
     set1i('uQuality', state.quality | 0);
 
+    // CPU-precomputed ZAMO tetrad & frame constants (shared with WebGPU)
+    set4f('uZamoE0', fc[0], fc[1], fc[2], fc[3]);
+    set4f('uZamoE1', fc[4], fc[5], fc[6], fc[7]);
+    set4f('uZamoE2', fc[8], fc[9], fc[10], fc[11]);
+    set4f('uZamoE3', fc[12], fc[13], fc[14], fc[15]);
+    set4f('uCamKSl2H', fc[16], fc[17], fc[18], fc[19]);
+    set4f('uKerrConsts', fc[20], fc[21], fc[22], fc[23]);
+    set4f('uRayConsts', fc[24], fc[25], fc[26], fc[27]);
+    set4f('uFlowConsts', fc[28], fc[29], fc[30], fc[31]);
+    set4f('uOptConsts', fc[32], fc[33], fc[34], fc[35]);
+    set4f('uSkyTrig', fc[36], fc[37], fc[38], fc[39]);
+
     this._drawFullscreen();
   }
 
@@ -505,8 +512,10 @@ export class WebGLRenderer {
   render(state, camData, simTime, options = {}) {
     if (this._disposed || this.gl.isContextLost() || !this.getAllShadersCompiled()) return false;
 
-    // Ensure viewport & resolutionScale stay synced
-    this.resize(state.resolutionScale);
+    const targetScale = Number(options?.effectiveResolutionScale ?? state?.resolutionScale ?? this.resolutionScale) || 1.0;
+    if (this.width === 0 || this.height === 0 || Math.abs(targetScale - this.resolutionScale) > 1e-4) {
+      this.resize(targetScale);
+    }
 
     const isProgressive = Boolean(state.paused && !camData.moved);
 

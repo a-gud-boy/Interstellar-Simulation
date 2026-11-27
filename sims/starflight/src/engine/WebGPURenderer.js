@@ -21,7 +21,10 @@ import {
   formatWgslMessages,
 } from '../../../../shared/engine/SharedWebGPUPostPipeline.js';
 import { computeStarflightTelemetry } from './Physics.js';
-import { createProceduralSkyTextureWebGPU } from '../../../../shared/assets/skyLoader.js';
+import {
+  createProceduralSkyTextureWebGPU,
+  createPlaceholderSkyTextureWebGPU,
+} from '../../../../shared/assets/skyLoader.js';
 import { createBlackbodyLUTWebGPU, createBlueNoiseLUTWebGPU } from '../../../../shared/assets/physicalLuts.js';
 
 const VOLUME_SIZE = 128;
@@ -46,31 +49,29 @@ function extractCamVectors(camMatrices) {
   return { pos, right, up, forward, fovY };
 }
 
-function buildPhysicsStateSignature(state) {
-  const skyRot = Array.isArray(state?.skyRotation) ? state.skyRotation : [0.65, 0.18];
+function fillPhysicsStateSignature(state, out) {
+  const skyRot = Array.isArray(state?.skyRotation) ? state.skyRotation : null;
   const flightMode = (Number(state?.flightMode ?? 0) | 0) === 1 ? 1 : 0;
   const rapidity = Number.isFinite(Number(state?.rapidity)) ? Number(state.rapidity) : 1.472219;
-  return [
-    flightMode,
-    flightMode === 1 ? 0.0 : rapidity,
-    Number.isFinite(Number(state?.properAccelG)) ? Number(state.properAccelG) : 1.0,
-    (Number(state?.flightDir ?? 1) >= 0 ? 1 : -1),
-    Number(state?.aberrationMode ?? 1) ? 1 : 0,
-    Number.isFinite(Number(state?.dopplerStrength)) ? Number(state.dopplerStrength) : 1.0,
-    Number.isFinite(Number(state?.cmbVisibility)) ? Number(state.cmbVisibility) : 0.75,
-    Number.isFinite(Number(state?.starDensity)) ? Number(state.starDensity) : 1.25,
-    Number.isFinite(Number(state?.uvIrGain)) ? Number(state.uvIrGain) : 1.20,
-    Number.isFinite(Number(state?.geometryVisibility)) ? Number(state.geometryVisibility) : 1.25,
-    Number.isFinite(Number(state?.dustDensity)) ? Number(state.dustDensity) : 1.15,
-    Number.isFinite(Number(state?.dustStreakScale)) ? Number(state.dustStreakScale) : 1.0,
-    Number.isFinite(Number(state?.beamingGain)) ? Number(state.beamingGain) : 1.0,
-    Number.isFinite(Number(state?.cmbTempScale)) ? Number(state.cmbTempScale) : 1.0,
-    Number.isFinite(Number(state?.skyIntensity)) ? Number(state.skyIntensity) : 0.95,
-    Number.isFinite(Number(state?.skyMode)) ? (Number(state.skyMode) | 0) : 0,
-    Number.isFinite(Number(skyRot[0])) ? Number(skyRot[0]) : 0.65,
-    Number.isFinite(Number(skyRot[1])) ? Number(skyRot[1]) : 0.18,
-    Number.isFinite(Number(state?.quality)) ? (Number(state.quality) | 0) : 1,
-  ];
+  out[0] = flightMode;
+  out[1] = flightMode === 1 ? 0.0 : rapidity;
+  out[2] = Number.isFinite(Number(state?.properAccelG)) ? Number(state.properAccelG) : 1.0;
+  out[3] = Number(state?.flightDir ?? 1) >= 0 ? 1 : -1;
+  out[4] = Number(state?.aberrationMode ?? 1) ? 1 : 0;
+  out[5] = Number.isFinite(Number(state?.dopplerStrength)) ? Number(state.dopplerStrength) : 1.0;
+  out[6] = Number.isFinite(Number(state?.cmbVisibility)) ? Number(state.cmbVisibility) : 0.75;
+  out[7] = Number.isFinite(Number(state?.starDensity)) ? Number(state.starDensity) : 1.25;
+  out[8] = Number.isFinite(Number(state?.uvIrGain)) ? Number(state.uvIrGain) : 1.20;
+  out[9] = Number.isFinite(Number(state?.geometryVisibility)) ? Number(state.geometryVisibility) : 1.25;
+  out[10] = Number.isFinite(Number(state?.dustDensity)) ? Number(state.dustDensity) : 1.15;
+  out[11] = Number.isFinite(Number(state?.dustStreakScale)) ? Number(state.dustStreakScale) : 1.0;
+  out[12] = Number.isFinite(Number(state?.beamingGain)) ? Number(state.beamingGain) : 1.0;
+  out[13] = Number.isFinite(Number(state?.cmbTempScale)) ? Number(state.cmbTempScale) : 1.0;
+  out[14] = Number.isFinite(Number(state?.skyIntensity)) ? Number(state.skyIntensity) : 0.95;
+  out[15] = Number.isFinite(Number(state?.skyMode)) ? (Number(state.skyMode) | 0) : 0;
+  out[16] = skyRot && Number.isFinite(Number(skyRot[0])) ? Number(skyRot[0]) : 0.65;
+  out[17] = skyRot && Number.isFinite(Number(skyRot[1])) ? Number(skyRot[1]) : 0.18;
+  out[18] = Number.isFinite(Number(state?.quality)) ? (Number(state.quality) | 0) : 1;
 }
 
 export class WebGPURenderer {
@@ -365,12 +366,8 @@ export class WebGPURenderer {
     this.blueNoiseTex = createBlueNoiseLUTWebGPU(device, 128);
     this.blueNoiseView = this.blueNoiseTex.createView();
 
-    this.procSkyTex = createProceduralSkyTextureWebGPU(
-      device,
-      (t, w, h, m) => this.generateMipmaps(t, w, h, m),
-      2048,
-      1024
-    );
+    this.procSkyTex = createPlaceholderSkyTextureWebGPU(device);
+    this._procSkyBaked = false;
     this.procSkyView = this.procSkyTex.createView();
     this.skyTex = this.procSkyTex;
     this.skyView = this.procSkyView;
@@ -528,10 +525,46 @@ export class WebGPURenderer {
       this._rebuildStarflightBindGroup();
       this.resetAccumulation(true);
     } else {
-      if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
+      if (texture && !this._procSkyBaked) {
+        const oldPlaceholder = this.procSkyTex;
+        this.procSkyTex = texture;
+        this.procSkyView = texture.createView();
+        if (!this.skyMapLoaded) {
+          this.skyTex = texture;
+          this.skyView = this.procSkyView;
+        }
+        this._procSkyBaked = true;
+        this._rebuildStarflightBindGroup();
+        if (oldPlaceholder && oldPlaceholder !== texture && oldPlaceholder !== this.skyTex) {
+          oldPlaceholder.destroy();
+        }
+        this.resetAccumulation(true);
+      } else if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
         texture.destroy();
       }
       this.skyMapLoaded = false;
+    }
+  }
+
+  _ensureProceduralSky() {
+    if (this._procSkyBaked || this._disposed || this._deviceLost) return;
+    const oldPlaceholder = this.procSkyTex;
+    const baked = createProceduralSkyTextureWebGPU(
+      this.device,
+      (t, w, h, m) => this.generateMipmaps(t, w, h, m),
+      2048,
+      1024
+    );
+    this.procSkyTex = baked;
+    this.procSkyView = baked.createView();
+    if (!this.skyMapLoaded && (!this.skyTex || this.skyTex === oldPlaceholder)) {
+      this.skyTex = baked;
+      this.skyView = this.procSkyView;
+    }
+    this._procSkyBaked = true;
+    this._rebuildStarflightBindGroup();
+    if (oldPlaceholder && oldPlaceholder !== baked && oldPlaceholder !== this.skyTex) {
+      oldPlaceholder.destroy();
     }
   }
 
@@ -576,38 +609,56 @@ export class WebGPURenderer {
   }
 
   _didCameraMove(camMatrices, cam) {
-    const sig = [
-      cam.pos[0], cam.pos[1], cam.pos[2],
-      cam.right[0], cam.right[1], cam.right[2],
-      cam.up[0], cam.up[1], cam.up[2],
-      cam.forward[0], cam.forward[1], cam.forward[2],
-      cam.fovY,
-    ];
+    let prev = this._prevCamSig;
     let sigChanged = false;
-    if (!this._prevCamSig) {
+    if (!prev) {
+      prev = new Float64Array(13);
+      this._prevCamSig = prev;
       sigChanged = true;
-      this._prevCamSig = sig;
-    } else {
-      for (let i = 0; i < sig.length; i++) {
-        if (Math.abs(sig[i] - this._prevCamSig[i]) > 1e-6) {
-          sigChanged = true;
-          break;
-        }
-      }
-      if (sigChanged) this._prevCamSig = sig;
+    } else if (
+      Math.abs(cam.pos[0] - prev[0]) > 1e-6 ||
+      Math.abs(cam.pos[1] - prev[1]) > 1e-6 ||
+      Math.abs(cam.pos[2] - prev[2]) > 1e-6 ||
+      Math.abs(cam.right[0] - prev[3]) > 1e-6 ||
+      Math.abs(cam.right[1] - prev[4]) > 1e-6 ||
+      Math.abs(cam.right[2] - prev[5]) > 1e-6 ||
+      Math.abs(cam.up[0] - prev[6]) > 1e-6 ||
+      Math.abs(cam.up[1] - prev[7]) > 1e-6 ||
+      Math.abs(cam.up[2] - prev[8]) > 1e-6 ||
+      Math.abs(cam.forward[0] - prev[9]) > 1e-6 ||
+      Math.abs(cam.forward[1] - prev[10]) > 1e-6 ||
+      Math.abs(cam.forward[2] - prev[11]) > 1e-6 ||
+      Math.abs(cam.fovY - prev[12]) > 1e-6
+    ) {
+      sigChanged = true;
+    }
+    if (sigChanged) {
+      prev[0] = cam.pos[0]; prev[1] = cam.pos[1]; prev[2] = cam.pos[2];
+      prev[3] = cam.right[0]; prev[4] = cam.right[1]; prev[5] = cam.right[2];
+      prev[6] = cam.up[0]; prev[7] = cam.up[1]; prev[8] = cam.up[2];
+      prev[9] = cam.forward[0]; prev[10] = cam.forward[1]; prev[11] = cam.forward[2];
+      prev[12] = cam.fovY;
     }
     return typeof camMatrices?.moved === 'boolean' ? (camMatrices.moved || sigChanged) : sigChanged;
   }
 
   _syncStateChangeTracking(state, opts) {
-    const sig = buildPhysicsStateSignature(state);
+    let scratch = this._stateSigScratch;
+    if (!scratch) {
+      scratch = new Float64Array(19);
+      this._stateSigScratch = scratch;
+    }
+    fillPhysicsStateSignature(state, scratch);
+    let prev = this._prevStateSig;
     let paramsChanged = false;
-    if (!this._prevStateSig) {
-      this._prevStateSig = sig;
+    if (!prev) {
+      prev = new Float64Array(19);
+      prev.set(scratch);
+      this._prevStateSig = prev;
     } else {
-      for (let i = 0; i < sig.length; i++) {
-        const a = sig[i];
-        const b = this._prevStateSig[i];
+      for (let i = 0; i < 19; i++) {
+        const a = scratch[i];
+        const b = prev[i];
         const tol = 1e-6 * Math.max(1.0, Math.abs(a), Math.abs(b));
         if (!Number.isFinite(a) || Math.abs(a - b) > tol) {
           paramsChanged = true;
@@ -615,7 +666,7 @@ export class WebGPURenderer {
         }
       }
       if (paramsChanged) {
-        this._prevStateSig = sig;
+        prev.set(scratch);
       }
     }
 
@@ -667,9 +718,9 @@ export class WebGPURenderer {
     return { paramsChanged, flightPosZChanged, properTimeChanged };
   }
 
-  _writeStarflightUniforms(state, cam, simTime, jitterX, jitterY, isProgressive) {
+  _writeStarflightUniforms(state, cam, simTime, jitterX, jitterY, isProgressive, precomputedTel = null) {
     const f = this._starflightF32;
-    const tel = computeStarflightTelemetry(state);
+    const tel = precomputedTel || computeStarflightTelemetry(state);
     const skyRot = Array.isArray(state?.skyRotation) ? state.skyRotation : [0.65, 0.18];
 
     f[0] = this.width;
@@ -734,8 +785,11 @@ export class WebGPURenderer {
     this.device.queue.writeBuffer(this.starflightUniformBuf, 0, this._starflightBufData);
   }
 
-  _encodeStarflightAndTaa(encoder, state, cam, simTime, jitterX, jitterY, blendFactor, isProgressive) {
-    this._writeStarflightUniforms(state, cam, simTime, jitterX, jitterY, isProgressive);
+  _encodeStarflightAndTaa(encoder, state, cam, simTime, jitterX, jitterY, blendFactor, isProgressive, precomputedTel = null) {
+    if ((state?.skyMode | 0) === 2 && !this._procSkyBaked) {
+      this._ensureProceduralSky();
+    }
+    this._writeStarflightUniforms(state, cam, simTime, jitterX, jitterY, isProgressive, precomputedTel);
 
     const sceneView = this.post.getSceneView();
     if (this.starflightPipeline && this.starflightBindGroup && sceneView) {
@@ -777,7 +831,10 @@ export class WebGPURenderer {
     if (this._disposed || this._deviceLost || !this.getAllShadersCompiled()) return false;
 
     const opts = options || {};
-    this.resize(state?.resolutionScale ?? this.resolutionScale);
+    const targetScale = Number(opts.effectiveResolutionScale ?? state?.resolutionScale ?? this.resolutionScale) || 1.0;
+    if (this.width === 0 || this.height === 0 || Math.abs(targetScale - this.resolutionScale) > 1e-4) {
+      this.resize(targetScale);
+    }
 
     if (
       this._useQueueBackpressure &&
@@ -817,7 +874,7 @@ export class WebGPURenderer {
         this._hardReset = false;
 
         const encoder = this.device.createCommandEncoder({ label: 'frame-progressive' });
-        this._encodeStarflightAndTaa(encoder, state, cam, simTime, jitterX, jitterY, blendFactor, true);
+        this._encodeStarflightAndTaa(encoder, state, cam, simTime, jitterX, jitterY, blendFactor, true, opts.telemetry);
         this.post.encodeBloomAndAnamorphic(encoder, state);
         this.post.encodeComposite(encoder, state, this.width, this.height, simTime, this.frameIndex);
         this._submitFrame(encoder.finish());
@@ -853,7 +910,7 @@ export class WebGPURenderer {
     const jitterY = blendFactor >= 0.999 ? 0.0 : halton(jitterIdx, 3) - 0.5;
 
     const encoder = this.device.createCommandEncoder({ label: 'frame-taa' });
-    this._encodeStarflightAndTaa(encoder, state, cam, simTime, jitterX, jitterY, blendFactor, false);
+    this._encodeStarflightAndTaa(encoder, state, cam, simTime, jitterX, jitterY, blendFactor, false, opts.telemetry);
     this.post.encodeBloomAndAnamorphic(encoder, state);
     this.post.encodeComposite(encoder, state, this.width, this.height, simTime, this.frameIndex);
     this._submitFrame(encoder.finish());

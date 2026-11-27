@@ -14,12 +14,16 @@ import { FULLSCREEN_VERT, NOISE_BAKE_FRAG } from '../../../../shared/shaders/com
 import { STARFLIGHT_FRAG } from '../shaders/starflight.frag.js';
 import {
   SharedWebGLPostPipeline,
+  detectWebGLHdrFormats,
   MAX_PROGRESSIVE_SAMPLES,
   halton,
   formatShaderError,
 } from '../../../../shared/engine/SharedWebGLPostPipeline.js';
 import { computeStarflightTelemetry } from './Physics.js';
-import { createProceduralSkyTextureWebGL } from '../../../../shared/assets/skyLoader.js';
+import {
+  createProceduralSkyTextureWebGL,
+  createPlaceholderSkyTextureWebGL,
+} from '../../../../shared/assets/skyLoader.js';
 import { createBlackbodyLUTWebGL, createBlueNoiseLUTWebGL } from '../../../../shared/assets/physicalLuts.js';
 
 const VOLUME_SIZE = 128;
@@ -44,54 +48,29 @@ function extractCamVectors(camMatrices) {
   return { pos, right, up, forward, fovY };
 }
 
-function buildPhysicsStateSignature(state) {
-  const skyRot = Array.isArray(state?.skyRotation) ? state.skyRotation : [0.65, 0.18];
+function fillPhysicsStateSignature(state, out) {
+  const skyRot = Array.isArray(state?.skyRotation) ? state.skyRotation : null;
   const flightMode = (Number(state?.flightMode ?? 0) | 0) === 1 ? 1 : 0;
   const rapidity = Number.isFinite(Number(state?.rapidity)) ? Number(state.rapidity) : 1.472219;
-  return [
-    flightMode,
-    flightMode === 1 ? 0.0 : rapidity,
-    Number.isFinite(Number(state?.properAccelG)) ? Number(state.properAccelG) : 1.0,
-    (Number(state?.flightDir ?? 1) >= 0 ? 1 : -1),
-    Number(state?.aberrationMode ?? 1) ? 1 : 0,
-    Number.isFinite(Number(state?.dopplerStrength)) ? Number(state.dopplerStrength) : 1.0,
-    Number.isFinite(Number(state?.cmbVisibility)) ? Number(state.cmbVisibility) : 0.75,
-    Number.isFinite(Number(state?.starDensity)) ? Number(state.starDensity) : 1.25,
-    Number.isFinite(Number(state?.uvIrGain)) ? Number(state.uvIrGain) : 1.20,
-    Number.isFinite(Number(state?.geometryVisibility)) ? Number(state.geometryVisibility) : 1.25,
-    Number.isFinite(Number(state?.dustDensity)) ? Number(state.dustDensity) : 1.15,
-    Number.isFinite(Number(state?.dustStreakScale)) ? Number(state.dustStreakScale) : 1.0,
-    Number.isFinite(Number(state?.beamingGain)) ? Number(state.beamingGain) : 1.0,
-    Number.isFinite(Number(state?.cmbTempScale)) ? Number(state.cmbTempScale) : 1.0,
-    Number.isFinite(Number(state?.skyIntensity)) ? Number(state.skyIntensity) : 0.95,
-    Number.isFinite(Number(state?.skyMode)) ? (Number(state.skyMode) | 0) : 0,
-    Number.isFinite(Number(skyRot[0])) ? Number(skyRot[0]) : 0.65,
-    Number.isFinite(Number(skyRot[1])) ? Number(skyRot[1]) : 0.18,
-    Number.isFinite(Number(state?.quality)) ? (Number(state.quality) | 0) : 1,
-  ];
-}
-
-function formatShaderError(name, stage, source, infoLog) {
-  const lines = source.split('\n');
-  const errorLines = [];
-  const lineMatchRegex = /ERROR:\s*\d+:(\d+):/g;
-  const highlighted = new Set();
-  let m;
-  while ((m = lineMatchRegex.exec(infoLog || '')) !== null) {
-    highlighted.add(parseInt(m[1], 10));
-  }
-
-  for (const ln of highlighted) {
-    const start = Math.max(1, ln - 2);
-    const end = Math.min(lines.length, ln + 2);
-    for (let i = start; i <= end; i++) {
-      const marker = i === ln ? '>>>' : '   ';
-      errorLines.push(`${marker} ${String(i).padStart(4, ' ')} | ${lines[i - 1]}`);
-    }
-    errorLines.push('---');
-  }
-
-  return `[WebGLRenderer] ${name} (${stage}) compile failed:\n${infoLog || 'Unknown error'}\n${errorLines.join('\n')}`;
+  out[0] = flightMode;
+  out[1] = flightMode === 1 ? 0.0 : rapidity;
+  out[2] = Number.isFinite(Number(state?.properAccelG)) ? Number(state.properAccelG) : 1.0;
+  out[3] = Number(state?.flightDir ?? 1) >= 0 ? 1 : -1;
+  out[4] = Number(state?.aberrationMode ?? 1) ? 1 : 0;
+  out[5] = Number.isFinite(Number(state?.dopplerStrength)) ? Number(state.dopplerStrength) : 1.0;
+  out[6] = Number.isFinite(Number(state?.cmbVisibility)) ? Number(state.cmbVisibility) : 0.75;
+  out[7] = Number.isFinite(Number(state?.starDensity)) ? Number(state.starDensity) : 1.25;
+  out[8] = Number.isFinite(Number(state?.uvIrGain)) ? Number(state.uvIrGain) : 1.20;
+  out[9] = Number.isFinite(Number(state?.geometryVisibility)) ? Number(state.geometryVisibility) : 1.25;
+  out[10] = Number.isFinite(Number(state?.dustDensity)) ? Number(state.dustDensity) : 1.15;
+  out[11] = Number.isFinite(Number(state?.dustStreakScale)) ? Number(state.dustStreakScale) : 1.0;
+  out[12] = Number.isFinite(Number(state?.beamingGain)) ? Number(state.beamingGain) : 1.0;
+  out[13] = Number.isFinite(Number(state?.cmbTempScale)) ? Number(state.cmbTempScale) : 1.0;
+  out[14] = Number.isFinite(Number(state?.skyIntensity)) ? Number(state.skyIntensity) : 0.95;
+  out[15] = Number.isFinite(Number(state?.skyMode)) ? (Number(state.skyMode) | 0) : 0;
+  out[16] = skyRot && Number.isFinite(Number(skyRot[0])) ? Number(skyRot[0]) : 0.65;
+  out[17] = skyRot && Number.isFinite(Number(skyRot[1])) ? Number(skyRot[1]) : 0.18;
+  out[18] = Number.isFinite(Number(state?.quality)) ? (Number(state.quality) | 0) : 1;
 }
 
 export class WebGLRenderer {
@@ -193,7 +172,8 @@ export class WebGLRenderer {
     const blackbodyRes = createBlackbodyLUTWebGL(gl);
     this.blackbodyTex = blackbodyRes?.texture || blackbodyRes;
     this.blueNoiseTex = createBlueNoiseLUTWebGL(gl);
-    this.procSkyTex = createProceduralSkyTextureWebGL(gl, 2048, 1024);
+    this.procSkyTex = createPlaceholderSkyTextureWebGL(gl);
+    this._procSkyBaked = false;
     this.skyTex = this.procSkyTex;
 
     this.volumeNoiseTex = this._bakeVolumeNoise();
@@ -202,6 +182,7 @@ export class WebGLRenderer {
       gl,
       emptyVao: this.emptyVao,
       hdrSpec: this._hdrSpec,
+      taaSpec: this._taaSpec,
       opticsProfile: 'starflight',
       vertSrc: FULLSCREEN_VERT,
       compileProgram: (name, vs, fs) => this._createProgram(name, vs, fs),
@@ -213,62 +194,14 @@ export class WebGLRenderer {
   }
 
   _detectHdrFboFormat() {
-    const gl = this.gl;
-    const candidates = [];
-
-    if (this.extColorBufferFloat || this.extColorBufferHalfFloat) {
-      candidates.push({
-        name: 'RGBA16F',
-        internalFormat: gl.RGBA16F,
-        format: gl.RGBA,
-        type: gl.HALF_FLOAT,
-      });
-    }
-    if (this.extColorBufferFloat) {
-      candidates.push({
-        name: 'R11F_G11F_B10F',
-        internalFormat: gl.R11F_G11F_B10F,
-        format: gl.RGB,
-        type: gl.HALF_FLOAT,
-      });
-    }
-    candidates.push({
-      name: 'RGBA8',
-      internalFormat: gl.RGBA8,
-      format: gl.RGBA,
-      type: gl.UNSIGNED_BYTE,
-    });
-
-    const probeFbo = gl.createFramebuffer();
-    const probeTex = gl.createTexture();
-
-    for (const spec of candidates) {
-      gl.bindTexture(gl.TEXTURE_2D, probeTex);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.texImage2D(gl.TEXTURE_2D, 0, spec.internalFormat, 4, 4, 0, spec.format, spec.type, null);
-
-      gl.bindFramebuffer(gl.FRAMEBUFFER, probeFbo);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, probeTex, 0);
-      const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
-
-      if (status === gl.FRAMEBUFFER_COMPLETE) {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.deleteTexture(probeTex);
-        gl.deleteFramebuffer(probeFbo);
-        this.hdrFormat = spec.name;
-        return spec;
-      }
-    }
-
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.deleteTexture(probeTex);
-    gl.deleteFramebuffer(probeFbo);
-    const fallback = candidates[candidates.length - 1];
-    this.hdrFormat = fallback.name;
-    return fallback;
+    const { hdrSpec, taaSpec } = detectWebGLHdrFormats(
+      this.gl,
+      this.extColorBufferFloat,
+      this.extColorBufferHalfFloat
+    );
+    this._taaSpec = taaSpec;
+    this.hdrFormat = hdrSpec.name;
+    return hdrSpec;
   }
 
   _compileShader(name, type, source) {
@@ -453,11 +386,36 @@ export class WebGLRenderer {
       this.skyDimensions = [width || 4096, height || 2048];
       this.resetAccumulation(true);
     } else {
-      if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
+      if (texture && !this._procSkyBaked) {
+        const oldPlaceholder = this.procSkyTex;
+        this.procSkyTex = texture;
+        if (!this.skyMapLoaded) {
+          this.skyTex = texture;
+        }
+        if (oldPlaceholder && oldPlaceholder !== texture && oldPlaceholder !== this.skyTex) {
+          gl.deleteTexture(oldPlaceholder);
+        }
+        this._procSkyBaked = true;
+        this.resetAccumulation(true);
+      } else if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
         gl.deleteTexture(texture);
       }
       this.skyMapLoaded = false;
     }
+  }
+
+  _ensureProceduralSky() {
+    if (this._procSkyBaked || this._disposed || this.gl.isContextLost()) return;
+    const oldPlaceholder = this.procSkyTex;
+    const baked = createProceduralSkyTextureWebGL(this.gl, 2048, 1024);
+    this.procSkyTex = baked;
+    if (!this.skyMapLoaded && (!this.skyTex || this.skyTex === oldPlaceholder)) {
+      this.skyTex = baked;
+    }
+    if (oldPlaceholder && oldPlaceholder !== baked && oldPlaceholder !== this.skyTex) {
+      this.gl.deleteTexture(oldPlaceholder);
+    }
+    this._procSkyBaked = true;
   }
 
   resetAccumulation(hard = false) {
@@ -501,38 +459,56 @@ export class WebGLRenderer {
   }
 
   _didCameraMove(camMatrices, cam) {
-    const sig = [
-      cam.pos[0], cam.pos[1], cam.pos[2],
-      cam.right[0], cam.right[1], cam.right[2],
-      cam.up[0], cam.up[1], cam.up[2],
-      cam.forward[0], cam.forward[1], cam.forward[2],
-      cam.fovY,
-    ];
+    let prev = this._prevCamSig;
     let sigChanged = false;
-    if (!this._prevCamSig) {
+    if (!prev) {
+      prev = new Float64Array(13);
+      this._prevCamSig = prev;
       sigChanged = true;
-      this._prevCamSig = sig;
-    } else {
-      for (let i = 0; i < sig.length; i++) {
-        if (Math.abs(sig[i] - this._prevCamSig[i]) > 1e-6) {
-          sigChanged = true;
-          break;
-        }
-      }
-      if (sigChanged) this._prevCamSig = sig;
+    } else if (
+      Math.abs(cam.pos[0] - prev[0]) > 1e-6 ||
+      Math.abs(cam.pos[1] - prev[1]) > 1e-6 ||
+      Math.abs(cam.pos[2] - prev[2]) > 1e-6 ||
+      Math.abs(cam.right[0] - prev[3]) > 1e-6 ||
+      Math.abs(cam.right[1] - prev[4]) > 1e-6 ||
+      Math.abs(cam.right[2] - prev[5]) > 1e-6 ||
+      Math.abs(cam.up[0] - prev[6]) > 1e-6 ||
+      Math.abs(cam.up[1] - prev[7]) > 1e-6 ||
+      Math.abs(cam.up[2] - prev[8]) > 1e-6 ||
+      Math.abs(cam.forward[0] - prev[9]) > 1e-6 ||
+      Math.abs(cam.forward[1] - prev[10]) > 1e-6 ||
+      Math.abs(cam.forward[2] - prev[11]) > 1e-6 ||
+      Math.abs(cam.fovY - prev[12]) > 1e-6
+    ) {
+      sigChanged = true;
+    }
+    if (sigChanged) {
+      prev[0] = cam.pos[0]; prev[1] = cam.pos[1]; prev[2] = cam.pos[2];
+      prev[3] = cam.right[0]; prev[4] = cam.right[1]; prev[5] = cam.right[2];
+      prev[6] = cam.up[0]; prev[7] = cam.up[1]; prev[8] = cam.up[2];
+      prev[9] = cam.forward[0]; prev[10] = cam.forward[1]; prev[11] = cam.forward[2];
+      prev[12] = cam.fovY;
     }
     return typeof camMatrices?.moved === 'boolean' ? (camMatrices.moved || sigChanged) : sigChanged;
   }
 
   _syncStateChangeTracking(state, opts) {
-    const sig = buildPhysicsStateSignature(state);
+    let scratch = this._stateSigScratch;
+    if (!scratch) {
+      scratch = new Float64Array(19);
+      this._stateSigScratch = scratch;
+    }
+    fillPhysicsStateSignature(state, scratch);
+    let prev = this._prevStateSig;
     let paramsChanged = false;
-    if (!this._prevStateSig) {
-      this._prevStateSig = sig;
+    if (!prev) {
+      prev = new Float64Array(19);
+      prev.set(scratch);
+      this._prevStateSig = prev;
     } else {
-      for (let i = 0; i < sig.length; i++) {
-        const a = sig[i];
-        const b = this._prevStateSig[i];
+      for (let i = 0; i < 19; i++) {
+        const a = scratch[i];
+        const b = prev[i];
         const tol = 1e-6 * Math.max(1.0, Math.abs(a), Math.abs(b));
         if (!Number.isFinite(a) || Math.abs(a - b) > tol) {
           paramsChanged = true;
@@ -540,7 +516,7 @@ export class WebGLRenderer {
         }
       }
       if (paramsChanged) {
-        this._prevStateSig = sig;
+        prev.set(scratch);
       }
     }
 
@@ -592,9 +568,9 @@ export class WebGLRenderer {
     return { paramsChanged, flightPosZChanged, properTimeChanged };
   }
 
-  _writeStarflightUniforms(state, cam, simTime, jitterX, jitterY, isProgressive) {
+  _writeStarflightUniforms(state, cam, simTime, jitterX, jitterY, isProgressive, precomputedTel = null) {
     const f = this._starflightF32;
-    const tel = computeStarflightTelemetry(state);
+    const tel = precomputedTel || computeStarflightTelemetry(state);
     const skyRot = Array.isArray(state?.skyRotation) ? state.skyRotation : [0.65, 0.18];
 
     f[0] = this.width;
@@ -662,7 +638,10 @@ export class WebGLRenderer {
     gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, this.starflightUniformBuf);
   }
 
-  _runStarflightPass(state, cam, simTime, jitterX, jitterY, isProgressive) {
+  _runStarflightPass(state, cam, simTime, jitterX, jitterY, isProgressive, precomputedTel = null) {
+    if ((state?.skyMode | 0) === 2 && !this._procSkyBaked) {
+      this._ensureProceduralSky();
+    }
     const gl = this.gl;
     const prog = this.programs.starflight;
     if (!prog) return;
@@ -671,7 +650,7 @@ export class WebGLRenderer {
     gl.viewport(0, 0, this.width, this.height);
     gl.useProgram(prog.program);
 
-    this._writeStarflightUniforms(state, cam, simTime, jitterX, jitterY, isProgressive);
+    this._writeStarflightUniforms(state, cam, simTime, jitterX, jitterY, isProgressive, precomputedTel);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_3D, this.volumeNoiseTex);
@@ -700,7 +679,10 @@ export class WebGLRenderer {
     if (this._disposed || this.gl.isContextLost() || !this.getAllShadersCompiled()) return false;
 
     const opts = options || {};
-    this.resize(state?.resolutionScale ?? this.resolutionScale);
+    const targetScale = Number(opts.effectiveResolutionScale ?? state?.resolutionScale ?? this.resolutionScale) || 1.0;
+    if (this.width === 0 || this.height === 0 || Math.abs(targetScale - this.resolutionScale) > 1e-4) {
+      this.resize(targetScale);
+    }
 
     const cam = extractCamVectors(camMatrices);
     const camMoved = this._didCameraMove(camMatrices, cam);
@@ -730,7 +712,7 @@ export class WebGLRenderer {
         const blendFactor = this._hardReset ? 1.0 : 1.0 / this.sampleCount;
         this._hardReset = false;
 
-        this._runStarflightPass(state, cam, simTime, jitterX, jitterY, true);
+        this._runStarflightPass(state, cam, simTime, jitterX, jitterY, true, opts.telemetry);
         this.post.runTaa(this.width, this.height, blendFactor, true);
         this.post.runBloomAndAnamorphic(state, this.width, this.height);
         this.post.runComposite(state, this.width, this.height, simTime, this.frameIndex);
@@ -763,7 +745,7 @@ export class WebGLRenderer {
     const jitterX = blendFactor >= 0.999 ? 0.0 : halton(jitterIdx, 2) - 0.5;
     const jitterY = blendFactor >= 0.999 ? 0.0 : halton(jitterIdx, 3) - 0.5;
 
-    this._runStarflightPass(state, cam, simTime, jitterX, jitterY, false);
+    this._runStarflightPass(state, cam, simTime, jitterX, jitterY, false, opts.telemetry);
     this.post.runTaa(this.width, this.height, blendFactor, false);
     this.post.runBloomAndAnamorphic(state, this.width, this.height);
     this.post.runComposite(state, this.width, this.height, simTime, this.frameIndex);

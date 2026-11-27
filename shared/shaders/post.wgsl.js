@@ -102,9 +102,14 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
 
   for (var dy: i32 = -1; dy <= 1; dy++) {
     for (var dx: i32 = -1; dx <= 1; dx++) {
-      let sampleUv = clamp(in.uv + vec2f(f32(dx), f32(dy)) * texelSize, vec2f(0.0), vec2f(1.0));
-      let sRaw = sanitizeHdr(textureSampleLevel(uCurrentTex, sLinear, sampleUv, 0.0).rgb);
-      let s = select(compressHdr(sRaw), curComp, dx == 0 && dy == 0);
+      var s: vec3f;
+      if (dx == 0 && dy == 0) {
+        s = curComp;
+      } else {
+        let sampleUv = clamp(in.uv + vec2f(f32(dx), f32(dy)) * texelSize, vec2f(0.0), vec2f(1.0));
+        let sRaw = sanitizeHdr(textureSampleLevel(uCurrentTex, sLinear, sampleUv, 0.0).rgb);
+        s = compressHdr(sRaw);
+      }
       let ycc = rgbToYCoCg(s);
       m1 += ycc;
       m2 += ycc * ycc;
@@ -217,17 +222,6 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
   out.uv = vec2f(x * 0.5 + 0.5, 0.5 - y * 0.5);
   return out;
 }
-fn isBadFloat(x: f32) -> bool {
-  return (bitcast<u32>(x) & 0x7f800000u) == 0x7f800000u;
-}
-
-fn sanitizeVec3Zero(v: vec3f) -> vec3f {
-  return vec3f(
-    select(v.x, 0.0, isBadFloat(v.x)),
-    select(v.y, 0.0, isBadFloat(v.y)),
-    select(v.z, 0.0, isBadFloat(v.z))
-  );
-}
 
 // xy=texelSize, z=useKaris (0.0 or 1.0), w=0.0
 @group(0) @binding(0) var<uniform> u: vec4f;
@@ -244,8 +238,7 @@ fn karisWeight(c: vec3f) -> f32 {
 
 fn sampleSafe(baseUv: vec2f, offset: vec2f, texelSize: vec2f) -> vec3f {
   let uv = clamp(baseUv + offset * texelSize, vec2f(0.0), vec2f(1.0));
-  let c = textureSampleLevel(uSrcTex, sLinear, uv, 0.0).rgb;
-  return max(sanitizeVec3Zero(c), vec3f(0.0));
+  return textureSampleLevel(uSrcTex, sLinear, uv, 0.0).rgb;
 }
 
 @fragment
@@ -388,6 +381,69 @@ fn isolateHighlights(cIn: vec3f, threshold: f32) -> vec3f {
   return c * max(contrib, 0.0);
 }
 
+fn samplePass0(uv: vec2f, texelY: f32, threshold: f32) -> vec3f {
+  let s0 = textureSampleLevel(uSrcTex, sLinear, uv, 0.0).rgb;
+  let s1 = textureSampleLevel(uSrcTex, sLinear, vec2f(uv.x, max(uv.y - texelY, 0.0)), 0.0).rgb;
+  let s2 = textureSampleLevel(uSrcTex, sLinear, vec2f(uv.x, min(uv.y + texelY, 1.0)), 0.0).rgb;
+  return 0.50 * isolateHighlights(s0, threshold)
+       + 0.25 * isolateHighlights(s1, threshold)
+       + 0.25 * isolateHighlights(s2, threshold);
+}
+
+fn pass0SymPair(
+  baseUv: vec2f,
+  dx: f32,
+  texelY: f32,
+  threshold: f32,
+  w: f32,
+  af: f32,
+  tintInner: vec3f,
+  edgeStart: f32,
+  tintOuter: vec3f,
+  mixWeight: f32,
+  sum: ptr<function, vec3f>,
+  weightSum: ptr<function, f32>
+) {
+  let uvR = vec2f(baseUv.x + dx, baseUv.y);
+  let uvL = vec2f(baseUv.x - dx, baseUv.y);
+  var tapSum = vec3f(0.0);
+  var tapW : f32 = 0.0;
+  if (uvR.x <= 1.0) {
+    tapSum += samplePass0(uvR, texelY, threshold);
+    tapW += w;
+  }
+  if (uvL.x >= 0.0) {
+    tapSum += samplePass0(uvL, texelY, threshold);
+    tapW += w;
+  }
+  if (tapW > 0.0) {
+    let tint = mix(tintInner, tintOuter, smoothstep(edgeStart, 1.0, af) * mixWeight);
+    *sum += tapSum * (tint * w);
+    *weightSum += tapW;
+  }
+}
+
+fn pass1SymPair(
+  baseUv: vec2f,
+  dx: f32,
+  w: f32,
+  sum: ptr<function, vec3f>,
+  weightSum: ptr<function, f32>
+) {
+  let uvR = baseUv.x + dx;
+  let uvL = baseUv.x - dx;
+  if (uvR <= 1.0) {
+    let sR = max(textureSampleLevel(uSrcTex, sLinear, vec2f(uvR, baseUv.y), 0.0).rgb, vec3f(0.0));
+    *sum += sR * w;
+    *weightSum += w;
+  }
+  if (uvL >= 0.0) {
+    let sL = max(textureSampleLevel(uSrcTex, sLinear, vec2f(uvL, baseUv.y), 0.0).rgb, vec3f(0.0));
+    *sum += sL * w;
+    *weightSum += w;
+  }
+}
+
 @fragment
 fn fs_main(in: VSOut) -> @location(0) vec4f {
   let texelSize = u.texelSize_thresh_spread.xy;
@@ -399,50 +455,47 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   var weightSum : f32 = 0.0;
 
   if (passIdx == 0) {
-    const HALF_TAPS : i32 = 12;
     let stride = texelSize.x * spread * 1.85;
+    let tintInner = u.tint_inner_edge.xyz;
+    let edgeStart = u.tint_inner_edge.w;
+    let tintOuter = u.tint_outer_mix.xyz;
+    let mixWeight = u.tint_outer_mix.w;
 
-    for (var i: i32 = -HALF_TAPS; i <= HALF_TAPS; i++) {
-      let fi = f32(i);
-      let af = abs(fi) / f32(HALF_TAPS);
-      let uv = vec2f(in.uv.x + fi * stride, in.uv.y);
+    // Center tap (i = 0: w = 1.22, af = 0.0 -> pure tintInner)
+    sum = samplePass0(in.uv, texelSize.y, threshold) * (tintInner * 1.22);
+    weightSum = 1.22;
 
-      let s0 = textureSampleLevel(uSrcTex, sLinear, clamp(uv, vec2f(0.0), vec2f(1.0)), 0.0).rgb;
-      let s1 = textureSampleLevel(uSrcTex, sLinear, vec2f(clamp(uv.x, 0.0, 1.0), clamp(uv.y - texelSize.y, 0.0, 1.0)), 0.0).rgb;
-      let s2 = textureSampleLevel(uSrcTex, sLinear, vec2f(clamp(uv.x, 0.0, 1.0), clamp(uv.y + texelSize.y, 0.0, 1.0)), 0.0).rgb;
-
-      if (uv.x < 0.0 || uv.x > 1.0) { continue; }
-
-      let s = 0.50 * isolateHighlights(s0, threshold)
-            + 0.25 * isolateHighlights(s1, threshold)
-            + 0.25 * isolateHighlights(s2, threshold);
-
-      let w = exp(-af * 3.1) + 0.22 / (1.0 + af * af * 9.0);
-      let tint = mix(
-        u.tint_inner_edge.xyz,
-        u.tint_outer_mix.xyz,
-        smoothstep(u.tint_inner_edge.w, 1.0, af) * u.tint_outer_mix.w
-      );
-      sum += s * tint * w;
-      weightSum += w;
-    }
+    // Symmetric +/-i taps with precomputed Lorentzian + Gaussian optical weights
+    pass0SymPair(in.uv, stride *  1.0, texelSize.y, threshold, 0.979397, 1.0 / 12.0, tintInner, edgeStart, tintOuter, mixWeight, &sum, &weightSum);
+    pass0SymPair(in.uv, stride *  2.0, texelSize.y, threshold, 0.772506, 2.0 / 12.0, tintInner, edgeStart, tintOuter, mixWeight, &sum, &weightSum);
+    pass0SymPair(in.uv, stride *  3.0, texelSize.y, threshold, 0.601504, 3.0 / 12.0, tintInner, edgeStart, tintOuter, mixWeight, &sum, &weightSum);
+    pass0SymPair(in.uv, stride *  4.0, texelSize.y, threshold, 0.465819, 4.0 / 12.0, tintInner, edgeStart, tintOuter, mixWeight, &sum, &weightSum);
+    pass0SymPair(in.uv, stride *  5.0, texelSize.y, threshold, 0.360666, 5.0 / 12.0, tintInner, edgeStart, tintOuter, mixWeight, &sum, &weightSum);
+    pass0SymPair(in.uv, stride *  6.0, texelSize.y, threshold, 0.279940, 6.0 / 12.0, tintInner, edgeStart, tintOuter, mixWeight, &sum, &weightSum);
+    pass0SymPair(in.uv, stride *  7.0, texelSize.y, threshold, 0.218081, 7.0 / 12.0, tintInner, edgeStart, tintOuter, mixWeight, &sum, &weightSum);
+    pass0SymPair(in.uv, stride *  8.0, texelSize.y, threshold, 0.170607, 8.0 / 12.0, tintInner, edgeStart, tintOuter, mixWeight, &sum, &weightSum);
+    pass0SymPair(in.uv, stride *  9.0, texelSize.y, threshold, 0.134072, 9.0 / 12.0, tintInner, edgeStart, tintOuter, mixWeight, &sum, &weightSum);
+    pass0SymPair(in.uv, stride * 10.0, texelSize.y, threshold, 0.105867, 10.0 / 12.0, tintInner, edgeStart, tintOuter, mixWeight, &sum, &weightSum);
+    pass0SymPair(in.uv, stride * 11.0, texelSize.y, threshold, 0.084022, 11.0 / 12.0, tintInner, edgeStart, tintOuter, mixWeight, &sum, &weightSum);
+    pass0SymPair(in.uv, stride * 12.0, texelSize.y, threshold, 0.067049, 1.0,        tintInner, edgeStart, tintOuter, mixWeight, &sum, &weightSum);
   } else {
-    const HALF_TAPS : i32 = 10;
     let stride = texelSize.x * spread * 5.2;
 
-    for (var i: i32 = -HALF_TAPS; i <= HALF_TAPS; i++) {
-      let fi = f32(i);
-      let af = abs(fi) / f32(HALF_TAPS);
-      let uv = vec2f(in.uv.x + fi * stride, in.uv.y);
-      let raw = textureSampleLevel(uSrcTex, sLinear, clamp(uv, vec2f(0.0), vec2f(1.0)), 0.0).rgb;
+    // Center tap (i = 0: w = 1.16)
+    sum = max(textureSampleLevel(uSrcTex, sLinear, in.uv, 0.0).rgb, vec3f(0.0)) * 1.16;
+    weightSum = 1.16;
 
-      if (uv.x < 0.0 || uv.x > 1.0) { continue; }
-
-      let s = max(raw, vec3f(0.0));
-      let w = exp(-af * 2.45) + 0.16 * exp(-af * 0.9);
-      sum += s * w;
-      weightSum += w;
-    }
+    // Symmetric +/-i taps with precomputed double-exponential weights
+    pass1SymPair(in.uv, stride *  1.0, 0.928934, &sum, &weightSum);
+    pass1SymPair(in.uv, stride *  2.0, 0.746270, &sum, &weightSum);
+    pass1SymPair(in.uv, stride *  3.0, 0.601646, &sum, &weightSum);
+    pass1SymPair(in.uv, stride *  4.0, 0.486939, &sum, &weightSum);
+    pass1SymPair(in.uv, stride *  5.0, 0.395778, &sum, &weightSum);
+    pass1SymPair(in.uv, stride *  6.0, 0.323165, &sum, &weightSum);
+    pass1SymPair(in.uv, stride *  7.0, 0.265178, &sum, &weightSum);
+    pass1SymPair(in.uv, stride *  8.0, 0.218739, &sum, &weightSum);
+    pass1SymPair(in.uv, stride *  9.0, 0.181428, &sum, &weightSum);
+    pass1SymPair(in.uv, stride * 10.0, 0.151345, &sum, &weightSum);
   }
 
   return vec4f(sum / max(weightSum, 1e-5), 1.0);
@@ -525,7 +578,15 @@ fn agxLookPunchy(val: vec3f) -> vec3f {
   return max(vec3f(0.0), vec3f(luma) + 1.18 * (graded - vec3f(luma)));
 }
 
-fn agxToneMap(linearColor: vec3f) -> vec3f {
+// Fold AgX display EOTF pow(v, 2.2) with linear-to-sRGB pow(c, 1/2.4) inside an explicit branch
+fn agxDisplayToSrgbChannel(v: f32) -> f32 {
+  if (v >= 0.07272128) {
+    return clamp(1.055 * pow(v, 0.91666667) - 0.055, 0.0, 1.0);
+  }
+  return clamp(12.92 * pow(max(v, 0.0), 2.2), 0.0, 1.0);
+}
+
+fn agxToneMapToSrgb(linearColor: vec3f) -> vec3f {
   var val = max(linearColor, vec3f(0.0));
   let maxChannel = max(val.r, max(val.g, val.b));
   if (maxChannel <= 1e-7) {
@@ -542,14 +603,11 @@ fn agxToneMap(linearColor: vec3f) -> vec3f {
   val = agxLookPunchy(val);
   val = clamp(AGX_OUTSET_MATRIX * val, vec3f(0.0), vec3f(1.0));
 
-  return pow(val, vec3f(2.2));
-}
-
-fn linearToSrgb(linearColor: vec3f) -> vec3f {
-  let c = clamp(linearColor, vec3f(0.0), vec3f(1.0));
-  let low = c * 12.92;
-  let high = 1.055 * pow(c, vec3f(1.0 / 2.4)) - 0.055;
-  return mix(low, high, step(vec3f(0.0031308), c));
+  return vec3f(
+    agxDisplayToSrgbChannel(val.r),
+    agxDisplayToSrgbChannel(val.g),
+    agxDisplayToSrgbChannel(val.b)
+  );
 }
 
 fn hash12(p: vec2f) -> f32 {
@@ -563,11 +621,13 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   let centered = in.uv - 0.5;
   let r2 = dot(centered, centered);
 
-  let caOffset = centered * (r2 * 0.0024);
-  let sr = textureSampleLevel(uSceneTex, sLinear, clamp(in.uv + caOffset, vec2f(0.0), vec2f(1.0)), 0.0).r;
-  let sg = textureSampleLevel(uSceneTex, sLinear, in.uv, 0.0).g;
-  let sb = textureSampleLevel(uSceneTex, sLinear, clamp(in.uv - caOffset, vec2f(0.0), vec2f(1.0)), 0.0).b;
-  let scene = max(sanitizeVec3Zero(vec3f(sr, sg, sb)), vec3f(0.0));
+  var sceneRaw = textureSampleLevel(uSceneTex, sLinear, in.uv, 0.0).rgb;
+  if (r2 > 0.04) {
+    let caOffset = centered * (r2 * 0.0024);
+    sceneRaw.r = textureSampleLevel(uSceneTex, sLinear, clamp(in.uv + caOffset, vec2f(0.0), vec2f(1.0)), 0.0).r;
+    sceneRaw.b = textureSampleLevel(uSceneTex, sLinear, clamp(in.uv - caOffset, vec2f(0.0), vec2f(1.0)), 0.0).b;
+  }
+  let scene = max(sanitizeVec3Zero(sceneRaw), vec3f(0.0));
 
   let bloom = max(textureSampleLevel(uBloomTex, sLinear, in.uv, 0.0).rgb, vec3f(0.0));
   let anamorphic = max(textureSampleLevel(uAnamorphicTex, sLinear, in.uv, 0.0).rgb, vec3f(0.0));
@@ -588,8 +648,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   let vignette = 1.0 - smoothstep(0.36, 1.18, length(vigCoord)) * 0.24;
   hdr *= vignette;
 
-  let displayLinear = agxToneMap(hdr);
-  var srgb = linearToSrgb(displayLinear);
+  var srgb = agxToneMapToSrgb(hdr);
 
   // Match pixel noise orientation & scale
   let pix = vec2f(in.pos.x, res.y - in.pos.y);

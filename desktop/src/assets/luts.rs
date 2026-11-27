@@ -155,14 +155,7 @@ pub struct BlackbodyLutData {
     pub byte_data: Vec<u8>,
 }
 
-pub fn get_blackbody_data(size: usize) -> &'static BlackbodyLutData {
-    static CACHE: OnceLock<Mutex<HashMap<usize, &'static BlackbodyLutData>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = cache.lock().unwrap();
-    if let Some(&entry) = guard.get(&size) {
-        return entry;
-    }
-
+pub fn generate_blackbody_data(size: usize) -> BlackbodyLutData {
     let t_min = BLACKBODY_T_MIN as f64;
     let t_max = BLACKBODY_T_MAX as f64;
     let log_ratio = (t_max / t_min).ln();
@@ -192,10 +185,20 @@ pub fn get_blackbody_data(size: usize) -> &'static BlackbodyLutData {
         byte_data[base + 3] = 255;
     }
 
-    let leaked: &'static BlackbodyLutData = Box::leak(Box::new(BlackbodyLutData {
+    BlackbodyLutData {
         half_data,
         byte_data,
-    }));
+    }
+}
+
+pub fn get_blackbody_data(size: usize) -> &'static BlackbodyLutData {
+    static CACHE: OnceLock<Mutex<HashMap<usize, &'static BlackbodyLutData>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap();
+    if let Some(&entry) = guard.get(&size) {
+        return entry;
+    }
+    let leaked: &'static BlackbodyLutData = Box::leak(Box::new(generate_blackbody_data(size)));
     guard.insert(size, leaked);
     leaked
 }
@@ -501,19 +504,20 @@ fn generate_blue_noise_channel(size: usize, seed: u32) -> Vec<u8> {
     bytes
 }
 
-pub fn get_blue_noise_data(size: usize) -> &'static [u8] {
-    static CACHE: OnceLock<Mutex<HashMap<usize, &'static [u8]>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = cache.lock().unwrap();
-    if let Some(&entry) = guard.get(&size) {
-        return entry;
-    }
-
+pub fn generate_blue_noise_rgba(size: usize) -> Vec<u8> {
     let total = size * size;
-    let ch0 = generate_blue_noise_channel(size, 0x1357_9bdf);
-    let ch1 = generate_blue_noise_channel(size, 0x2468_ace0);
-    let ch2 = generate_blue_noise_channel(size, 0x9e37_79b9);
-    let ch3 = generate_blue_noise_channel(size, 0xdead_beef);
+    let (ch0, ch1, ch2, ch3) = std::thread::scope(|s| {
+        let h0 = s.spawn(|| generate_blue_noise_channel(size, 0x1357_9bdf));
+        let h1 = s.spawn(|| generate_blue_noise_channel(size, 0x2468_ace0));
+        let h2 = s.spawn(|| generate_blue_noise_channel(size, 0x9e37_79b9));
+        let h3 = s.spawn(|| generate_blue_noise_channel(size, 0xdead_beef));
+        (
+            h0.join().expect("blue noise thread 0"),
+            h1.join().expect("blue noise thread 1"),
+            h2.join().expect("blue noise thread 2"),
+            h3.join().expect("blue noise thread 3"),
+        )
+    });
 
     let mut rgba = vec![0u8; total * 4];
     for i in 0..total {
@@ -523,8 +527,18 @@ pub fn get_blue_noise_data(size: usize) -> &'static [u8] {
         rgba[base + 2] = ch2[i];
         rgba[base + 3] = ch3[i];
     }
+    rgba
+}
 
-    let leaked: &'static [u8] = Box::leak(rgba.into_boxed_slice());
+pub fn get_blue_noise_data(size: usize) -> &'static [u8] {
+    static CACHE: OnceLock<Mutex<HashMap<usize, &'static [u8]>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap();
+    if let Some(&entry) = guard.get(&size) {
+        return entry;
+    }
+
+    let leaked: &'static [u8] = Box::leak(generate_blue_noise_rgba(size).into_boxed_slice());
     guard.insert(size, leaked);
     leaked
 }
@@ -534,7 +548,7 @@ pub fn create_blackbody_lut_texture(
     queue: &wgpu::Queue,
     size: u32,
 ) -> (wgpu::Texture, wgpu::TextureView) {
-    let data = get_blackbody_data(size as usize);
+    let data = generate_blackbody_data(size as usize);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("blackbody-lut"),
         size: wgpu::Extent3d {
@@ -579,7 +593,7 @@ pub fn create_blue_noise_texture(
     queue: &wgpu::Queue,
     size: u32,
 ) -> (wgpu::Texture, wgpu::TextureView) {
-    let rgba = get_blue_noise_data(size as usize);
+    let rgba = generate_blue_noise_rgba(size as usize);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("blue-noise-lut"),
         size: wgpu::Extent3d {
@@ -602,7 +616,7 @@ pub fn create_blue_noise_texture(
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        rgba,
+        &rgba,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(size * 4),

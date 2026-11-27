@@ -594,31 +594,45 @@ vec3 shadeNeutronStarSurface(
 // 4. VOLUMETRIC MAGNETOSPHERE, LIGHTHOUSE BEAMS, PWN TORUS & POLAR JETS
 // ============================================================================
 
+struct PulsarVolConsts {
+  float spinPhase;
+  float sinObl;
+  float cosObl;
+  float absSinObl;
+  float absCosObl;
+  float twistShear;
+  float twistFactor;
+  float rLightCylVis;
+  float invSepW;
+  float retardFactor;
+  float rMagLoopMax;
+  float rSheetMin;
+  float rSheetMax;
+  float rMagOuter;
+  float plasmaDensity;
+  float beamIntensity;
+  float beamConeHalfAngle;
+  float cosMaxCone;
+  float pwnVisibility;
+  float jetAmp;
+  float flowMag;
+  float flowSheetTime;
+  float flowBeamTime;
+  float beamSpinTime;
+  float pwnRotTime;
+  float pwnWispTime;
+  float jetKinkTime;
+  float jetHelixTime;
+  float jetFlowTime;
+  float jetKnotTime;
+};
+
 vec4 evalPulsarVolume(
   vec3 pos,
   vec3 toCamDir,
   float r,
   float invR,
-  float simTime,
-  float spinPhase,
-  float sinObl,
-  float cosObl,
-  float twistShear,
-  float twistFactor,
-  float rLightCylVis,
-  float invSepW,
-  float retardFactor,
-  float rMagLoopMax,
-  float rSheetMin,
-  float rSheetMax,
-  float rMagOuter,
-  float plasmaDensity,
-  float beamIntensity,
-  float beamConeHalfAngle,
-  float cosMaxCone,
-  float pwnVisibility,
-  float jetAmp,
-  float spinVisualSpeed,
+  PulsarVolConsts vc,
   float camDistFade,
   float segCorotBeam,
   bool segNeedsMag,
@@ -629,43 +643,44 @@ vec4 evalPulsarVolume(
   vec3 emission = vec3(0.0);
   float nearMagFlag = 0.0;
 
-  bool needMag  = segNeedsMag && (r < rMagOuter);
+  bool needMag  = segNeedsMag && (r < vc.rMagOuter);
   bool needBeam = segNeedsBeam && (r < 18.0);
   bool checkMagOrBeam = needMag;
   if (!checkMagOrBeam && needBeam) {
     float absCosSpin = abs(pos.y) * invR;
     float sinSpin = sqrt(max(1.0 - absCosSpin * absCosSpin, 0.0));
-    float maxPossibleCosM = absCosSpin * abs(cosObl) + sinSpin * abs(sinObl);
-    checkMagOrBeam = (maxPossibleCosM > cosMaxCone);
+    float maxPossibleCosM = absCosSpin * vc.absCosObl + sinSpin * vc.absSinObl;
+    checkMagOrBeam = (maxPossibleCosM > vc.cosMaxCone);
   }
 
   if (checkMagOrBeam) {
     // Deutsch electromagnetic retardation lag delta_phi = -(r - 1) / R_LC
-    float deltaPhi = -max(r - 1.0, 0.0) * retardFactor;
-    float phaseRet = spinPhase + deltaPhi;
+    float deltaPhi = -max(r - 1.0, 0.0) * vc.retardFactor;
+    float phaseRet = vc.spinPhase + deltaPhi;
     float cRet = cos(phaseRet);
     float sRet = sin(phaseRet);
     vec3 pRot = vec3(cRet * pos.x - sRet * pos.z, pos.y, sRet * pos.x + cRet * pos.z);
 
-    float zM = pRot.x * sinObl + pRot.y * cosObl;
-    float xM = pRot.x * cosObl - pRot.y * sinObl;
+    float zM = pRot.x * vc.sinObl + pRot.y * vc.cosObl;
+    float xM = pRot.x * vc.cosObl - pRot.y * vc.sinObl;
     float yM = -pRot.z;
     float rhoM2 = xM * xM + yM * yM;
-    float sin2Theta = max(rhoM2 * invR * invR, 1e-5);
+    float rawSin2Theta = rhoM2 * invR * invR;
+    float sin2Theta = max(rawSin2Theta, 1e-5);
     float cosThetaM = zM * invR;
     float L = r / sin2Theta;
-    nearMagFlag = (L < rMagLoopMax * 1.18) ? 1.0 : 0.0;
+    nearMagFlag = (L < vc.rMagLoopMax * 1.18) ? 1.0 : 0.0;
 
     bool inCorona = segNeedsMag && (r < 2.05);
-    bool inLoops  = needMag && (L > 1.04 && L < rMagLoopMax);
-    bool inSheet  = segNeedsMag && (r > rSheetMin && r < rSheetMax && abs(cosThetaM) < 0.097);
+    bool inLoops  = needMag && (L > 1.04 && L < vc.rMagLoopMax);
+    bool inSheet  = segNeedsMag && (r > vc.rSheetMin && r < vc.rSheetMax && abs(cosThetaM) < 0.097);
 
     if (inCorona || inLoops || inSheet) {
       // 4A-0. Optically-Thin Relativistic Magnetized Inner Corona (1.01 < r < 2.05)
       if (inCorona) {
         float coronaRad = smoothstep(1.01, 1.035, r) * exp(-min((r - 1.0) * 5.4, 40.0));
         float poleBoost = 0.75 + 0.55 * abs(cosThetaM);
-        float coronaDens = coronaRad * poleBoost * (0.18 + 0.12 * plasmaDensity) * segCorotBeam * camDistFade;
+        float coronaDens = coronaRad * poleBoost * (0.18 + 0.12 * vc.plasmaDensity) * segCorotBeam * camDistFade;
         vec3 coronaCol = mix(vec3(0.18, 0.64, 1.00), vec3(0.84, 0.96, 1.00), exp(-min((r - 1.0) * 9.0, 40.0)));
         emission += coronaCol * (coronaDens * 0.48);
       }
@@ -673,26 +688,27 @@ vec4 evalPulsarVolume(
       // 4A. Crisp Field-Aligned Dipole / Twisted-Dipole Flux Loops (1.04 < L <= rLightCylVis)
       if (inLoops) {
         float logL = log(L);
-        float sepDist = (L - rLightCylVis * 0.90) * invSepW;
+        float sepDist = (L - vc.rLightCylVis * 0.90) * vc.invSepW;
         float sepSq = sepDist * sepDist * 2.5;
         float sBApprox = sin(logL * 9.5 + 0.225);
-        float lEnv = smoothstep(1.04, 1.24, L) * (1.0 - smoothstep(rLightCylVis * 0.88, rMagLoopMax, L));
-        float rFade = smoothstep(1.02, 1.15, r) / (1.0 + 0.36 * pow(max(r - 1.0, 1e-5), 1.55));
+        float lEnv = smoothstep(1.04, 1.24, L) * (1.0 - smoothstep(vc.rLightCylVis * 0.88, vc.rMagLoopMax, L));
+        float drLoop = max(r - 1.0, 0.0);
+        float rFade = smoothstep(1.02, 1.15, r) / (1.0 + 0.36 * drLoop * sqrt(drLoop));
 
         vec3 cIce    = vec3(0.68, 0.94, 1.00);
         vec3 cCyan   = vec3(0.06, 0.44, 1.00);
         vec3 cViolet = vec3(0.32, 0.10, 0.98);
-        vec3 magCol = mix(cViolet, cCyan, smoothstep(rLightCylVis, 1.35, L));
+        vec3 magCol = mix(cViolet, cCyan, smoothstep(vc.rLightCylVis, 1.35, L));
 
         if (sBApprox < -0.525 && sepSq >= 12.0) {
-          float magDens = lEnv * rFade * 0.00555 * plasmaDensity * segCorotBeam * camDistFade;
-          if (twistFactor > 0.001) {
-            magCol = mix(magCol, vec3(0.48, 0.14, 1.00), twistFactor * 0.45);
+          float magDens = lEnv * rFade * 0.00555 * vc.plasmaDensity * segCorotBeam * camDistFade;
+          if (vc.twistFactor > 0.001) {
+            magCol = mix(magCol, vec3(0.48, 0.14, 1.00), vc.twistFactor * 0.45);
           }
           emission += magCol * (magDens * 0.125);
         } else {
           float invL = sin2Theta * invR;
-          float dTwist = twistShear * cosThetaM * (1.0 - invL) * 2.2;
+          float dTwist = vc.twistShear * cosThetaM * (1.0 - invL) * 2.2;
           bool hasAz = rhoM2 > 1e-10;
           float invRhoM = hasAz ? inversesqrt(rhoM2) : 1.0;
           float cPhi = hasAz ? (xM * invRhoM) : 1.0;
@@ -703,11 +719,10 @@ vec4 evalPulsarVolume(
           float sTwist = sPhi * cTw - cPhi * sTw;
 
           float qRad = 0.55 + 0.22 * logL;
-          float flowMag = simTime * (0.35 + 0.45 * spinVisualSpeed);
           vec3 qMag = vec3(
             cTwist * qRad,
             sTwist * qRad,
-            cosThetaM * 1.85 - flowMag
+            cosThetaM * 1.85 - vc.flowMag
           );
           vec4 nMag = textureLod(uVolumeNoise, qMag, 0.0);
 
@@ -755,16 +770,16 @@ vec4 evalPulsarVolume(
           }
 
           float tubeStruct = (0.006 + filamentCore * (0.45 + 0.75 * nMag.a)) * (0.65 + 0.55 * nMag.g);
-          float magDens = lEnv * rFade * tubeStruct * plasmaDensity * segCorotBeam * camDistFade;
+          float magDens = lEnv * rFade * tubeStruct * vc.plasmaDensity * segCorotBeam * camDistFade;
 
           magCol = mix(magCol, cIce, min(filamentCore * 0.55, 1.0));
 
-          if (twistFactor > 0.001) {
+          if (vc.twistFactor > 0.001) {
             float twistCore = (filamentCore > 1e-4) ? pow(min(filamentCore * 0.60, 1.0), 1.25) : 0.0;
             vec3 jViolet = vec3(0.48, 0.14, 1.00);
             vec3 jWhiteViolet = vec3(0.86, 0.82, 1.00);
             vec3 twistCol = mix(jViolet, jWhiteViolet, twistCore);
-            magCol = mix(magCol, twistCol, twistFactor * (0.45 + 0.55 * twistCore));
+            magCol = mix(magCol, twistCol, vc.twistFactor * (0.45 + 0.55 * twistCore));
           }
 
           emission += magCol * (magDens * 0.125);
@@ -776,22 +791,22 @@ vec4 evalPulsarVolume(
         float sheetRatio = cosThetaM * (1.0 / 0.042);
         float sheetProf = exp(-sheetRatio * sheetRatio);
         if (sheetProf > 0.005) {
-          float yPtDist = (r - 0.96 * rLightCylVis) / max(0.14 * rLightCylVis, 0.35);
+          float yPtDist = (r - 0.96 * vc.rLightCylVis) / max(0.14 * vc.rLightCylVis, 0.35);
           float yPoint = exp(-min(yPtDist * yPtDist, 40.0)) * 1.45;
-          float sheetEnv = smoothstep(rSheetMin, 0.94 * rLightCylVis, r)
-                         * (1.0 - smoothstep(rSheetMax * 0.72, rSheetMax, r))
-                         / (1.0 + 0.18 * max(r - rSheetMin, 0.0));
+          float sheetEnv = smoothstep(vc.rSheetMin, 0.94 * vc.rLightCylVis, r)
+                         * (1.0 - smoothstep(vc.rSheetMax * 0.72, vc.rSheetMax, r))
+                         / (1.0 + 0.18 * max(r - vc.rSheetMin, 0.0));
 
           bool hasAzS = rhoM2 > 1e-10;
           float invRhoS = hasAzS ? inversesqrt(rhoM2) : 1.0;
           float cPhiS = hasAzS ? (xM * invRhoS) : 1.0;
           float sPhiS = hasAzS ? (yM * invRhoS) : 0.0;
-          float flowSheet = r * 0.32 - simTime * (0.75 + 0.95 * spinVisualSpeed);
+          float flowSheet = r * 0.32 - vc.flowSheetTime;
           vec4 nSheet = textureLod(uVolumeNoise, vec3(cPhiS * 0.65, sPhiS * 0.65, flowSheet), 0.0);
           float plasmoids = 0.35 + 1.15 * pow(max(nSheet.g, 1e-5), 2.2) * (0.5 + 0.5 * nSheet.a);
 
           float sheetDens = sheetEnv * sheetProf * (plasmoids + yPoint * (0.65 + 0.55 * nSheet.g))
-                          * plasmaDensity * segCorotBeam * camDistFade;
+                          * vc.plasmaDensity * segCorotBeam * camDistFade;
           vec3 sheetCol = mix(
             vec3(0.20, 0.30, 0.98),
             vec3(0.68, 0.92, 1.00),
@@ -805,50 +820,61 @@ vec4 evalPulsarVolume(
     // 4B. Sweeping Lighthouse Synchrotron / Curvature Beams around +-muHat
     if (needBeam) {
       float absCosB = abs(cosThetaM);
-      if (absCosB > cosMaxCone) {
-        float sinB = sqrt(max(1.0 - absCosB * absCosB, 0.0));
-        float thetaB = atan(sinB, absCosB);
-        float thetaCone = beamConeHalfAngle * mix(0.56, 1.04, smoothstep(1.0, 4.2, r));
+      if (absCosB > vc.cosMaxCone) {
+        float thetaCone = vc.beamConeHalfAngle * mix(0.56, 1.04, smoothstep(1.0, 4.2, r));
         float coneW = max(thetaCone * 0.18, 0.030);
         float coreW = max(thetaCone * 0.22, 0.036);
+        float thetaCut = thetaCone + 3.4 * coneW;
+        float c2 = (2.0 * rawSin2Theta) / (1.0 + absCosB);
 
-        if (thetaB < thetaCone + 3.4 * coneW) {
-          float cd = (thetaB - thetaCone) / coneW;
-          float hollowCone = exp(-min(cd * cd, 40.0));
-          float kd = thetaB / coreW;
-          float coreBeam = exp(-min(kd * kd, 40.0)) * 0.92;
+        if (c2 < thetaCut * thetaCut) {
+          float c = sqrt(c2);
+          float thetaB = c * (1.0 + c2 * (0.04166667 + c2 * 0.0046875));
+          if (thetaB < thetaCut) {
+            float cd = (thetaB - thetaCone) / coneW;
+            float hollowCone = exp(-min(cd * cd, 40.0));
+            float kd = thetaB / coreW;
+            float coreBeam = exp(-min(kd * kd, 40.0)) * 0.92;
 
-          float radialOnset = smoothstep(1.01, 1.18, r)
-                            * (1.0 - smoothstep(10.5, 18.0, r))
-                            / (1.0 + 0.22 * r * r);
+            float radialOnset = smoothstep(1.01, 1.18, r)
+                              * (1.0 - smoothstep(10.5, 18.0, r))
+                              / (1.0 + 0.22 * r * r);
 
-          bool hasAzB = rhoM2 > 1e-10;
-          float invRhoB = hasAzB ? inversesqrt(rhoM2) : 1.0;
-          float cPhiB = hasAzB ? (xM * invRhoB) : 1.0;
-          float sPhiB = hasAzB ? (yM * invRhoB) : 0.0;
-          float phiB = hasAzB ? atan(yM, xM) : 0.0;
-          float flowOut = r * 0.28 - simTime * (0.95 + 1.25 * spinVisualSpeed);
-          vec3 qBeam = vec3(cPhiB * 0.68, sPhiB * 0.68, flowOut);
-          vec4 nBeam = textureLod(uVolumeNoise, qBeam, 0.0);
-          float streakCos = clamp(0.5 + 0.5 * cos(8.0 * phiB + 0.6 * nBeam.r + r * 0.35 - simTime * 2.2), 0.0, 1.0);
-          float sc2 = streakCos * streakCos;
-          float subPulses = (0.30 + 0.90 * nBeam.g * nBeam.g) * (0.40 + 0.60 * sc2 * sc2) * (0.65 + 0.35 * nBeam.a);
+            bool hasAzB = rhoM2 > 1e-10;
+            float invRhoB = hasAzB ? inversesqrt(rhoM2) : 1.0;
+            float cPhiB = hasAzB ? (xM * invRhoB) : 1.0;
+            float sPhiB = hasAzB ? (yM * invRhoB) : 0.0;
+            float c2B = cPhiB * cPhiB - sPhiB * sPhiB;
+            float s2B = 2.0 * cPhiB * sPhiB;
+            float c4B = c2B * c2B - s2B * s2B;
+            float s4B = 2.0 * c2B * s2B;
+            float c8B = c4B * c4B - s4B * s4B;
+            float s8B = 2.0 * c4B * s4B;
 
-          // Relativistic forward beaming along outward retarded beam axis toward -vel
-          float signMu = cosThetaM >= 0.0 ? 1.0 : -1.0;
-          vec3 muRetLab = signMu * vec3(cRet * sinObl, cosObl, -sRet * sinObl);
-          vec3 rHatLab = pos * invR;
-          vec3 beamDir = normalize(mix(muRetLab, rHatLab, 0.42));
-          float cosForward = dot(beamDir, toCamDir);
-          float dopplerBeam = 1.0 / max(1.0 - 0.62 * cosForward, 0.26);
-          float beaming = pow(clamp(dopplerBeam, 0.35, 3.8), 1.75);
+            float flowOut = r * 0.28 - vc.flowBeamTime;
+            vec3 qBeam = vec3(cPhiB * 0.68, sPhiB * 0.68, flowOut);
+            vec4 nBeam = textureLod(uVolumeNoise, qBeam, 0.0);
+            float beamPhase = 0.6 * nBeam.r + r * 0.35 - vc.beamSpinTime;
+            float streakCos = clamp(0.5 + 0.5 * (c8B * cos(beamPhase) - s8B * sin(beamPhase)), 0.0, 1.0);
+            float sc2 = streakCos * streakCos;
+            float subPulses = (0.30 + 0.90 * nBeam.g * nBeam.g) * (0.40 + 0.60 * sc2 * sc2) * (0.65 + 0.35 * nBeam.a);
 
-          vec3 beamCol = mix(vec3(0.32, 0.16, 1.00), vec3(0.12, 0.68, 1.00), clamp(hollowCone + coreBeam, 0.0, 1.0));
-          beamCol = mix(beamCol, vec3(0.92, 0.98, 1.00), smoothstep(1.15, 3.0, beaming) * 0.88);
+            // Relativistic forward beaming along outward retarded beam axis toward -vel
+            float signMu = cosThetaM >= 0.0 ? 1.0 : -1.0;
+            vec3 muRetLab = signMu * vec3(cRet * vc.sinObl, vc.cosObl, -sRet * vc.sinObl);
+            vec3 rHatLab = pos * invR;
+            vec3 beamDir = normalize(mix(muRetLab, rHatLab, 0.42));
+            float cosForward = dot(beamDir, toCamDir);
+            float dopplerBeam = 1.0 / max(1.0 - 0.62 * cosForward, 0.26);
+            float beaming = pow(clamp(dopplerBeam, 0.35, 3.8), 1.75);
 
-          float beamVal = beamIntensity * radialOnset * (hollowCone * 1.10 + coreBeam * 0.95)
-                        * subPulses * beaming * camDistFade;
-          emission += beamCol * (beamVal * 0.34);
+            vec3 beamCol = mix(vec3(0.32, 0.16, 1.00), vec3(0.12, 0.68, 1.00), clamp(hollowCone + coreBeam, 0.0, 1.0));
+            beamCol = mix(beamCol, vec3(0.92, 0.98, 1.00), smoothstep(1.15, 3.0, beaming) * 0.88);
+
+            float beamVal = vc.beamIntensity * radialOnset * (hollowCone * 1.10 + coreBeam * 0.95)
+                          * subPulses * beaming * camDistFade;
+            emission += beamCol * (beamVal * 0.34);
+          }
         }
       }
     }
@@ -874,7 +900,7 @@ vec4 evalPulsarVolume(
       float invRhoXZ = inversesqrt(max(rhoXZ2, 1e-12));
       float cAz = pos.x * invRhoXZ;
       float sAz = pos.z * invRhoXZ;
-      float rotAngle = 0.18 * simTime * (0.4 + spinVisualSpeed) - 0.28 * r;
+      float rotAngle = vc.pwnRotTime - 0.28 * r;
       float cr = cos(rotAngle);
       float sr = sin(rotAngle);
       float cp = cAz * cr - sAz * sr;
@@ -885,7 +911,7 @@ vec4 evalPulsarVolume(
       vec4 nPwnA = textureLod(uVolumeNoise, pwnCoordA, 0.0);
       vec4 nPwnB = textureLod(uVolumeNoise, pwnCoordB, 0.0);
 
-      float wispPhase = r * 2.55 - simTime * (0.55 + 0.75 * spinVisualSpeed) + (nPwnA.r - 0.5) * 1.45;
+      float wispPhase = r * 2.55 - vc.pwnWispTime + (nPwnA.r - 0.5) * 1.45;
       float w0 = max(0.5 + 0.5 * sin(wispPhase), 0.0);
       float w2 = w0 * w0;
       float w4 = w2 * w2;
@@ -899,7 +925,7 @@ vec4 evalPulsarVolume(
       float dopPwn = 1.0 / max(1.0 - 0.42 * cosOut, 0.45);
       float pwnBeam = pow(clamp(dopPwn, 0.45, 1.85), 1.75);
 
-      float torusDens = pwnVisibility * radEnv * vertTorus * doubleRing
+      float torusDens = vc.pwnVisibility * radEnv * vertTorus * doubleRing
                       * (0.01 * filaments + 1.55 * wisps * filaments + termShock * tsKnots)
                       * pwnBeam * camDistFade;
 
@@ -921,7 +947,7 @@ vec4 evalPulsarVolume(
     if (rhoXZ2 < 3.6 && absY >= 1.25 && absY <= 18.0) {
       float signY = pos.y >= 0.0 ? 1.0 : -1.0;
       float kinkAmp = smoothstep(2.2, 11.5, absY) * 0.28;
-      float kinkAng = signY * (absY * 0.42 - simTime * (0.45 + 0.75 * spinVisualSpeed));
+      float kinkAng = signY * (absY * 0.42 - vc.jetKinkTime);
       vec2 jetCenter = vec2(cos(kinkAng), sin(kinkAng)) * kinkAmp;
       vec2 relXZ = pos.xz - jetCenter;
       float rho = length(relXZ);
@@ -936,16 +962,16 @@ vec4 evalPulsarVolume(
                    * (1.0 - smoothstep(10.5, 18.0, absY))
                    / (1.0 + 0.12 * absY);
 
-        float helixAngle = signY * (absY * 0.92 - simTime * (0.75 + 1.45 * spinVisualSpeed));
+        float helixAngle = signY * (absY * 0.92 - vc.jetHelixTime);
         float ch = cos(helixAngle), sh = sin(helixAngle);
         vec2 rotXZ = vec2(ch * relXZ.x - sh * relXZ.y, sh * relXZ.x + ch * relXZ.y);
 
-        float flowY = absY * 0.22 - simTime * (0.42 + 0.75 * spinVisualSpeed);
+        float flowY = absY * 0.22 - vc.jetFlowTime;
         vec4 jn = textureLod(uVolumeNoise, vec3(rotXZ * 0.62, flowY), 0.0);
 
         float rawFil = clamp(jn.y * 0.64 + jn.w * 0.54, 0.0, 1.0);
         float filaments = rawFil * rawFil * rawFil;
-        float knotWave = max(0.5 + 0.5 * sin(absY * 1.45 - simTime * (0.85 + 1.25 * spinVisualSpeed) + jn.r * 2.2), 0.0);
+        float knotWave = max(0.5 + 0.5 * sin(absY * 1.45 - vc.jetKnotTime + jn.r * 2.2), 0.0);
         float kw2 = knotWave * knotWave;
         float knots = 0.35 + 1.25 * (kw2 * kw2);
 
@@ -962,7 +988,7 @@ vec4 evalPulsarVolume(
         vec3 jetCol = mix(sheathCol, coreCol, clamp(spine * 0.90 + filaments * 0.45, 0.0, 1.0));
         jetCol = mix(jetCol, outerCol, smoothstep(0.55, 1.80, uRad) * 0.72);
 
-        float rawInt = jetAmp * radProf * yEnv * knots * jetBeam * viewColAtten * camDistFade;
+        float rawInt = vc.jetAmp * radProf * yEnv * knots * jetBeam * viewColAtten * camDistFade;
         float intensity = rawInt / (1.0 + rawInt * 0.38);
         emission += jetCol * (intensity * 0.28);
       }
@@ -1040,6 +1066,38 @@ void main() {
   float rMagOuter = max(rMagLoopMax, rSheetMax);
   float jetAmp = pwnVisibility * pwnJetPower;
 
+  PulsarVolConsts vc;
+  vc.spinPhase = spinPhase;
+  vc.sinObl = sinObl;
+  vc.cosObl = cosObl;
+  vc.absSinObl = abs(sinObl);
+  vc.absCosObl = abs(cosObl);
+  vc.twistShear = twistShear;
+  vc.twistFactor = twistFactor;
+  vc.rLightCylVis = rLightCylVis;
+  vc.invSepW = invSepW;
+  vc.retardFactor = retardFactor;
+  vc.rMagLoopMax = rMagLoopMax;
+  vc.rSheetMin = rSheetMin;
+  vc.rSheetMax = rSheetMax;
+  vc.rMagOuter = rMagOuter;
+  vc.plasmaDensity = plasmaDensity;
+  vc.beamIntensity = beamIntensity;
+  vc.beamConeHalfAngle = beamConeHalfAngle;
+  vc.cosMaxCone = cosMaxCone;
+  vc.pwnVisibility = pwnVisibility;
+  vc.jetAmp = jetAmp;
+  vc.flowMag = simTime * (0.35 + 0.45 * spinVisualSpeed);
+  vc.flowSheetTime = simTime * (0.75 + 0.95 * spinVisualSpeed);
+  vc.flowBeamTime = simTime * (0.95 + 1.25 * spinVisualSpeed);
+  vc.beamSpinTime = simTime * 2.2;
+  vc.pwnRotTime = 0.18 * simTime * (0.4 + spinVisualSpeed);
+  vc.pwnWispTime = simTime * (0.55 + 0.75 * spinVisualSpeed);
+  vc.jetKinkTime = simTime * (0.45 + 0.75 * spinVisualSpeed);
+  vc.jetHelixTime = simTime * (0.75 + 1.45 * spinVisualSpeed);
+  vc.jetFlowTime = simTime * (0.42 + 0.75 * spinVisualSpeed);
+  vc.jetKnotTime = simTime * (0.85 + 1.25 * spinVisualSpeed);
+
   bool hasMag  = (plasmaDensity > 0.001);
   bool hasBeam = (beamIntensity > 0.001);
   bool hasPwn  = (pwnVisibility > 0.001);
@@ -1077,6 +1135,7 @@ void main() {
   float rayDist = 0.0;
   bool hitStar = false;
   bool shadeStar = false;
+  bool saturated = false;
   bool escaped = false;
   bool nearMagShell = true;
   vec3 hitPos = camPos;
@@ -1264,7 +1323,8 @@ void main() {
           float dsSub = segLen * invNSub;
 
           vec3 segVelMid = 0.5 * (k1.dpos + segVelEnd);
-          vec3 segToCamDir = (dot(segVelMid, segVelMid) > 1e-10) ? -normalize(segVelMid) : (-midPos * invRMid);
+          float segVelMid2 = dot(segVelMid, segVelMid);
+          vec3 segToCamDir = (segVelMid2 > 1e-10) ? (-segVelMid * inversesqrt(segVelMid2)) : (-midPos * invRMid);
 
           float segCorotBeam = 1.0;
           if (segNeedsMag) {
@@ -1294,13 +1354,15 @@ void main() {
             if (outsideCrust && rSamp < volBoundR) {
               float camDistFade = smoothstep(0.25, 1.75, rayDist + uSub * segLen);
               vec4 volRes = evalPulsarVolume(
-                samplePos, segToCamDir, rSamp, invRSamp, simTime, spinPhase, sinObl, cosObl,
-                twistShear, twistFactor, rLightCylVis, invSepW, retardFactor, rMagLoopMax, rSheetMin,
-                rSheetMax, rMagOuter, plasmaDensity, beamIntensity, beamConeHalfAngle, cosMaxCone,
-                pwnVisibility, jetAmp, spinVisualSpeed, camDistFade, segCorotBeam,
+                samplePos, segToCamDir, rSamp, invRSamp, vc,
+                camDistFade, segCorotBeam,
                 segNeedsMag, segNeedsBeam, segNeedsPwn, segNeedsJet
               );
               radiance += volRes.rgb * dsSub;
+              if (min(radiance.r, min(radiance.g, radiance.b)) >= 36.0) {
+                saturated = true;
+                break;
+              }
               if (rSamp >= rMagLoopMax || volRes.a > 0.5) {
                 segNearMag = true;
               }
@@ -1309,6 +1371,11 @@ void main() {
             }
           }
           nearMagShell = segNearMag;
+          if (saturated) {
+            hitStar = true;
+            shadeStar = false;
+            break;
+          }
         } else if (minR2 >= rMagLoopMax * rMagLoopMax) {
           nearMagShell = true;
         }

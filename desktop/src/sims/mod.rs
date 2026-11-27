@@ -196,7 +196,7 @@ pub struct PresetMeta {
     pub hotkey: &'static str,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub enum ControlKind {
     Range {
         min: f32,
@@ -205,26 +205,26 @@ pub enum ControlKind {
         hints: Option<[&'static str; 2]>,
     },
     Select {
-        options: Vec<(i32, &'static str)>,
+        options: &'static [(i32, &'static str)],
     },
     Segmented {
-        options: Vec<(i32, &'static str)>,
+        options: &'static [(i32, &'static str)],
     },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct ControlItem {
     pub key: &'static str,
     pub label: &'static str,
     pub kind: ControlKind,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct ControlSection {
     pub id: &'static str,
     pub title: &'static str,
     pub default_open: bool,
-    pub items: Vec<ControlItem>,
+    pub items: &'static [ControlItem],
 }
 
 #[derive(Clone)]
@@ -307,11 +307,11 @@ pub trait Simulation {
     }
     fn post_params(&self, camera_moved: bool, sim_time: f32) -> PostFrameParams;
 
-    fn presets(&self) -> Vec<PresetMeta>;
+    fn presets(&self) -> &'static [PresetMeta];
     fn active_preset_index(&self) -> Option<usize>;
     fn apply_preset(&mut self, index: usize);
 
-    fn control_sections(&self) -> Vec<ControlSection>;
+    fn control_sections(&self) -> &'static [ControlSection];
     fn get_f32(&self, key: &str) -> f32;
     /// Sets a float control. Returns `true` if primary ray-tracing accumulation must reset.
     fn set_f32(&mut self, key: &str, val: f32) -> bool;

@@ -97,9 +97,14 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
 
   for (var dy: i32 = -1; dy <= 1; dy++) {
     for (var dx: i32 = -1; dx <= 1; dx++) {
-      let sampleUv = clamp(in.uv + vec2f(f32(dx), f32(dy)) * texelSize, vec2f(0.0), vec2f(1.0));
-      let sRaw = sanitizeHdr(textureSampleLevel(uCurrentTex, sLinear, sampleUv, 0.0).rgb);
-      let s = select(compressHdr(sRaw), curComp, dx == 0 && dy == 0);
+      var s: vec3f;
+      if (dx == 0 && dy == 0) {
+        s = curComp;
+      } else {
+        let sampleUv = clamp(in.uv + vec2f(f32(dx), f32(dy)) * texelSize, vec2f(0.0), vec2f(1.0));
+        let sRaw = sanitizeHdr(textureSampleLevel(uCurrentTex, sLinear, sampleUv, 0.0).rgb);
+        s = compressHdr(sRaw);
+      }
       let ycc = rgbToYCoCg(s);
       m1 += ycc;
       m2 += ycc * ycc;

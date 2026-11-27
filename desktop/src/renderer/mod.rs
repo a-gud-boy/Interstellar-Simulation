@@ -1,19 +1,29 @@
 pub mod post;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 use crate::assets::{luts, sky};
 use crate::shaders;
+use crate::sims::SimId;
 
 pub const VOLUME_SIZE: u32 = 128;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum SimBglKind {
+    Standard,
+    Binary,
+    Wormhole,
+}
 
 pub struct SharedGpuAssets {
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
     pub adapter_info: wgpu::AdapterInfo,
     pub adapter_label: String,
+    pub scene_hdr_format: wgpu::TextureFormat,
 
     pub s_linear_clamp: wgpu::Sampler,
     pub s_volume_repeat: wgpu::Sampler,
@@ -33,6 +43,7 @@ pub struct SharedGpuAssets {
 
     pub proc_sky_tex: wgpu::Texture,
     pub proc_sky_view: wgpu::TextureView,
+    pub proc_sky_ready: bool,
 
     pub real_sky_tex: Option<wgpu::Texture>,
     pub real_sky_view: wgpu::TextureView,
@@ -46,12 +57,11 @@ pub struct SharedGpuAssets {
     pub binary_sim_bgl: wgpu::BindGroupLayout,
     pub wormhole_sim_bgl: wgpu::BindGroupLayout,
 
-    sky_rx: Option<Receiver<SkyDecodeResult>>,
-}
+    sim_pipelines: HashMap<SimId, Arc<wgpu::RenderPipeline>>,
+    tidal_bgl: Option<Arc<wgpu::BindGroupLayout>>,
+    tidal_pipeline: Option<Arc<wgpu::ComputePipeline>>,
 
-struct SkyDecodeResult {
-    real_sky: &'static sky::RgbaImageData,
-    exotic_b: &'static sky::RgbaImageData,
+    sky_rx: Option<Receiver<sky::RgbaImageData>>,
 }
 
 impl SharedGpuAssets {
@@ -60,8 +70,18 @@ impl SharedGpuAssets {
         queue: Arc<wgpu::Queue>,
         adapter_info: wgpu::AdapterInfo,
         sync_sky: bool,
+        prestarted_sky_rx: Option<Receiver<sky::RgbaImageData>>,
+        sky_wake: Option<Box<dyn FnOnce() + Send>>,
     ) -> Self {
         let adapter_label = format_adapter_label(&adapter_info);
+        let scene_hdr_format = if device
+            .features()
+            .contains(wgpu::Features::RG11B10UFLOAT_RENDERABLE)
+        {
+            wgpu::TextureFormat::Rg11b10Ufloat
+        } else {
+            wgpu::TextureFormat::Rgba16Float
+        };
 
         let s_linear_clamp = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("linear-clamp"),
@@ -140,16 +160,20 @@ impl SharedGpuAssets {
         let (blue_noise_tex, blue_noise_view) =
             luts::create_blue_noise_texture(&device, &queue, 128);
 
-        // Procedural Universe A sky (2048x1024) + GPU mip chain
-        let proc_img = sky::get_procedural_sky_a();
+        // Placeholder 1x1 dark sky texture (proc_sky_a and exotic_sky_b are synthesized lazily on demand)
+        let placeholder_img = sky::RgbaImageData {
+            width: 1,
+            height: 1,
+            pixels: vec![3, 5, 10, 255],
+        };
         let (proc_sky_tex, proc_sky_view) = upload_rgba8_sky_with_mips(
             &device,
             &queue,
             &mipmap_bgl,
             &mipmap_pipeline,
             &s_linear_clamp,
-            "proc-sky-map",
-            proc_img,
+            "placeholder-sky-map",
+            &placeholder_img,
         );
 
         let standard_sim_bgl = make_standard_sim_bgl(&device, "standard-sim-bgl", false);
@@ -161,6 +185,7 @@ impl SharedGpuAssets {
             queue,
             adapter_info,
             adapter_label,
+            scene_hdr_format,
             s_linear_clamp,
             s_volume_repeat,
             s_sky_aniso,
@@ -174,33 +199,44 @@ impl SharedGpuAssets {
             blue_noise_view,
             proc_sky_tex,
             proc_sky_view: proc_sky_view.clone(),
+            proc_sky_ready: false,
             real_sky_tex: None,
             real_sky_view: proc_sky_view,
             sky_map_loaded: false,
-            sky_dimensions: (proc_img.width, proc_img.height),
+            sky_dimensions: (1, 1),
             exotic_sky_b_tex: None,
             exotic_sky_b_view: None,
             standard_sim_bgl,
             binary_sim_bgl,
             wormhole_sim_bgl,
+            sim_pipelines: HashMap::new(),
+            tidal_bgl: None,
+            tidal_pipeline: None,
             sky_rx: None,
         };
 
         if sync_sky {
-            let real_img = sky::get_real_milkyway_4k();
-            let exotic_b = sky::get_exotic_nebula_b();
-            assets.install_sky_data(real_img, exotic_b);
+            let real_img = sky::decode_real_milkyway_4k();
+            assets.install_sky_data(&real_img);
+        } else if let Some(rx) = prestarted_sky_rx {
+            assets.sky_rx = Some(rx);
         } else {
             let (tx, rx) = mpsc::channel();
             assets.sky_rx = Some(rx);
             thread::spawn(move || {
-                let real_sky = sky::get_real_milkyway_4k();
-                let exotic_b = sky::get_exotic_nebula_b();
-                let _ = tx.send(SkyDecodeResult { real_sky, exotic_b });
+                let real_sky = sky::decode_real_milkyway_4k();
+                let _ = tx.send(real_sky);
+                if let Some(wake) = sky_wake {
+                    wake();
+                }
             });
         }
 
         assets
+    }
+
+    pub fn is_sky_loading(&self) -> bool {
+        self.sky_rx.is_some()
     }
 
     /// Returns `true` if new sky textures were uploaded on this tick (caller should rebuild bind groups).
@@ -209,9 +245,9 @@ impl SharedGpuAssets {
             return false;
         };
         match rx.try_recv() {
-            Ok(res) => {
+            Ok(real_sky) => {
                 self.sky_rx = None;
-                self.install_sky_data(res.real_sky, res.exotic_b);
+                self.install_sky_data(&real_sky);
                 true
             }
             Err(mpsc::TryRecvError::Empty) => false,
@@ -222,9 +258,29 @@ impl SharedGpuAssets {
         }
     }
 
+    pub fn ensure_procedural_sky_a(&mut self) -> bool {
+        if self.proc_sky_ready {
+            return false;
+        }
+        let proc_img = sky::synthesize_procedural_sky_a(2048, 1024);
+        let (tex, view) = upload_rgba8_sky_with_mips(
+            &self.device,
+            &self.queue,
+            &self.mipmap_bgl,
+            &self.mipmap_pipeline,
+            &self.s_linear_clamp,
+            "proc-sky-map",
+            &proc_img,
+        );
+        self.proc_sky_tex = tex;
+        self.proc_sky_view = view;
+        self.proc_sky_ready = true;
+        true
+    }
+
     pub fn ensure_exotic_sky_b(&mut self) -> &wgpu::TextureView {
         if self.exotic_sky_b_view.is_none() {
-            let img = sky::get_exotic_nebula_b();
+            let img = sky::synthesize_exotic_nebula_b(2048, 1024);
             let (tex, view) = upload_rgba8_sky_with_mips(
                 &self.device,
                 &self.queue,
@@ -232,7 +288,7 @@ impl SharedGpuAssets {
                 &self.mipmap_pipeline,
                 &self.s_linear_clamp,
                 "exotic-nebula-b-map",
-                img,
+                &img,
             );
             self.exotic_sky_b_tex = Some(tex);
             self.exotic_sky_b_view = Some(view);
@@ -240,11 +296,7 @@ impl SharedGpuAssets {
         self.exotic_sky_b_view.as_ref().unwrap()
     }
 
-    fn install_sky_data(
-        &mut self,
-        real_img: &'static sky::RgbaImageData,
-        exotic_b: &'static sky::RgbaImageData,
-    ) {
+    fn install_sky_data(&mut self, real_img: &sky::RgbaImageData) {
         let (real_tex, real_view) = upload_rgba8_sky_with_mips(
             &self.device,
             &self.queue,
@@ -258,20 +310,115 @@ impl SharedGpuAssets {
         self.real_sky_view = real_view;
         self.sky_map_loaded = true;
         self.sky_dimensions = (real_img.width, real_img.height);
+    }
 
-        if self.exotic_sky_b_tex.is_none() {
-            let (b_tex, b_view) = upload_rgba8_sky_with_mips(
-                &self.device,
-                &self.queue,
-                &self.mipmap_bgl,
-                &self.mipmap_pipeline,
-                &self.s_linear_clamp,
-                "exotic-nebula-b-map",
-                exotic_b,
-            );
-            self.exotic_sky_b_tex = Some(b_tex);
-            self.exotic_sky_b_view = Some(b_view);
+    pub fn get_or_create_sim_pipeline(
+        &mut self,
+        id: SimId,
+        label: &str,
+        kind: SimBglKind,
+        wgsl: &str,
+    ) -> Arc<wgpu::RenderPipeline> {
+        if let Some(existing) = self.sim_pipelines.get(&id) {
+            return existing.clone();
         }
+        let bgl = match kind {
+            SimBglKind::Standard => &self.standard_sim_bgl,
+            SimBglKind::Binary => &self.binary_sim_bgl,
+            SimBglKind::Wormhole => &self.wormhole_sim_bgl,
+        };
+        let shader = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(&format!("{label}-wgsl")),
+                source: wgpu::ShaderSource::Wgsl(wgsl.into()),
+            });
+        let pipe = Arc::new(post::make_fs_pipe(
+            &self.device,
+            &format!("{label}-pipe"),
+            bgl,
+            &shader,
+            self.scene_hdr_format,
+        ));
+        self.sim_pipelines.insert(id, pipe.clone());
+        pipe
+    }
+
+    pub fn get_or_create_tidal_pipeline(
+        &mut self,
+    ) -> (Arc<wgpu::BindGroupLayout>, Arc<wgpu::ComputePipeline>) {
+        if let (Some(bgl), Some(pipe)) = (&self.tidal_bgl, &self.tidal_pipeline) {
+            return (bgl.clone(), pipe.clone());
+        }
+        let tidal_mod = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("tidal-wgsl"),
+                source: wgpu::ShaderSource::Wgsl(shaders::TIDAL.into()),
+            });
+        let tidal_bgl = Arc::new(self.device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("tidal-bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: wgpu::TextureFormat::Rgba16Float,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                ],
+            },
+        ));
+        let tidal_layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("tidal-layout"),
+                bind_group_layouts: &[Some(tidal_bgl.as_ref())],
+                immediate_size: 0,
+            });
+        let tidal_pipeline = Arc::new(self.device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("tidal-pipe"),
+                layout: Some(&tidal_layout),
+                module: &tidal_mod,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            },
+        ));
+        self.tidal_bgl = Some(tidal_bgl.clone());
+        self.tidal_pipeline = Some(tidal_pipeline.clone());
+        (tidal_bgl, tidal_pipeline)
     }
 
     pub fn build_standard_bind_group(

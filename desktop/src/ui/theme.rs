@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use egui::epaint::{Brush, CornerRadius, RectShape, StrokeKind};
@@ -15,20 +16,37 @@ pub(crate) const DRAWER_WIDTH: f32 = 352.0;
 
 pub(crate) type IconPainter<'a> = &'a dyn Fn(&Painter, Pos2, Color32);
 
-fn load_first_font<P: AsRef<Path>>(paths: &[P]) -> Option<FontData> {
+fn load_first_font_dedup<P: AsRef<Path>>(
+    paths: &[P],
+    loaded_by_path: &mut HashMap<PathBuf, String>,
+    font_data: &mut std::collections::BTreeMap<String, Arc<FontData>>,
+    key_name: &str,
+) -> Option<String> {
     for p in paths {
         let path = p.as_ref();
-        if path.exists()
-            && let Ok(bytes) = std::fs::read(path)
-        {
-            return Some(FontData::from_owned(bytes));
+        if !path.exists() {
+            continue;
+        }
+        let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if let Some(existing_key) = loaded_by_path.get(&canon) {
+            return Some(existing_key.clone());
+        }
+        if let Ok(bytes) = std::fs::read(&canon) {
+            font_data.insert(key_name.to_owned(), Arc::new(FontData::from_owned(bytes)));
+            loaded_by_path.insert(canon, key_name.to_owned());
+            return Some(key_name.to_owned());
         }
     }
     None
 }
 
 #[cfg(target_os = "windows")]
-fn load_windows_font(names: &[&str]) -> Option<FontData> {
+fn load_windows_font_dedup(
+    names: &[&str],
+    loaded_by_path: &mut HashMap<PathBuf, String>,
+    font_data: &mut std::collections::BTreeMap<String, Arc<FontData>>,
+    key_name: &str,
+) -> Option<String> {
     let mut dirs = Vec::with_capacity(2);
     if let Ok(local_app) = std::env::var("LOCALAPPDATA")
         && !local_app.is_empty()
@@ -49,11 +67,16 @@ fn load_windows_font(names: &[&str]) -> Option<FontData> {
             candidates.push(dir.join(name));
         }
     }
-    load_first_font(&candidates)
+    load_first_font_dedup(&candidates, loaded_by_path, font_data, key_name)
 }
 
 #[cfg(target_os = "macos")]
-fn load_macos_font(names: &[&str]) -> Option<FontData> {
+fn load_macos_font_dedup(
+    names: &[&str],
+    loaded_by_path: &mut HashMap<PathBuf, String>,
+    font_data: &mut std::collections::BTreeMap<String, Arc<FontData>>,
+    key_name: &str,
+) -> Option<String> {
     let mut dirs = Vec::with_capacity(4);
     if let Ok(home) = std::env::var("HOME")
         && !home.is_empty()
@@ -72,127 +95,195 @@ fn load_macos_font(names: &[&str]) -> Option<FontData> {
             candidates.push(dir.join(name));
         }
     }
-    load_first_font(&candidates)
+    load_first_font_dedup(&candidates, loaded_by_path, font_data, key_name)
 }
 
 pub fn configure_fonts(ctx: &Context) {
     let mut fonts = FontDefinitions::default();
+    let mut loaded_by_path: HashMap<PathBuf, String> = HashMap::new();
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     let (sans_reg, sans_semi, sans_fallback, math_fallback, mono_reg) = (
-        load_first_font(&[
-            "/usr/share/fonts/opentype/inter/Inter-Regular.otf",
-            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        ]),
-        load_first_font(&[
-            "/usr/share/fonts/opentype/inter/Inter-SemiBold.otf",
-            "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        ]),
-        load_first_font(&[
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-        ]),
-        load_first_font(&["/usr/share/fonts/truetype/noto/NotoSansMath-Regular.ttf"]),
-        load_first_font(&[
-            "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-        ]),
+        load_first_font_dedup(
+            &[
+                "/usr/share/fonts/opentype/inter/Inter-Regular.otf",
+                "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            ],
+            &mut loaded_by_path,
+            &mut fonts.font_data,
+            "sys_sans",
+        ),
+        load_first_font_dedup(
+            &[
+                "/usr/share/fonts/opentype/inter/Inter-SemiBold.otf",
+                "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            ],
+            &mut loaded_by_path,
+            &mut fonts.font_data,
+            "sys_semibold",
+        ),
+        load_first_font_dedup(
+            &[
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+            ],
+            &mut loaded_by_path,
+            &mut fonts.font_data,
+            "sys_sans_fallback",
+        ),
+        load_first_font_dedup(
+            &["/usr/share/fonts/truetype/noto/NotoSansMath-Regular.ttf"],
+            &mut loaded_by_path,
+            &mut fonts.font_data,
+            "sys_math_fallback",
+        ),
+        load_first_font_dedup(
+            &[
+                "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            ],
+            &mut loaded_by_path,
+            &mut fonts.font_data,
+            "sys_mono",
+        ),
     );
 
     #[cfg(target_os = "windows")]
     let (sans_reg, sans_semi, sans_fallback, math_fallback, mono_reg) = (
-        load_windows_font(&[
-            "Inter-Regular.otf",
-            "Inter-Regular.ttf",
-            "segoeui.ttf",
-            "arial.ttf",
-        ]),
-        load_windows_font(&[
-            "Inter-SemiBold.otf",
-            "Inter-SemiBold.ttf",
-            "seguisb.ttf",
-            "segoeuib.ttf",
-            "arialbd.ttf",
-        ]),
-        load_windows_font(&["segoeui.ttf", "arial.ttf"]),
-        load_windows_font(&["seguisym.ttf", "arial.ttf"]),
-        load_windows_font(&[
-            "CascadiaMono.ttf",
-            "JetBrainsMono-Regular.ttf",
-            "consola.ttf",
-            "lucon.ttf",
-        ]),
+        load_windows_font_dedup(
+            &[
+                "Inter-Regular.otf",
+                "Inter-Regular.ttf",
+                "segoeui.ttf",
+                "arial.ttf",
+            ],
+            &mut loaded_by_path,
+            &mut fonts.font_data,
+            "sys_sans",
+        ),
+        load_windows_font_dedup(
+            &[
+                "Inter-SemiBold.otf",
+                "Inter-SemiBold.ttf",
+                "seguisb.ttf",
+                "segoeuib.ttf",
+                "arialbd.ttf",
+            ],
+            &mut loaded_by_path,
+            &mut fonts.font_data,
+            "sys_semibold",
+        ),
+        load_windows_font_dedup(
+            &["segoeui.ttf", "arial.ttf"],
+            &mut loaded_by_path,
+            &mut fonts.font_data,
+            "sys_sans_fallback",
+        ),
+        load_windows_font_dedup(
+            &["seguisym.ttf", "arial.ttf"],
+            &mut loaded_by_path,
+            &mut fonts.font_data,
+            "sys_math_fallback",
+        ),
+        load_windows_font_dedup(
+            &[
+                "CascadiaMono.ttf",
+                "JetBrainsMono-Regular.ttf",
+                "consola.ttf",
+                "lucon.ttf",
+            ],
+            &mut loaded_by_path,
+            &mut fonts.font_data,
+            "sys_mono",
+        ),
     );
 
     #[cfg(target_os = "macos")]
     let (sans_reg, sans_semi, sans_fallback, math_fallback, mono_reg) = (
-        load_macos_font(&[
-            "Inter-Regular.otf",
-            "Inter-Regular.ttf",
-            "SFNS.ttf",
-            "Arial.ttf",
-            "HelveticaNeue.ttc",
-        ]),
-        load_macos_font(&[
-            "Inter-SemiBold.otf",
-            "Inter-SemiBold.ttf",
-            "Arial Bold.ttf",
-            "SFNS.ttf",
-            "HelveticaNeue.ttc",
-        ]),
-        load_macos_font(&["SFNS.ttf", "Arial.ttf", "HelveticaNeue.ttc"]),
-        load_macos_font(&[
-            "Apple Symbols.ttf",
-            "STIXTwoMath-Regular.otf",
-            "STIXGeneral.otf",
-            "Arial Unicode.ttf",
-        ]),
-        load_macos_font(&[
-            "JetBrainsMono-Regular.ttf",
-            "SFNSMono.ttf",
-            "Menlo.ttc",
-            "Monaco.ttf",
-            "Andale Mono.ttf",
-        ]),
+        load_macos_font_dedup(
+            &[
+                "Inter-Regular.otf",
+                "Inter-Regular.ttf",
+                "SFNS.ttf",
+                "Arial.ttf",
+                "HelveticaNeue.ttc",
+            ],
+            &mut loaded_by_path,
+            &mut fonts.font_data,
+            "sys_sans",
+        ),
+        load_macos_font_dedup(
+            &[
+                "Inter-SemiBold.otf",
+                "Inter-SemiBold.ttf",
+                "Arial Bold.ttf",
+                "SFNS.ttf",
+                "HelveticaNeue.ttc",
+            ],
+            &mut loaded_by_path,
+            &mut fonts.font_data,
+            "sys_semibold",
+        ),
+        load_macos_font_dedup(
+            &["SFNS.ttf", "Arial.ttf", "HelveticaNeue.ttc"],
+            &mut loaded_by_path,
+            &mut fonts.font_data,
+            "sys_sans_fallback",
+        ),
+        load_macos_font_dedup(
+            &[
+                "Apple Symbols.ttf",
+                "STIXTwoMath-Regular.otf",
+                "STIXGeneral.otf",
+                "Arial Unicode.ttf",
+            ],
+            &mut loaded_by_path,
+            &mut fonts.font_data,
+            "sys_math_fallback",
+        ),
+        load_macos_font_dedup(
+            &[
+                "JetBrainsMono-Regular.ttf",
+                "SFNSMono.ttf",
+                "Menlo.ttc",
+                "Monaco.ttf",
+                "Andale Mono.ttf",
+            ],
+            &mut loaded_by_path,
+            &mut fonts.font_data,
+            "sys_mono",
+        ),
     );
 
     let mut prop_list = Vec::new();
     let mut semi_list = Vec::new();
     let mut mono_list = Vec::new();
 
-    if let Some(f) = sans_reg {
-        fonts.font_data.insert("sys_sans".into(), Arc::new(f));
-        prop_list.push("sys_sans".into());
+    if let Some(k) = sans_reg {
+        prop_list.push(k.clone());
+        if sans_semi.is_none() {
+            semi_list.push(k);
+        }
     }
-    if let Some(f) = sans_semi {
-        fonts.font_data.insert("sys_semibold".into(), Arc::new(f));
-        semi_list.push("sys_semibold".into());
-    } else if fonts.font_data.contains_key("sys_sans") {
-        semi_list.push("sys_sans".into());
+    if let Some(k) = sans_semi {
+        semi_list.push(k);
     }
-    if let Some(f) = mono_reg {
-        fonts.font_data.insert("sys_mono".into(), Arc::new(f));
-        mono_list.push("sys_mono".into());
+    if let Some(k) = mono_reg {
+        mono_list.push(k);
     }
-    if let Some(f) = sans_fallback {
-        fonts
-            .font_data
-            .insert("sys_sans_fallback".into(), Arc::new(f));
-        prop_list.push("sys_sans_fallback".into());
-        semi_list.push("sys_sans_fallback".into());
-        mono_list.push("sys_sans_fallback".into());
+    if let Some(k) = sans_fallback {
+        prop_list.push(k.clone());
+        semi_list.push(k.clone());
+        mono_list.push(k);
     }
-    if let Some(f) = math_fallback {
-        fonts
-            .font_data
-            .insert("sys_math_fallback".into(), Arc::new(f));
-        prop_list.push("sys_math_fallback".into());
-        semi_list.push("sys_math_fallback".into());
-        mono_list.push("sys_math_fallback".into());
+    if let Some(k) = math_fallback {
+        prop_list.push(k.clone());
+        semi_list.push(k.clone());
+        mono_list.push(k);
     }
 
     if let Some(existing) = fonts.families.get(&FontFamily::Proportional).cloned() {
@@ -618,14 +709,9 @@ pub(crate) fn draw_pill_button(
     keycap: Option<&str>,
 ) -> egui::Response {
     let font = FontId::new(11.5, semibold_family());
-    let text_color = if active {
-        theme.accent_bright
-    } else {
-        theme.text_secondary
-    };
     let galley = ui
         .painter()
-        .layout_job(tracked_job(label, font.clone(), text_color, 0.25));
+        .layout_job(tracked_job(label, font, Color32::PLACEHOLDER, 0.25));
 
     let dot_w = if warm_dot { 11.0 } else { 0.0 };
     let icon_w = if icon.is_some() { 18.0 } else { 0.0 };
@@ -678,11 +764,10 @@ pub(crate) fn draw_pill_button(
         cursor_x += icon_w;
     }
 
-    let text_galley = ui.painter().layout_job(tracked_job(label, font, fg, 0.25));
-    let tw = text_galley.size().x;
-    ui.painter().galley(
-        Pos2::new(cursor_x, cy - text_galley.size().y * 0.5),
-        text_galley,
+    let tw = galley.size().x;
+    ui.painter().galley_with_override_text_color(
+        Pos2::new(cursor_x, cy - galley.size().y * 0.5),
+        galley,
         fg,
     );
     cursor_x += tw;
@@ -738,9 +823,9 @@ pub(crate) fn draw_standalone_glass_pill(
     keycap: Option<&str>,
 ) -> egui::Response {
     let font = FontId::new(12.0, semibold_family());
-    let galley =
-        ui.painter()
-            .layout_job(tracked_job(label, font.clone(), theme.text_primary, 0.35));
+    let galley = ui
+        .painter()
+        .layout_job(tracked_job(label, font, Color32::PLACEHOLDER, 0.35));
     let keycap_w = keycap
         .map(|k| (k.len() as f32 * 6.5 + 8.0).max(16.0) + 6.0)
         .unwrap_or(0.0);
@@ -782,11 +867,10 @@ pub(crate) fn draw_standalone_glass_pill(
     icon(ui.painter(), Pos2::new(x + 7.0, cy), fg);
     x += 20.0;
 
-    let label_galley = ui.painter().layout_job(tracked_job(label, font, fg, 0.35));
-    let lw = label_galley.size().x;
-    ui.painter().galley(
-        Pos2::new(x, cy - label_galley.size().y * 0.5),
-        label_galley,
+    let lw = galley.size().x;
+    ui.painter().galley_with_override_text_color(
+        Pos2::new(x, cy - galley.size().y * 0.5),
+        galley,
         fg,
     );
     x += lw;

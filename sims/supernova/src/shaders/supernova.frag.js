@@ -152,7 +152,8 @@ float evalHG(float cosTheta, float g) {
   float gc = clamp(g, -0.95, 0.95);
   float mu = clamp(cosTheta, -1.0, 1.0);
   float denom = max(1.0 + gc * gc - 2.0 * gc * mu, 1e-4);
-  return ((1.0 - gc * gc) * INV_4_PI) / (denom * sqrt(denom));
+  float invS = inversesqrt(denom);
+  return ((1.0 - gc * gc) * INV_4_PI) * (invS * invS * invS);
 }
 
 float evalDualHG(float cosTheta, float g) {
@@ -182,44 +183,61 @@ float evalWrenningeMultiScatter(float tauShadow, float cosTheta, float g) {
 // 3. 3D RAYLEIGH–TAYLOR FILAMENT SCULPTING, IONIZATION ZONES & SHADOW TAPS
 // ============================================================================
 
-float gaussianBand(float x, float center, float width) {
-  float u = (x - center) / max(width, 1e-4);
+struct SupernovaConsts {
+  float invRShock;
+  float qBaseScale;
+  float adv065;
+  float adv115;
+  float rtTurb028;
+  float rtTurb012;
+  float rtTurb038;
+  float dustAgeScale;
+  float pwnAgeScale;
+  float filBlend;
+  float bokDensity;
+  float emissionGain;
+  float gasExtScale;
+  float invWShadow;
+  float invWOIII;
+  float invWHa;
+  float invWSII;
+  vec3  pwnColor;
+  vec3  cOIII;
+  vec3  cHa;
+  vec3  cSII;
+  vec3  ambientBounce;
+};
+
+float gaussianBandInv(float x, float center, float invWidth) {
+  float u = (x - center) * invWidth;
   return exp(-min(u * u, 40.0));
 }
 
 float evalShadowExtinction(
-  vec3 p,
-  float rShock,
-  float shockAgeNorm,
-  float rtTurbulence,
-  float dustOpacity,
-  float bokDensity,
-  float shellThickness,
-  float emissionGain,
-  float simTime,
-  float expansionSpeed
+  vec3 qBaseTap,
+  float uTap,
+  float dipoleAsym,
+  SupernovaConsts sc
 ) {
-  float r2 = dot(p, p);
-  float r = sqrt(r2);
-  float u = r / max(rShock, 0.5);
-  if (u > 1.66) return 0.0;
+  if (uTap > 1.66) return 0.0;
 
-  vec3 rHat = (r > 1e-5) ? (p / max(r, 1e-5)) : vec3(0.0, 1.0, 0.0);
-  float adv = simTime * expansionSpeed * 0.028;
+  vec4 n1 = textureLod(uVolumeNoise, qBaseTap, 0.0);
 
-  vec3 qBase = p * (0.14 / max(rShock / 3.2, 0.5)) - rHat * (adv * 0.65);
-  vec4 n1 = textureLod(uVolumeNoise, qBase, 0.0);
+  float asym = 1.0 + dipoleAsym + 0.14 * (n1.r - 0.5);
+  float uWarp = (uTap / max(asym, 0.55)) + (n1.r - 0.5) * sc.rtTurb028;
 
-  float asym = 1.0 + 0.08 * (rHat.x * rHat.y - 0.55 * rHat.z) + 0.14 * (n1.r - 0.5);
-  float uWarp = (u / max(asym, 0.55)) + (n1.r - 0.5) * 0.28 * rtTurbulence;
+  float shellEnv = gaussianBandInv(uWarp, 0.94, sc.invWShadow);
+  float gasExt = sc.gasExtScale * shellEnv * (0.55 + 0.45 * n1.g);
 
-  float shellEnv = gaussianBand(uWarp, 0.94, 0.24 * shellThickness);
-  float dustBand = smoothstep(0.74, 1.02, uWarp) * (1.0 - smoothstep(1.34, 1.64, uWarp));
-  float clump = smoothstep(0.32, 0.88, n1.r * 0.58 + (1.0 - n1.b) * 0.42);
-  float bokKnot = smoothstep(0.56, 0.90, (1.0 - n1.b) * 0.72 + n1.g * 0.28) * dustBand * bokDensity;
-
-  float gasExt = 0.09 * shellEnv * emissionGain * (0.55 + 0.45 * n1.g);
-  float dustExt = (0.82 * clump * dustBand + 2.35 * bokKnot) * dustOpacity * (0.75 + 0.45 * shockAgeNorm);
+  float dustExt = 0.0;
+  if (sc.dustAgeScale > 1e-5) {
+    float dustBand = smoothstep(0.74, 1.02, uWarp) * (1.0 - smoothstep(1.34, 1.64, uWarp));
+    if (dustBand > 1e-4) {
+      float clump = smoothstep(0.32, 0.88, n1.r * 0.58 + (1.0 - n1.b) * 0.42);
+      float bokKnot = smoothstep(0.56, 0.90, (1.0 - n1.b) * 0.72 + n1.g * 0.28) * dustBand * sc.bokDensity;
+      dustExt = (0.82 * clump * dustBand + 2.35 * bokKnot) * sc.dustAgeScale;
+    }
+  }
   return gasExt + dustExt;
 }
 
@@ -232,19 +250,12 @@ struct VolSample {
 
 VolSample evalVolumeSample(
   vec3 p,
-  float rShock,
-  float shockAgeNorm,
-  float rtTurbulence,
-  float dustOpacity,
-  float filamentContrast,
-  float cavityGlow,
-  float bokDensity,
-  float shellThickness,
-  float emissionGain,
-  int paletteMode,
-  float centralTempK,
-  float simTime,
-  float expansionSpeed
+  float u,
+  vec3 rHat,
+  vec3 pBase,
+  vec3 advShift,
+  float dipoleAsym,
+  SupernovaConsts sc
 ) {
   VolSample vs;
   vs.emission = vec3(0.0);
@@ -252,85 +263,63 @@ VolSample evalVolumeSample(
   vs.sigmaScat = 0.0;
   vs.sigmaExt = 0.0;
 
-  float r2 = dot(p, p);
-  float r = sqrt(r2);
-  float u = r / max(rShock, 0.5);
-  if (u > 1.68) return vs;
-
-  // Origin-safe unit radial direction
-  vec3 rHat = (r > 1e-5) ? (p / max(r, 1e-5)) : vec3(0.0, 1.0, 0.0);
-  float adv = simTime * expansionSpeed * 0.028;
-
   // Tap 1: Low-frequency domain warp + natural dipolar asymmetry
-  vec3 qBase = p * (0.14 / max(rShock / 3.2, 0.5)) - rHat * (adv * 0.65);
+  vec3 qBase = pBase - advShift;
   vec4 n1 = textureLod(uVolumeNoise, qBase, 0.0);
 
-  float asym = 1.0 + 0.08 * (rHat.x * rHat.y - 0.55 * rHat.z) + 0.14 * (n1.r - 0.5);
-  float uWarp = (u / max(asym, 0.55)) + (n1.r - 0.5) * 0.28 * rtTurbulence + (n1.g - 0.5) * 0.12 * rtTurbulence;
+  float asym = 1.0 + dipoleAsym + 0.14 * (n1.r - 0.5);
+  float uWarp = (u / max(asym, 0.55)) + (n1.r - 0.5) * sc.rtTurb028 + (n1.g - 0.5) * sc.rtTurb012;
 
   // Tap 2: Pole-free 3D spherical Rayleigh–Taylor stretched coordinates
-  vec3 qRadial = rHat * (1.35 + 0.52 * log(1.0 + 2.1 * u))
-               + (n1.rgb - vec3(0.5)) * (0.38 * rtTurbulence)
-               - rHat * (adv * 1.15);
+  vec3 qRadial = rHat * (1.35 + 0.52 * log(1.0 + 2.1 * u) - sc.adv115)
+               + (n1.rgb - vec3(0.5)) * sc.rtTurb038;
   vec3 qRT = mix(p * 0.45, qRadial * 0.48, smoothstep(0.03, 0.18, u));
   vec4 n2 = textureLod(uVolumeNoise, qRT, 0.0);
 
   // Sculpted Rayleigh-Taylor filaments and cellular shock fronts
   float rtBase = clamp(n2.g * 0.64 + (1.0 - n2.b) * 0.36, 0.0, 1.0);
   float rtSharp = smoothstep(0.32, 0.92, rtBase);
-  float rtFine = mix(rtSharp, rtSharp * rtSharp * (0.55 + 0.45 * n2.a), clamp(filamentContrast - 0.5, 0.0, 1.0));
+  float rtFine = mix(rtSharp, rtSharp * rtSharp * (0.55 + 0.45 * n2.a), sc.filBlend);
   float rtFingers = (0.28 + 1.45 * rtFine) * (0.55 + 0.45 * n1.g);
 
   // Layered astrophysical ionization zones
   // 1) Central Pulsar Wind Nebula (PWN) synchrotron cavity
   float pwnBand = smoothstep(0.04, 0.16, u) * (1.0 - smoothstep(0.34, 0.64, u));
   float pwnWisp = smoothstep(0.28, 0.88, n1.g * 0.52 + n2.a * 0.48);
-  float pwnVal = pwnBand * (0.25 + 0.95 * pwnWisp) * cavityGlow * (1.20 - 0.45 * shockAgeNorm);
+  float pwnVal = pwnBand * (0.25 + 0.95 * pwnWisp) * sc.pwnAgeScale;
 
   // 2) Inner [O III] 500.7 nm photoionized shell
-  float oiiiBand = gaussianBand(uWarp, 0.72, 0.21 * shellThickness);
+  float oiiiBand = gaussianBandInv(uWarp, 0.72, sc.invWOIII);
   float oiiiVal = oiiiBand * (0.35 + 0.85 * n2.r) * (0.75 + 0.45 * rtSharp);
 
   // 3) Shock-compressed H-alpha 656.3 nm Rayleigh–Taylor filament shell
-  float haBand = gaussianBand(uWarp, 0.96, 0.15 * shellThickness);
+  float haBand = gaussianBandInv(uWarp, 0.96, sc.invWHa);
   float haVal = haBand * rtFingers;
 
   // 4) Outer [S II] 671.6/673.1 nm leading blast-wave shock ridge
-  float siiBand = gaussianBand(uWarp, 1.09, 0.11 * shellThickness);
+  float siiBand = gaussianBandInv(uWarp, 1.09, sc.invWSII);
   float siiVal = siiBand * (0.30 + 1.25 * rtFine) * smoothstep(0.35, 0.85, n2.g + 0.22 * n1.g);
 
   // 5) Cold outer/foreground dust lanes & dense dark Bok globules (non-emissive)
-  float dustBand = smoothstep(0.74, 1.02, uWarp) * (1.0 - smoothstep(1.34, 1.64, uWarp));
-  float dustClump = smoothstep(0.30, 0.86, n1.r * 0.54 + (1.0 - n2.b) * 0.46);
-  float bokRaw = clamp((1.0 - n2.b) * 0.65 + (1.0 - n1.b) * 0.35, 0.0, 1.0);
-  float bokKnot = smoothstep(0.58, 0.91, bokRaw) * dustBand * bokDensity;
-
-  float sigmaDust = (0.78 * dustClump * dustBand + 2.45 * bokKnot) * dustOpacity * (0.75 + 0.45 * shockAgeNorm);
-
-  // Emission palette mapping: 0 = Hubble SHO Narrowband, 1 = True Color Broadband
-  vec3 cOIII;
-  vec3 cHa;
-  vec3 cSII;
-  if (paletteMode == 0) {
-    // Hubble SHO: [S II] -> Gold-Amber, H-alpha -> Emerald-Jade, [O III] -> Sapphire-Cyan
-    cSII  = vec3(1.00, 0.56, 0.10);
-    cHa   = vec3(0.28, 0.88, 0.40);
-    cOIII = vec3(0.08, 0.72, 1.00);
-  } else {
-    // True Color Broadband: H-alpha -> Crimson, [O III] -> Teal, [S II] -> Ruby-Gold
-    cHa   = vec3(1.00, 0.14, 0.24);
-    cOIII = vec3(0.06, 0.88, 0.78);
-    cSII  = vec3(0.98, 0.42, 0.10);
+  float sigmaDust = 0.0;
+  if (sc.dustAgeScale > 1e-5) {
+    float dustBand = smoothstep(0.74, 1.02, uWarp) * (1.0 - smoothstep(1.34, 1.64, uWarp));
+    if (dustBand > 1e-4) {
+      float dustClump = smoothstep(0.30, 0.86, n1.r * 0.54 + (1.0 - n2.b) * 0.46);
+      float bokRaw = clamp((1.0 - n2.b) * 0.65 + (1.0 - n1.b) * 0.35, 0.0, 1.0);
+      float bokKnot = smoothstep(0.58, 0.91, bokRaw) * dustBand * sc.bokDensity;
+      sigmaDust = (0.78 * dustClump * dustBand + 2.45 * bokKnot) * sc.dustAgeScale;
+    }
   }
 
-  vec3 pwnColor = mix(vec3(0.28, 0.66, 1.00), sampleBlackbody(clamp(centralTempK * 0.28, 7000.0, 40000.0)), 0.45);
-  vec3 gasEmit = pwnColor * (pwnVal * 0.58)
-               + cOIII * (oiiiVal * 0.66)
-               + cHa   * (haVal   * 0.92)
-               + cSII  * (siiVal  * 0.78);
-  gasEmit *= emissionGain;
+  vec3 gasEmit = (
+    sc.pwnColor * (pwnVal * 0.58)
+    + sc.cOIII  * (oiiiVal * 0.66)
+    + sc.cHa    * (haVal   * 0.92)
+    + sc.cSII   * (siiVal  * 0.78)
+  ) * sc.emissionGain;
 
-  float gasDensity = (0.24 * pwnVal + 0.52 * oiiiVal + 0.88 * haVal + 0.60 * siiVal) * emissionGain;
+  float gasDensity = (0.24 * pwnVal + 0.52 * oiiiVal + 0.88 * haVal + 0.60 * siiVal) * sc.emissionGain;
   float sigmaGasExt = 0.085 * gasDensity;
 
   vs.emission = gasEmit;
@@ -344,11 +333,8 @@ VolSample evalVolumeSample(
 // 4. CENTRAL WHITE DWARF / PULSAR ILLUMINATOR (ORIGIN-SAFE)
 // ============================================================================
 
-vec3 evalCentralCore(vec3 camPos, vec3 rayDir, float starLuminosity, float centralTempK) {
-  if (starLuminosity <= 1e-4) return vec3(0.0);
-
-  float tStar = -dot(camPos, rayDir);
-  if (tStar <= -0.15) return vec3(0.0);
+vec3 evalCentralCore(vec3 camPos, float tStar, float starLuminosity, vec3 starCol) {
+  if (starLuminosity <= 1e-4 || tStar <= -0.15) return vec3(0.0);
 
   float tFwd = max(tStar, 0.0);
   float fwdFade = smoothstep(-0.14, 0.18, tStar);
@@ -360,9 +346,7 @@ vec3 evalCentralCore(vec3 camPos, vec3 rayDir, float starLuminosity, float centr
   float corona = exp(-min(d2 / haloScale, 40.0));
   float distAtten = 1.0 / (1.0 + 0.045 * tFwd * tFwd);
 
-  vec3 starCol = sampleBlackbody(centralTempK);
   vec3 coronaCol = mix(starCol, vec3(0.42, 0.78, 1.00), 0.38);
-
   return (starCol * (3.2 * coreDisk) + coronaCol * (0.48 * corona)) * starLuminosity * fwdFade * distAtten;
 }
 
@@ -418,9 +402,46 @@ void main() {
   float fIdx = float(frameIndex & 1023);
   vec4 bn = fract(bnRaw + fIdx * vec4(0.75487766, 0.56984029, 0.43015971, 0.61803399));
 
+  vec3 centralStarCol = sampleBlackbody(centralTempK);
+  vec3 starLightTint = mix(centralStarCol, vec3(0.65, 0.88, 1.00), 0.25);
+
+  SupernovaConsts sc;
+  sc.invRShock = 1.0 / rShock;
+  sc.qBaseScale = 0.14 / max(rShock / 3.2, 0.5);
+  float adv = simTime * expansionSpeed * 0.028;
+  sc.adv065 = adv * 0.65;
+  sc.adv115 = adv * 1.15;
+  sc.rtTurb028 = 0.28 * rtTurbulence;
+  sc.rtTurb012 = 0.12 * rtTurbulence;
+  sc.rtTurb038 = 0.38 * rtTurbulence;
+  sc.dustAgeScale = dustOpacity * (0.75 + 0.45 * shockAgeNorm);
+  sc.pwnAgeScale = cavityGlow * (1.20 - 0.45 * shockAgeNorm);
+  sc.filBlend = clamp(filamentContrast - 0.5, 0.0, 1.0);
+  sc.bokDensity = bokDensity;
+  sc.emissionGain = emissionGain;
+  sc.gasExtScale = 0.09 * emissionGain;
+  sc.invWShadow = 1.0 / max(0.24 * shellThickness, 1e-4);
+  sc.invWOIII = 1.0 / max(0.21 * shellThickness, 1e-4);
+  sc.invWHa = 1.0 / max(0.15 * shellThickness, 1e-4);
+  sc.invWSII = 1.0 / max(0.11 * shellThickness, 1e-4);
+  sc.pwnColor = mix(vec3(0.28, 0.66, 1.00), sampleBlackbody(clamp(centralTempK * 0.28, 7000.0, 40000.0)), 0.45);
+  if (paletteMode == 0) {
+    // Hubble SHO: [S II] -> Gold-Amber, H-alpha -> Emerald-Jade, [O III] -> Sapphire-Cyan
+    sc.cSII  = vec3(1.00, 0.56, 0.10);
+    sc.cHa   = vec3(0.28, 0.88, 0.40);
+    sc.cOIII = vec3(0.08, 0.72, 1.00);
+  } else {
+    // True Color Broadband: H-alpha -> Crimson, [O III] -> Teal, [S II] -> Ruby-Gold
+    sc.cHa   = vec3(1.00, 0.14, 0.24);
+    sc.cOIII = vec3(0.06, 0.88, 0.78);
+    sc.cSII  = vec3(0.98, 0.42, 0.10);
+  }
+  sc.ambientBounce = mix(vec3(0.04, 0.09, 0.14), vec3(0.11, 0.08, 0.05), float(1 - paletteMode)) * emissionGain;
+
   // Analytic ray–bounding-sphere intersection
   float rBound = rShock * 1.68;
   float bSphere = dot(camPos, rayDir);
+  float tStar = -bSphere;
   float cSphere = dot(camPos, camPos) - rBound * rBound;
   float disc = bSphere * bSphere - cSphere;
 
@@ -429,8 +450,8 @@ void main() {
 
   if (disc > 0.0) {
     float sqrtDisc = sqrt(disc);
-    float tNear = max(0.0, -bSphere - sqrtDisc);
-    float tFar = -bSphere + sqrtDisc;
+    float tNear = max(0.0, tStar - sqrtDisc);
+    float tFar = tStar + sqrtDisc;
 
     if (tFar > tNear) {
       int nSteps = isProgressive ? 112 : 84;
@@ -442,14 +463,11 @@ void main() {
 
       float marchSpan = tFar - tNear;
       float ds = marchSpan / float(nSteps);
-      float tStar = -dot(camPos, rayDir);
       float starTransmittance = 1.0;
 
-      // Exponentially spaced shadow tap fractions + weights toward central remnant (0, 0, 0)
-      const float tapFrac[6] = float[6](0.05, 0.11, 0.20, 0.34, 0.54, 0.78);
-      const float tapW[6]    = float[6](0.07, 0.09, 0.13, 0.18, 0.23, 0.30);
-
-      vec3 starLightTint = mix(sampleBlackbody(centralTempK), vec3(0.65, 0.88, 1.00), 0.25);
+      // Exponentially spaced shadow tap scales + weights toward central remnant (0, 0, 0)
+      const float tapScale[6] = float[6](0.95, 0.89, 0.80, 0.66, 0.46, 0.22);
+      const float tapW[6]     = float[6](0.07, 0.09, 0.13, 0.18, 0.23, 0.30);
 
       for (int step = 0; step < 144; ++step) {
         if (step >= nSteps) break;
@@ -458,74 +476,58 @@ void main() {
         float t = tPrev + bn.x * ds;
         vec3 p = camPos + rayDir * t;
 
-        VolSample vs = evalVolumeSample(
-          p,
-          rShock,
-          shockAgeNorm,
-          rtTurbulence,
-          dustOpacity,
-          filamentContrast,
-          cavityGlow,
-          bokDensity,
-          shellThickness,
-          emissionGain,
-          paletteMode,
-          centralTempK,
-          simTime,
-          expansionSpeed
-        );
-
-        vec3 stepSource = vs.emission;
-
-        if (vs.sigmaScat > 1e-4) {
-          float r2 = dot(p, p);
-          float r = sqrt(r2);
-          vec3 rHat = (r > 1e-5) ? (p / max(r, 1e-5)) : vec3(0.0, 1.0, 0.0);
-
-          // 6 exponentially spaced shadow taps toward (0, 0, 0)
-          float tauShadow = 0.0;
-          if (starLuminosity > 1e-3 && r > 0.08) {
-            float shadowSpan = min(r, rBound);
-            for (int st = 0; st < 6; ++st) {
-              vec3 pTap = p * max(1.0 - tapFrac[st], 0.0);
-              float extTap = evalShadowExtinction(
-                pTap,
-                rShock,
-                shockAgeNorm,
-                rtTurbulence,
-                dustOpacity,
-                bokDensity,
-                shellThickness,
-                emissionGain,
-                simTime,
-                expansionSpeed
-              );
-              tauShadow += extTap * (tapW[st] * shadowSpan);
-            }
-          }
-
-          // Wrenninge 4-octave multiple scattering + dual-lobe Henyey–Greenstein
-          float cosTheta = dot(rHat, -rayDir);
-          float wrenninge = evalWrenningeMultiScatter(tauShadow, cosTheta, hgAnisotropy);
-          float invDist2 = 1.0 / (r2 + 0.25);
-          vec3 directScatter = starLightTint * (starLuminosity * 6.5 * invDist2 * wrenninge);
-
-          // Ambient nebula bounce illumination so shadowed Bok globule edges stay rich
-          vec3 ambientBounce = mix(vec3(0.04, 0.09, 0.14), vec3(0.11, 0.08, 0.05), float(1 - paletteMode)) * emissionGain;
-
-          stepSource += vs.sigmaScat * vs.scatterAlbedo * (directScatter + ambientBounce);
-        }
+        float r2 = dot(p, p);
+        float r = sqrt(r2);
+        float u = r * sc.invRShock;
 
         float prevTrans = transmittance;
-        float sigmaT = max(vs.sigmaExt, 0.0);
-        if (sigmaT > 1e-4 || dot(stepSource, stepSource) > 1e-10) {
-          float tau = min(sigmaT * ds, 40.0);
-          float stepT = exp(-tau);
-          vec3 stepRad = (sigmaT > 1e-4)
-            ? stepSource * ((1.0 - stepT) / max(sigmaT, 1e-5))
-            : stepSource * ds;
-          radiance += transmittance * stepRad;
-          transmittance *= stepT;
+        if (u <= 1.68) {
+          vec3 rHat = (r > 1e-5) ? (p / max(r, 1e-5)) : vec3(0.0, 1.0, 0.0);
+          vec3 pBase = p * sc.qBaseScale;
+          vec3 advShift = rHat * sc.adv065;
+          float dipoleAsym = 0.08 * (rHat.x * rHat.y - 0.55 * rHat.z);
+
+          VolSample vs = evalVolumeSample(p, u, rHat, pBase, advShift, dipoleAsym, sc);
+          vec3 stepSource = vs.emission;
+
+          if (vs.sigmaScat > 1e-4) {
+            vec3 directScatter = vec3(0.0);
+            if (starLuminosity > 1e-3) {
+              // 6 exponentially spaced shadow taps toward (0, 0, 0)
+              float tauShadow = 0.0;
+              if (r > 0.08 && u >= 0.35) {
+                float shadowSpan = min(r, rBound);
+                for (int st = 0; st < 6; ++st) {
+                  float s = tapScale[st];
+                  vec3 qBaseTap = pBase * s - advShift;
+                  float uTap = u * s;
+                  float extTap = evalShadowExtinction(qBaseTap, uTap, dipoleAsym, sc);
+                  tauShadow += extTap * (tapW[st] * shadowSpan);
+                  if (tauShadow > 40.0) break;
+                }
+              }
+
+              // Wrenninge 4-octave multiple scattering + dual-lobe Henyey–Greenstein
+              float cosTheta = dot(rHat, -rayDir);
+              float wrenninge = evalWrenningeMultiScatter(tauShadow, cosTheta, hgAnisotropy);
+              float invDist2 = 1.0 / (r2 + 0.25);
+              directScatter = starLightTint * (starLuminosity * 6.5 * invDist2 * wrenninge);
+            }
+
+            // Ambient nebula bounce illumination so shadowed Bok globule edges stay rich
+            stepSource += vs.sigmaScat * vs.scatterAlbedo * (directScatter + sc.ambientBounce);
+          }
+
+          float sigmaT = max(vs.sigmaExt, 0.0);
+          if (sigmaT > 1e-4 || dot(stepSource, stepSource) > 1e-10) {
+            float tau = min(sigmaT * ds, 40.0);
+            float stepT = exp(-tau);
+            vec3 stepRad = (sigmaT > 1e-4)
+              ? stepSource * ((1.0 - stepT) / max(sigmaT, 1e-5))
+              : stepSource * ds;
+            radiance += transmittance * stepRad;
+            transmittance *= stepT;
+          }
         }
 
         if (tStar > tNear) {
@@ -543,13 +545,13 @@ void main() {
         }
       }
 
-      radiance += starTransmittance * evalCentralCore(camPos, rayDir, starLuminosity, centralTempK);
+      radiance += starTransmittance * evalCentralCore(camPos, tStar, starLuminosity, centralStarCol);
     } else {
       // Ray exits sphere behind camera, yet core could still be barely forward if inside edge
-      radiance += evalCentralCore(camPos, rayDir, starLuminosity, centralTempK);
+      radiance += evalCentralCore(camPos, tStar, starLuminosity, centralStarCol);
     }
   } else {
-    radiance += evalCentralCore(camPos, rayDir, starLuminosity, centralTempK);
+    radiance += evalCentralCore(camPos, tStar, starLuminosity, centralStarCol);
   }
 
   radiance += transmittance * skyColor;

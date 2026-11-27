@@ -1191,3 +1191,9 @@ input[type="range"].hud-slider:focus-visible {
     animation-duration: 2.2s;
   }
 }
+
+body.reduced-glass .glass-surface {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--glass-bg-elevated);
+}

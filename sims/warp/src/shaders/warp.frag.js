@@ -56,14 +56,38 @@ const float INV_LOG_T_SPAN   = 1.0 / 3.91202300543;
 // 1. NVIDIA-SAFE HYPERBOLIC HELPERS & ADM WARP METRIC JACOBIANS
 // ============================================================================
 
+struct WarpConsts {
+  float R;
+  float invR;
+  float sigma;
+  float sigma2;
+  float v_s;
+  float frameBlend;
+  float extShiftZ;
+  float invDenom2;
+  float sigmaInvD2;
+  float sigma2InvD1;
+  float dfOverR0;
+  float dhOverR0;
+  float wallStep;
+  float invSigma16;
+  float weakTailR;
+  float rFlatIn;
+  float lentzEps2;
+  float advZWall;
+  float advZDust;
+  float bridgeAtten;
+  float scaleGain;
+  float speedGain;
+  float rDustInner;
+  float rDustKnee;
+  float rDustOuter;
+  float invDustFall;
+  int   metricType;
+};
+
 float safeTanh(float x) {
   return tanh(clamp(x, -15.0, 15.0));
-}
-
-float safeSech2(float x) {
-  if (abs(x) > 15.0) return 0.0;
-  float c = cosh(x);
-  return 1.0 / (c * c);
 }
 
 struct ShapeResult {
@@ -73,36 +97,20 @@ struct ShapeResult {
   float dfOverR;
 };
 
-ShapeResult evalShape(float r, float R, float sigma) {
-  float sr = sigma * R;
-  float tanhSR = safeTanh(sr);
-  float denom2 = max(2.0 * tanhSR, 1e-5);
-  float denom1 = max(tanhSR, 1e-5);
-
-  float a = sigma * (r + R);
-  float b = sigma * (r - R);
+ShapeResult evalShape(float r, WarpConsts wc, bool needD2f) {
+  float a = wc.sigma * (r + wc.R);
+  float b = wc.sigma * (r - wc.R);
   float ta = safeTanh(a);
   float tb = safeTanh(b);
-  float sa = safeSech2(a);
-  float sb = safeSech2(b);
+  float sa = max(1.0 - ta * ta, 0.0);
+  float sb = max(1.0 - tb * tb, 0.0);
 
   ShapeResult s;
-  s.f = (ta - tb) / denom2;
-  s.df = (sigma / denom2) * (sa - sb);
-  s.d2f = (sigma * sigma / denom1) * (-sa * ta + sb * tb);
-  s.dfOverR = (r < 1e-3) ? (-2.0 * sigma * sigma * safeSech2(sr)) : (s.df / r);
+  s.f = (ta - tb) * wc.invDenom2;
+  s.df = wc.sigmaInvD2 * (sa - sb);
+  s.d2f = needD2f ? (wc.sigma2InvD1 * (-sa * ta + sb * tb)) : 0.0;
+  s.dfOverR = (r < 1e-3) ? wc.dfOverR0 : (s.df / r);
   return s;
-}
-
-float evalLentzR(vec3 pos, float R) {
-  const float p = 1.38;
-  const float halfP = 0.69;
-  float eps = 0.12 * R;
-  float eps2 = eps * eps;
-  float rho2 = pos.x * pos.x + pos.y * pos.y;
-  float uVal = rho2 + eps2;
-  float vVal = pos.z * pos.z + eps2;
-  return pow(pow(uVal, halfP) + pow(vVal, halfP), 1.0 / p);
 }
 
 struct MetricSample {
@@ -115,54 +123,47 @@ struct MetricSample {
   float rEff;
 };
 
-MetricSample evalMetric(vec3 pos, float R, float sigma, float v_s, int metricType, float frameBlend) {
+MetricSample evalMetric(vec3 pos, WarpConsts wc) {
   MetricSample m;
   float r2 = dot(pos, pos);
   float r = sqrt(r2);
 
-  if (metricType == 0) {
-    ShapeResult sh = evalShape(r, R, sigma);
-    m.beta = vec3(0.0, 0.0, v_s * (1.0 - sh.f));
-    m.dBdx = vec3(0.0, 0.0, -v_s * sh.dfOverR * pos.x);
-    m.dBdy = vec3(0.0, 0.0, -v_s * sh.dfOverR * pos.y);
-    m.dBdz = vec3(0.0, 0.0, -v_s * sh.dfOverR * pos.z);
+  if (wc.metricType == 0) {
+    ShapeResult sh = evalShape(r, wc, false);
+    m.beta = vec3(0.0, 0.0, wc.v_s * (1.0 - sh.f));
+    m.dBdx = vec3(0.0, 0.0, -wc.v_s * sh.dfOverR * pos.x);
+    m.dBdy = vec3(0.0, 0.0, -wc.v_s * sh.dfOverR * pos.y);
+    m.dBdz = vec3(0.0, 0.0, -wc.v_s * sh.dfOverR * pos.z);
     m.theta = -m.dBdz.z;
     m.t00 = -(m.dBdx.z * m.dBdx.z + m.dBdy.z * m.dBdy.z) / (32.0 * PI);
     m.rEff = r;
-  } else if (metricType == 1) {
-    ShapeResult sh = evalShape(r, R, sigma);
+  } else if (wc.metricType == 1) {
+    ShapeResult sh = evalShape(r, wc, true);
     float h = sh.dfOverR;
-    float dhOverR;
-    if (r < 2e-3) {
-      float s2 = sigma * sigma;
-      float sech2SR = safeSech2(sigma * R);
-      dhOverR = (8.0 / 3.0) * (s2 * s2) * sech2SR * (3.0 * sech2SR - 1.0);
-    } else {
-      dhOverR = (sh.d2f - h) / (r * r);
-    }
-    float halfVs = 0.5 * v_s;
+    float dhOverR = (r < 2e-3) ? wc.dhOverR0 : ((sh.d2f - h) / (r * r));
+    float halfVs = 0.5 * wc.v_s;
     float rho2 = pos.x * pos.x + pos.y * pos.y;
 
     m.beta = vec3(
       halfVs * h * pos.x * pos.z,
       halfVs * h * pos.y * pos.z,
-      v_s * (1.0 - sh.f) - halfVs * h * rho2
+      wc.v_s * (1.0 - sh.f) - halfVs * h * rho2
     );
 
     m.dBdx = vec3(
       halfVs * (dhOverR * pos.x * pos.x * pos.z + h * pos.z),
       halfVs * (dhOverR * pos.x * pos.y * pos.z),
-      -2.0 * v_s * h * pos.x - halfVs * dhOverR * pos.x * rho2
+      -2.0 * wc.v_s * h * pos.x - halfVs * dhOverR * pos.x * rho2
     );
     m.dBdy = vec3(
       halfVs * (dhOverR * pos.y * pos.x * pos.z),
       halfVs * (dhOverR * pos.y * pos.y * pos.z + h * pos.z),
-      -2.0 * v_s * h * pos.y - halfVs * dhOverR * pos.y * rho2
+      -2.0 * wc.v_s * h * pos.y - halfVs * dhOverR * pos.y * rho2
     );
     m.dBdz = vec3(
       halfVs * (dhOverR * pos.z * pos.x * pos.z + h * pos.x),
       halfVs * (dhOverR * pos.z * pos.y * pos.z + h * pos.y),
-      -v_s * h * pos.z - halfVs * dhOverR * pos.z * rho2
+      -wc.v_s * h * pos.z - halfVs * dhOverR * pos.z * rho2
     );
 
     m.theta = 0.0;
@@ -179,11 +180,9 @@ MetricSample evalMetric(vec3 pos, float R, float sigma, float v_s, int metricTyp
   } else {
     const float p = 1.38;
     const float halfP = 0.69;
-    float eps = 0.12 * R;
-    float eps2 = eps * eps;
     float rho2 = pos.x * pos.x + pos.y * pos.y;
-    float uVal = rho2 + eps2;
-    float vVal = pos.z * pos.z + eps2;
+    float uVal = rho2 + wc.lentzEps2;
+    float vVal = pos.z * pos.z + wc.lentzEps2;
     float aTerm = pow(uVal, halfP);
     float bTerm = pow(vVal, halfP);
     float sTerm = aTerm + bTerm;
@@ -195,13 +194,12 @@ MetricSample evalMetric(vec3 pos, float R, float sigma, float v_s, int metricTyp
     float drdy = kRho * pos.y;
     float drdz = kZ * pos.z;
 
-    ShapeResult sh = evalShape(rL, R, sigma);
+    ShapeResult sh = evalShape(rL, wc, true);
     float invRL = 1.0 / max(rL, 1e-3);
-    float c = -0.28 * v_s;
-    float invR = 1.0 / max(R, 1e-3);
-    float zArg = 2.0 * pos.z * invR;
+    float c = -0.28 * wc.v_s;
+    float zArg = 2.0 * pos.z * wc.invR;
     float tz = safeTanh(zArg);
-    float dtz = 2.0 * invR * safeSech2(zArg);
+    float dtz = 2.0 * wc.invR * max(1.0 - tz * tz, 0.0);
     float gL = sh.df * invRL;
     float dgL = (sh.d2f - gL) * invRL;
 
@@ -210,10 +208,10 @@ MetricSample evalMetric(vec3 pos, float R, float sigma, float v_s, int metricTyp
     float dscdy = c * tz * dgL * drdy;
     float dscdz = c * (tz * dgL * drdz + gL * dtz);
 
-    m.beta = vec3(sc * pos.x, sc * pos.y, v_s * (1.0 - sh.f));
-    m.dBdx = vec3(sc + pos.x * dscdx, pos.y * dscdx, -v_s * sh.df * drdx);
-    m.dBdy = vec3(pos.x * dscdy, sc + pos.y * dscdy, -v_s * sh.df * drdy);
-    m.dBdz = vec3(pos.x * dscdz, pos.y * dscdz, -v_s * sh.df * drdz);
+    m.beta = vec3(sc * pos.x, sc * pos.y, wc.v_s * (1.0 - sh.f));
+    m.dBdx = vec3(sc + pos.x * dscdx, pos.y * dscdx, -wc.v_s * sh.df * drdx);
+    m.dBdy = vec3(pos.x * dscdy, sc + pos.y * dscdy, -wc.v_s * sh.df * drdy);
+    m.dBdz = vec3(pos.x * dscdz, pos.y * dscdz, -wc.v_s * sh.df * drdz);
 
     m.theta = -(m.dBdx.x + m.dBdy.y + m.dBdz.z);
     float k01 = 0.5 * (m.dBdx.y + m.dBdy.x);
@@ -228,7 +226,7 @@ MetricSample evalMetric(vec3 pos, float R, float sigma, float v_s, int metricTyp
     m.rEff = rL;
   }
 
-  m.beta.z -= (1.0 - frameBlend) * v_s;
+  m.beta.z -= wc.extShiftZ;
   return m;
 }
 
@@ -240,8 +238,8 @@ struct GeodesicDeriv {
   float rEff;
 };
 
-GeodesicDeriv evalGeodesicRHS(vec3 pos, vec3 k, float R, float sigma, float v_s, int metricType, float frameBlend) {
-  MetricSample m = evalMetric(pos, R, sigma, v_s, metricType, frameBlend);
+GeodesicDeriv evalGeodesicRHS(vec3 pos, vec3 k, WarpConsts wc) {
+  MetricSample m = evalMetric(pos, wc);
   float kLen = max(length(k), 1e-6);
   vec3 khat = k / kLen;
 
@@ -334,16 +332,10 @@ vec3 evalSpectralStarLayer(vec3 dir, float scale, float densityThresh, float boo
 
 vec3 evalWallShimmer(
   vec3 pos,
-  float R,
-  float sigma,
-  float v_s,
   float t00,
   float theta,
   float kLen,
-  float frameBlend,
-  int metricType,
-  float time,
-  float flowSpeed,
+  WarpConsts wc,
   float wallShimmer,
   out float ridgeOut
 ) {
@@ -354,9 +346,8 @@ vec3 evalWallShimmer(
   if (absT00 <= 1e-5 && absTheta <= 1e-3) return vec3(0.0);
 
   // Advect periodic 3D noise along -Z (texture offset +Z)
-  float advZ = time * flowSpeed;
-  vec3 uv1 = pos * 0.26 + vec3(0.0, 0.0, advZ * 0.34);
-  vec3 uv2 = pos * 0.64 + vec3(0.17, 0.41, advZ * 0.72);
+  vec3 uv1 = pos * 0.26 + vec3(0.0, 0.0, wc.advZWall * 0.34);
+  vec3 uv2 = pos * 0.64 + vec3(0.17, 0.41, wc.advZWall * 0.72);
   vec4 n1 = textureLod(uVolumeNoise, uv1, 0.0);
   vec4 n2 = textureLod(uVolumeNoise, uv2, 0.0);
 
@@ -383,63 +374,54 @@ vec3 evalWallShimmer(
   );
 
   vec3 energyCol = (t00 > 0.0) ? posCol : negCol;
-  float energyWeight = (metricType == 1) ? (normT00 * 0.72) : (normT00 * 1.08);
+  float energyWeight = (wc.metricType == 1) ? (normT00 * 0.72) : (normT00 * 1.08);
 
   // Alcubierre / Lentz bow contraction vs aft expansion tint (disabled in Bridge view so cockpit stays clear)
   vec3 yorkCol = (theta < 0.0)
     ? vec3(0.22, 0.82, 1.00)
     : vec3(0.62, 0.24, 0.82);
-  float yorkWeight = normTheta * 0.24 * (1.0 - frameBlend);
+  float yorkWeight = normTheta * 0.24 * (1.0 - wc.frameBlend);
 
-  float bridgeAtten = mix(1.0, 0.18, frameBlend);
-  float causalAtten = (frameBlend > 0.5)
+  float causalAtten = (wc.frameBlend > 0.5)
     ? pow(clamp(1.0 / max(kLen, 1.0), 1e-5, 1.0), 2.2)
     : 1.0;
 
-  float scaleGain = mix(1.0, 0.80, clamp((sigma - 2.2) / 3.5, 0.0, 1.0));
-  return (energyCol * energyWeight + yorkCol * yorkWeight) * turbMod * wallShimmer * bridgeAtten * causalAtten * scaleGain * 0.19;
+  return (energyCol * energyWeight + yorkCol * yorkWeight) * turbMod * wallShimmer * wc.bridgeAtten * causalAtten * wc.scaleGain * 0.19;
 }
 
 vec3 evalDustStreak(
   vec3 pos,
-  float R,
-  float v_s,
+  float r,
   float kLen,
-  float frameBlend,
-  float time,
-  float flowSpeed,
+  WarpConsts wc,
   float starStreaks
 ) {
-  if (starStreaks <= 0.001) return vec3(0.0);
-  float r = length(pos);
-  if (r <= R * 1.04 || r >= R * 2.85) return vec3(0.0);
+  if (starStreaks <= 0.001 || r <= wc.rDustInner || r >= wc.rDustOuter) return vec3(0.0);
 
-  float rInner = R * 1.04;
-  float rKnee = R * 1.28;
-  float radialEnv = smoothstep(rInner, rKnee, r) * exp(-max(r - rKnee, 0.0) / max(R * 0.68, 0.5));
+  float radialEnv = smoothstep(wc.rDustInner, wc.rDustKnee, r) * exp(-max(r - wc.rDustKnee, 0.0) * wc.invDustFall);
   if (radialEnv < 0.002) return vec3(0.0);
 
-  float advZ = time * flowSpeed * (0.45 + 0.18 * min(v_s, 3.5));
-  vec3 uvw = vec3(pos.x * 0.28, pos.y * 0.28, pos.z * 0.055 + advZ);
+  vec3 uvw = vec3(pos.x * 0.28, pos.y * 0.28, pos.z * 0.055 + wc.advZDust);
   vec4 sn = textureLod(uVolumeNoise, uvw, 0.0);
   float streak = smoothstep(0.60, 0.95, sn.g * 0.62 + sn.a * 0.48);
   streak = streak * streak;
 
-  float causalAtten = (frameBlend > 0.5)
+  float causalAtten = (wc.frameBlend > 0.5)
     ? smoothstep(3.8, 1.3, kLen)
     : 1.0;
 
   vec3 col = mix(vec3(0.32, 0.72, 1.00), vec3(0.84, 0.95, 1.00), sn.a);
   if (pos.z < 0.0) {
-    col = mix(col, vec3(0.70, 0.44, 0.92), smoothstep(0.0, -R * 1.5, pos.z) * 0.45);
+    col = mix(col, vec3(0.70, 0.44, 0.92), smoothstep(0.0, -1.5 * wc.R, pos.z) * 0.45);
   }
-  float speedGain = 0.35 + 0.25 * min(v_s, 3.5);
-  return col * (streak * radialEnv * starStreaks * speedGain * causalAtten * 0.18);
+  return col * (streak * radialEnv * starStreaks * wc.speedGain * causalAtten * 0.18);
 }
 
 // ============================================================================
 // 4. SKY BACKGROUND & CAUSTIC / HAWKING RIM COMPOSITOR
 // ============================================================================
+
+const vec3 INV_BB_5800 = vec3(1.0, 1.137223, 1.209106);
 
 vec3 sampleSkyBackground(
   vec3 rawDir,
@@ -496,8 +478,7 @@ vec3 sampleSkyBackground(
 
   // Doppler spectral tint & gentle diffuse beaming (stars get full relativistic beaming separately)
   float tObsMw = 5800.0 * gEff;
-  vec3 bbRef = max(sampleBlackbody(5800.0), vec3(0.08));
-  vec3 bbMw = sampleBlackbody(tObsMw) / bbRef;
+  vec3 bbMw = sampleBlackbody(tObsMw) * INV_BB_5800;
   if (gEff > 1.0) {
     bbMw = mix(bbMw, vec3(0.58, 0.86, 1.24), smoothstep(1.2, 3.2, gEff) * 0.35);
   }
@@ -536,7 +517,7 @@ vec3 sampleSkyBackground(
 }
 
 // ============================================================================
-// 5. MAIN ADAPTIVE ADM NULL GEODESIC RK4 RAY-MARCHER
+// 5. MAIN ADAPTIVE ADM NULL GEODESIC RK4 / RK2 RAY-MARCHER
 // ============================================================================
 
 void main() {
@@ -571,6 +552,42 @@ void main() {
   float flowSpeed = max(u.qualityParams.y, 0.0);
   float frameBlend = clamp(u.qualityParams.z, 0.0, 1.0);
 
+  float invR = 1.0 / max(R, 1e-3);
+  float sigma2 = sigma * sigma;
+  float tanhSR = safeTanh(sigma * R);
+  float sech2SR = max(1.0 - tanhSR * tanhSR, 0.0);
+  float invDenom2 = 1.0 / max(2.0 * tanhSR, 1e-5);
+  float lentzEps = 0.12 * R;
+
+  WarpConsts wc;
+  wc.R = R;
+  wc.invR = invR;
+  wc.sigma = sigma;
+  wc.sigma2 = sigma2;
+  wc.v_s = v_s;
+  wc.frameBlend = frameBlend;
+  wc.extShiftZ = (1.0 - frameBlend) * v_s;
+  wc.invDenom2 = invDenom2;
+  wc.sigmaInvD2 = sigma * invDenom2;
+  wc.sigma2InvD1 = sigma2 / max(tanhSR, 1e-5);
+  wc.dfOverR0 = -2.0 * sigma2 * sech2SR;
+  wc.dhOverR0 = (8.0 / 3.0) * (sigma2 * sigma2) * sech2SR * (3.0 * sech2SR - 1.0);
+  wc.wallStep = 0.14 / sigma;
+  wc.invSigma16 = 1.6 / sigma;
+  wc.weakTailR = 2.0 / sigma;
+  wc.rFlatIn = R - 4.0 / sigma;
+  wc.lentzEps2 = lentzEps * lentzEps;
+  wc.advZWall = simTime * flowSpeed;
+  wc.advZDust = simTime * flowSpeed * (0.45 + 0.18 * min(v_s, 3.5));
+  wc.bridgeAtten = mix(1.0, 0.18, frameBlend);
+  wc.scaleGain = mix(1.0, 0.80, clamp((sigma - 2.2) / 3.5, 0.0, 1.0));
+  wc.speedGain = 0.35 + 0.25 * min(v_s, 3.5);
+  wc.rDustInner = R * 1.04;
+  wc.rDustKnee = R * 1.28;
+  wc.rDustOuter = R * 2.85;
+  wc.invDustFall = 1.0 / max(R * 0.68, 0.5);
+  wc.metricType = metricType;
+
   vec4 bnRaw = texelFetch(uBlueNoise, ivec2(gl_FragCoord.xy) & 127, 0);
   float fIdx = float(frameIndex & 1023);
   vec4 bn = fract(bnRaw + fIdx * vec4(0.75487766, 0.56984029, 0.43015971, 0.61803399));
@@ -586,7 +603,7 @@ void main() {
   }
 
   float escapeR = max(R + 7.5 / sigma, max(R + 4.5, 2.2 * R));
-  float dustR = max(escapeR, R * 2.85);
+  float dustR = max(escapeR, wc.rDustOuter);
 
   vec3 pos = u.camPos_metric.xyz;
   vec3 k = -rayDir;
@@ -617,7 +634,7 @@ void main() {
           for (int s = 0; s < 16; ++s) {
             float tS = tStart + (float(s) + bn.x) * dtDust;
             vec3 dPos = pos + rayDir * tS;
-            radiance += transmittance * evalDustStreak(dPos, R, v_s, 1.0, frameBlend, simTime, flowSpeed, starStreaks) * dtDust;
+            radiance += transmittance * evalDustStreak(dPos, length(dPos), 1.0, wc, starStreaks) * dtDust;
           }
         }
       } else {
@@ -629,7 +646,7 @@ void main() {
             for (int s = 0; s < 12; ++s) {
               float tS = tEntDust + (float(s) + bn.x) * dtDust;
               vec3 dPos = pos + rayDir * tS;
-              radiance += transmittance * evalDustStreak(dPos, R, v_s, 1.0, frameBlend, simTime, flowSpeed, starStreaks) * dtDust;
+              radiance += transmittance * evalDustStreak(dPos, length(dPos), 1.0, wc, starStreaks) * dtDust;
             }
           }
         }
@@ -647,8 +664,27 @@ void main() {
       break;
     }
 
-    GeodesicDeriv k1 = evalGeodesicRHS(pos, k, R, sigma, v_s, metricType, frameBlend);
     float r = length(pos);
+    // Flat-space inner core analytic jump (skipped for Lentz, stays strictly inside rFlatIn < rDustInner)
+    if (metricType != 2 && wc.rFlatIn > 0.25 && r < wc.rFlatIn - 0.05) {
+      vec3 kHat = k / max(kLen, 1e-6);
+      vec3 vFlat = -kHat + vec3(0.0, 0.0, -wc.extShiftZ);
+      float vFlatLen = length(vFlat);
+      if (vFlatLen > 1e-4) {
+        vec3 vFlatDir = vFlat / vFlatLen;
+        float bDot = dot(pos, vFlatDir);
+        float disc = bDot * bDot - (dot(pos, pos) - wc.rFlatIn * wc.rFlatIn);
+        if (disc > 0.0) {
+          float tExit = -bDot + sqrt(disc);
+          if (tExit > 0.05) {
+            pos += vFlatDir * tExit;
+            continue;
+          }
+        }
+      }
+    }
+
+    GeodesicDeriv k1 = evalGeodesicRHS(pos, k, wc);
     if (r > escapeR && dot(pos, k1.dp) > 0.0) {
       escaped = true;
       break;
@@ -657,54 +693,76 @@ void main() {
     // Lipschitz sphere-traced step prevents wall-entry overshoot in steep thin-wall & Natario shear
     float speedCap = max(length(k1.dp), 1.0);
     float wallDist = abs(k1.rEff - R);
-    float wallStep = 0.14 / sigma;
-    float safeDistStep = wallStep + 0.40 * max(wallDist - 1.6 / sigma, 0.0);
+    float safeDistStep = wc.wallStep + 0.40 * max(wallDist - wc.invSigma16, 0.0);
     float maxSp = min(0.32 * R, safeDistStep) * qualScale;
     float ds = maxSp / speedCap;
 
-    GeodesicDeriv k2 = evalGeodesicRHS(pos + (0.5 * ds) * k1.dp, k + (0.5 * ds) * k1.dk, R, sigma, v_s, metricType, frameBlend);
-    GeodesicDeriv k3 = evalGeodesicRHS(pos + (0.5 * ds) * k2.dp, k + (0.5 * ds) * k2.dk, R, sigma, v_s, metricType, frameBlend);
-    GeodesicDeriv k4 = evalGeodesicRHS(pos + ds * k3.dp, k + ds * k3.dk, R, sigma, v_s, metricType, frameBlend);
+    vec3 posNext;
+    vec3 kNext;
+    float endT00;
+    float endTheta;
+    if (wallDist > wc.weakTailR && kLen < 8.0) {
+      GeodesicDeriv k2 = evalGeodesicRHS(pos + (0.5 * ds) * k1.dp, k + (0.5 * ds) * k1.dk, wc);
+      posNext = pos + ds * k2.dp;
+      kNext = k + ds * k2.dk;
+      integratedNegTheta += -k2.theta * ds;
+      endT00 = k2.t00;
+      endTheta = k2.theta;
+    } else {
+      GeodesicDeriv k2 = evalGeodesicRHS(pos + (0.5 * ds) * k1.dp, k + (0.5 * ds) * k1.dk, wc);
+      GeodesicDeriv k3 = evalGeodesicRHS(pos + (0.5 * ds) * k2.dp, k + (0.5 * ds) * k2.dk, wc);
+      GeodesicDeriv k4 = evalGeodesicRHS(pos + ds * k3.dp, k + ds * k3.dk, wc);
 
-    vec3 posNext = pos + (ds / 6.0) * (k1.dp + 2.0 * k2.dp + 2.0 * k3.dp + k4.dp);
-    vec3 kNext = k + (ds / 6.0) * (k1.dk + 2.0 * k2.dk + 2.0 * k3.dk + k4.dk);
-
-    integratedNegTheta += (-0.5 * (k1.theta + k4.theta)) * ds;
+      posNext = pos + (ds / 6.0) * (k1.dp + 2.0 * k2.dp + 2.0 * k3.dp + k4.dp);
+      kNext = k + (ds / 6.0) * (k1.dk + 2.0 * k2.dk + 2.0 * k3.dk + k4.dk);
+      integratedNegTheta += (-0.5 * (k1.theta + k4.theta)) * ds;
+      endT00 = k4.t00;
+      endTheta = k4.theta;
+    }
 
     // Full-interval [0, 1] blue-noise stratified volumetric sub-stepping (zero radial dead-zones)
     float segLen = length(posNext - pos);
-    int nVol = clamp(int(ceil(segLen / 0.18)), 1, 5);
-    float subLen = segLen / float(nVol);
     float bnStep = fract(bn.y + float(step) * 0.61803399);
     float kNextLen = length(kNext);
 
-    for (int vsIdx = 0; vsIdx < 5; ++vsIdx) {
-      if (vsIdx >= nVol) break;
-      float subBn = fract(bnStep + float(vsIdx) * 0.61803399);
-      float uSub = (float(vsIdx) + subBn) / float(nVol);
-      vec3 sPos = mix(pos, posNext, uSub);
-      float kSubLen = mix(kLen, kNextLen, uSub);
-      float t00Sub = mix(k1.t00, k4.t00, uSub);
-      float thetaSub = mix(k1.theta, k4.theta, uSub);
+    bool hasWall = (wallShimmer > 0.001) && (max(abs(k1.t00), abs(endT00)) > 1e-5 || max(abs(k1.theta), abs(endTheta)) > 1e-3);
+    if (hasWall) {
+      int nVol = clamp(int(ceil(segLen / 0.18)), 1, 5);
+      float subLen = segLen / float(nVol);
+      for (int vsIdx = 0; vsIdx < 5; ++vsIdx) {
+        if (vsIdx >= nVol) break;
+        float subBn = fract(bnStep + float(vsIdx) * 0.61803399);
+        float uSub = (float(vsIdx) + subBn) / float(nVol);
+        vec3 sPos = mix(pos, posNext, uSub);
+        float kSubLen = mix(kLen, kNextLen, uSub);
+        float t00Sub = mix(k1.t00, endT00, uSub);
+        float thetaSub = mix(k1.theta, endTheta, uSub);
 
-      float ridgeVal = 0.0;
-      vec3 volEmit = evalWallShimmer(
-        sPos, R, sigma, v_s, t00Sub, thetaSub, kSubLen, frameBlend, metricType, simTime, flowSpeed, wallShimmer, ridgeVal
-      );
-      if (starStreaks > 0.001 && length(sPos) > R * 1.04) {
-        volEmit += evalDustStreak(sPos, R, v_s, kSubLen, frameBlend, simTime, flowSpeed, starStreaks);
+        float ridgeVal = 0.0;
+        vec3 volEmit = evalWallShimmer(
+          sPos, t00Sub, thetaSub, kSubLen, wc, wallShimmer, ridgeVal
+        );
+        float ext = (frameBlend < 0.5) ? (min(abs(t00Sub), 0.4) * (0.04 + 0.22 * ridgeVal) * wallShimmer) : 0.0;
+        if (dot(volEmit, volEmit) > 1e-10 || ext > 1e-6) {
+          float tau = ext * subLen;
+          float stepT = exp(-tau);
+          vec3 stepRad = (tau > 1e-4)
+            ? volEmit * ((1.0 - stepT) / max(ext, 1e-5))
+            : volEmit * subLen;
+          radiance += transmittance * stepRad;
+          transmittance *= stepT;
+          if (transmittance < 0.01) break;
+        }
       }
+    }
 
-      float ext = (frameBlend < 0.5) ? (min(abs(t00Sub), 0.4) * (0.04 + 0.22 * ridgeVal) * wallShimmer) : 0.0;
-      if (dot(volEmit, volEmit) > 1e-10 || ext > 1e-6) {
-        float tau = ext * subLen;
-        float stepT = exp(-tau);
-        vec3 stepRad = (tau > 1e-4)
-          ? volEmit * ((1.0 - stepT) / max(ext, 1e-5))
-          : volEmit * subLen;
-        radiance += transmittance * stepRad;
-        transmittance *= stepT;
-        if (transmittance < 0.01) break;
+    if (starStreaks > 0.001 && transmittance > 0.01) {
+      float dFrac = fract(bnStep + 0.38196601);
+      vec3 dPos = mix(pos, posNext, dFrac);
+      float dR = length(dPos);
+      if (dR > wc.rDustInner && dR < wc.rDustOuter) {
+        float dKLen = mix(kLen, kNextLen, dFrac);
+        radiance += transmittance * evalDustStreak(dPos, dR, dKLen, wc, starStreaks) * segLen;
       }
     }
 
@@ -731,7 +789,7 @@ void main() {
   // Post-escape outer dust streaks from escapeR out to dustR
   if (runLoop && escaped && !captured && starStreaks > 0.001 && length(pos) < dustR) {
     vec3 exitVel = -finalDir;
-    GeodesicDeriv dEnd = evalGeodesicRHS(pos, k, R, sigma, v_s, metricType, frameBlend);
+    GeodesicDeriv dEnd = evalGeodesicRHS(pos, k, wc);
     float dEndLen = length(dEnd.dp);
     if (dEndLen > 1e-4) {
       exitVel = dEnd.dp / dEndLen;
@@ -743,7 +801,7 @@ void main() {
         for (int s = 0; s < 12; ++s) {
           float tS = (float(s) + bn.z) * dtDust;
           vec3 dPos = pos + exitVel * tS;
-          radiance += transmittance * evalDustStreak(dPos, R, v_s, kFinal, frameBlend, simTime, flowSpeed, starStreaks) * dtDust;
+          radiance += transmittance * evalDustStreak(dPos, length(dPos), kFinal, wc, starStreaks) * dtDust;
         }
       }
     }

@@ -21,7 +21,10 @@ import {
   formatAdapterName,
   formatWgslMessages,
 } from '../../../../shared/engine/SharedWebGPUPostPipeline.js';
-import { createProceduralSkyTextureWebGPU } from '../../../../shared/assets/skyLoader.js';
+import {
+  createProceduralSkyTextureWebGPU,
+  createPlaceholderSkyTextureWebGPU,
+} from '../../../../shared/assets/skyLoader.js';
 import { createBlackbodyLUTWebGPU, createBlueNoiseLUTWebGPU } from '../../../../shared/assets/physicalLuts.js';
 import { computeBinaryState } from './Physics.js';
 
@@ -59,6 +62,10 @@ export class WebGPURenderer {
     this.tidalWriteIdx = 1;
     this._tidalReset = true;
     this._lastTidalSig = null;
+    this._tidalSigStore = new Float64Array(5);
+    this._fallbackBinOpts = {
+      out: { c1: [0, 0, 0], c2: [0, 0, 0], v1: [0, 0, 0], v2: [0, 0, 0] },
+    };
 
     this._hardReset = true;
     this._postDirty = true;
@@ -339,12 +346,8 @@ export class WebGPURenderer {
     this.blueNoiseTex = createBlueNoiseLUTWebGPU(device, 128);
     this.blueNoiseView = this.blueNoiseTex.createView();
 
-    this.procSkyTex = createProceduralSkyTextureWebGPU(
-      device,
-      (t, w, h, m) => this.generateMipmaps(t, w, h, m),
-      2048,
-      1024
-    );
+    this.procSkyTex = createPlaceholderSkyTextureWebGPU(device);
+    this._procSkyBaked = false;
     this.procSkyView = this.procSkyTex.createView();
     this.skyTex = this.procSkyTex;
     this.skyView = this.procSkyView;
@@ -568,10 +571,46 @@ export class WebGPURenderer {
       this._rebuildBinaryBindGroups();
       this.resetAccumulation(true);
     } else {
-      if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
+      if (texture && !this._procSkyBaked) {
+        const oldPlaceholder = this.procSkyTex;
+        this.procSkyTex = texture;
+        this.procSkyView = texture.createView();
+        if (!this.skyMapLoaded) {
+          this.skyTex = texture;
+          this.skyView = this.procSkyView;
+        }
+        this._procSkyBaked = true;
+        this._rebuildBinaryBindGroups();
+        if (oldPlaceholder && oldPlaceholder !== texture && oldPlaceholder !== this.skyTex) {
+          oldPlaceholder.destroy();
+        }
+        this.resetAccumulation(true);
+      } else if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
         texture.destroy();
       }
       this.skyMapLoaded = false;
+    }
+  }
+
+  _ensureProceduralSky() {
+    if (this._procSkyBaked || this._disposed) return;
+    const oldPlaceholder = this.procSkyTex;
+    const baked = createProceduralSkyTextureWebGPU(
+      this.device,
+      (t, w, h, m) => this.generateMipmaps(t, w, h, m),
+      2048,
+      1024
+    );
+    this.procSkyTex = baked;
+    this.procSkyView = baked.createView();
+    if (!this.skyMapLoaded && (!this.skyTex || this.skyTex === oldPlaceholder)) {
+      this.skyTex = baked;
+      this.skyView = this.procSkyView;
+    }
+    this._procSkyBaked = true;
+    this._rebuildBinaryBindGroups();
+    if (oldPlaceholder && oldPlaceholder !== baked && oldPlaceholder !== this.skyTex) {
+      oldPlaceholder.destroy();
     }
   }
 
@@ -733,21 +772,27 @@ export class WebGPURenderer {
   }
 
   _encodeTidalIfNeeded(encoder, state, binState, fieldHalfSize, simTime, dtSec, isProgressive) {
-    const sig = [
-      binState.q,
-      state.diskDensity,
-      state.bridgeIntensity,
-      state.diskOuterRadius,
-      binState.d,
-    ];
+    if (state.diskDensity <= 0.001 && state.bridgeIntensity <= 0.001) {
+      this._tidalReset = true;
+      this._lastTidalSig = null;
+      return;
+    }
+
+    const q = binState.q;
+    const dens = state.diskDensity;
+    const bridge = state.bridgeIntensity;
+    const outer = state.diskOuterRadius;
+    const d = binState.d;
+
     let needReset = this._tidalReset || !this._lastTidalSig;
     if (!needReset) {
+      const prev = this._lastTidalSig;
       if (
-        Math.abs(sig[0] - this._lastTidalSig[0]) > 1e-4 ||
-        Math.abs(sig[1] - this._lastTidalSig[1]) > 1e-3 ||
-        Math.abs(sig[2] - this._lastTidalSig[2]) > 1e-3 ||
-        Math.abs(sig[3] - this._lastTidalSig[3]) > 0.1 ||
-        Math.abs(sig[4] - this._lastTidalSig[4]) > 0.35
+        Math.abs(q - prev[0]) > 1e-4 ||
+        Math.abs(dens - prev[1]) > 1e-3 ||
+        Math.abs(bridge - prev[2]) > 1e-3 ||
+        Math.abs(outer - prev[3]) > 0.1 ||
+        Math.abs(d - prev[4]) > 0.35
       ) {
         needReset = true;
       }
@@ -776,11 +821,19 @@ export class WebGPURenderer {
         this.tidalComputed = true;
       }
       this._tidalReset = false;
-      this._lastTidalSig = sig;
+      this._tidalSigStore[0] = q;
+      this._tidalSigStore[1] = dens;
+      this._tidalSigStore[2] = bridge;
+      this._tidalSigStore[3] = outer;
+      this._tidalSigStore[4] = d;
+      this._lastTidalSig = this._tidalSigStore;
     }
   }
 
   _encodeBinaryAndTaa(encoder, state, camData, simTime, binState, fieldHalfSize, jitterX, jitterY, blendFactor, isProgressive) {
+    if ((state?.skyMode | 0) === 2 && !this._procSkyBaked) {
+      this._ensureProceduralSky();
+    }
     this._writeBinaryUniforms(state, camData, simTime, binState, fieldHalfSize, jitterX, jitterY);
 
     const binBg = this.binBindGroups[this.tidalReadIdx];
@@ -823,7 +876,10 @@ export class WebGPURenderer {
   render(state, camData, simTime, binState = null, options = {}) {
     if (this._disposed || !this.getAllShadersCompiled()) return false;
 
-    this.resize(state.resolutionScale);
+    const targetScale = Number(options?.effectiveResolutionScale ?? state?.resolutionScale ?? this.resolutionScale) || 1.0;
+    if (this.width === 0 || this.height === 0 || Math.abs(targetScale - this.resolutionScale) > 1e-4) {
+      this.resize(targetScale);
+    }
 
     if (
       this._useQueueBackpressure &&
@@ -834,7 +890,7 @@ export class WebGPURenderer {
       return false;
     }
 
-    const activeBin = binState || computeBinaryState(state, simTime * 0.25);
+    const activeBin = binState || computeBinaryState(state, simTime * 0.25, this._fallbackBinOpts);
     const fieldHalfSize = Math.max(Math.max(state.diskOuterRadius, activeBin.rCavity + 4.0) * 1.15, activeBin.d * 3.8);
     const dtSec = Math.max(0.0, Math.min(0.05, Number(options.dt ?? 0.016)));
 
@@ -929,7 +985,7 @@ export class WebGPURenderer {
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
 
-    const activeBin = binState || computeBinaryState(state, simTime * 0.25);
+    const activeBin = binState || computeBinaryState(state, simTime * 0.25, this._fallbackBinOpts);
     const fieldHalfSize = Math.max(Math.max(state.diskOuterRadius, activeBin.rCavity + 4.0) * 1.15, activeBin.d * 3.8);
 
     try {

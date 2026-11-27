@@ -19,7 +19,10 @@ import {
   formatAdapterName,
   formatWgslMessages,
 } from '../../../../shared/engine/SharedWebGPUPostPipeline.js';
-import { createProceduralSkyTextureWebGPU } from '../../../../shared/assets/skyLoader.js';
+import {
+  createProceduralSkyTextureWebGPU,
+  createPlaceholderSkyTextureWebGPU,
+} from '../../../../shared/assets/skyLoader.js';
 import { createBlackbodyLUTWebGPU, createBlueNoiseLUTWebGPU } from '../../../../shared/assets/physicalLuts.js';
 
 const VOLUME_SIZE = 128;
@@ -325,12 +328,8 @@ export class WebGPURenderer {
     this.blueNoiseTex = createBlueNoiseLUTWebGPU(device, 128);
     this.blueNoiseView = this.blueNoiseTex.createView();
 
-    this.procSkyTex = createProceduralSkyTextureWebGPU(
-      device,
-      (t, w, h, m) => this.generateMipmaps(t, w, h, m),
-      2048,
-      1024
-    );
+    this.procSkyTex = createPlaceholderSkyTextureWebGPU(device);
+    this._procSkyBaked = false;
     this.procSkyView = this.procSkyTex.createView();
     this.skyTex = this.procSkyTex;
     this.skyView = this.procSkyView;
@@ -484,10 +483,46 @@ export class WebGPURenderer {
       this._rebuildWarpBindGroup();
       this.resetAccumulation(true);
     } else {
-      if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
+      if (texture && !this._procSkyBaked) {
+        const oldPlaceholder = this.procSkyTex;
+        this.procSkyTex = texture;
+        this.procSkyView = texture.createView();
+        if (!this.skyMapLoaded) {
+          this.skyTex = texture;
+          this.skyView = this.procSkyView;
+        }
+        this._procSkyBaked = true;
+        this._rebuildWarpBindGroup();
+        if (oldPlaceholder && oldPlaceholder !== texture && oldPlaceholder !== this.skyTex) {
+          oldPlaceholder.destroy();
+        }
+        this.resetAccumulation(true);
+      } else if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
         texture.destroy();
       }
       this.skyMapLoaded = false;
+    }
+  }
+
+  _ensureProceduralSky() {
+    if (this._procSkyBaked || this._disposed) return;
+    const oldPlaceholder = this.procSkyTex;
+    const baked = createProceduralSkyTextureWebGPU(
+      this.device,
+      (t, w, h, m) => this.generateMipmaps(t, w, h, m),
+      2048,
+      1024
+    );
+    this.procSkyTex = baked;
+    this.procSkyView = baked.createView();
+    if (!this.skyMapLoaded && (!this.skyTex || this.skyTex === oldPlaceholder)) {
+      this.skyTex = baked;
+      this.skyView = this.procSkyView;
+    }
+    this._procSkyBaked = true;
+    this._rebuildWarpBindGroup();
+    if (oldPlaceholder && oldPlaceholder !== baked && oldPlaceholder !== this.skyTex) {
+      oldPlaceholder.destroy();
     }
   }
 
@@ -587,6 +622,9 @@ export class WebGPURenderer {
   }
 
   _encodeWarpAndTaa(encoder, state, cam, simTime, jitterX, jitterY, blendFactor, isProgressive) {
+    if ((state?.skyMode | 0) === 2 && !this._procSkyBaked) {
+      this._ensureProceduralSky();
+    }
     this._writeWarpUniforms(state, cam, simTime, jitterX, jitterY);
 
     const sceneView = this.post.getSceneView();
@@ -629,7 +667,10 @@ export class WebGPURenderer {
     if (this._disposed || !this.getAllShadersCompiled()) return false;
 
     const opts = options || {};
-    this.resize(state.resolutionScale);
+    const targetScale = Number(opts.effectiveResolutionScale ?? state?.resolutionScale ?? this.resolutionScale) || 1.0;
+    if (this.width === 0 || this.height === 0 || Math.abs(targetScale - this.resolutionScale) > 1e-4) {
+      this.resize(targetScale);
+    }
 
     if (
       this._useQueueBackpressure &&

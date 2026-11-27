@@ -5,17 +5,19 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use interstellar_desktop::APP_VERSION;
-use interstellar_desktop::renderer::post::{MAX_PROGRESSIVE_SAMPLES, PostPipeline};
+use interstellar_desktop::assets::sky;
+use interstellar_desktop::renderer::post::{MAX_PROGRESSIVE_SAMPLES, MAX_RENDER_DPR, PostPipeline};
 use interstellar_desktop::renderer::{
     SharedGpuAssets, format_adapter_label, readback_rgba8_texture,
 };
@@ -26,12 +28,19 @@ use interstellar_desktop::ui::{
 
 const DEFAULT_MAX_FPS: u32 = 165;
 
+#[derive(Debug)]
+enum AppEvent {
+    SkyReady,
+}
+
 struct CliArgs {
     start_sim: Option<SimId>,
     width: u32,
     height: u32,
     vsync: bool,
     max_fps: u32,
+    max_fps_explicit: bool,
+    max_dpr: f32,
     smoke_frames: Option<u32>,
 }
 
@@ -60,6 +69,8 @@ fn parse_cli_args() -> CliArgs {
         height: 720,
         vsync: true,
         max_fps: DEFAULT_MAX_FPS,
+        max_fps_explicit: false,
+        max_dpr: MAX_RENDER_DPR,
         smoke_frames: None,
     };
     let mut it = std::env::args().skip(1);
@@ -116,10 +127,22 @@ fn parse_cli_args() -> CliArgs {
                 && let Ok(n) = val.parse::<u32>()
             {
                 out.max_fps = n.clamp(15, 1000);
+                out.max_fps_explicit = true;
             }
         } else if let Some(val) = arg.strip_prefix("--max-fps=") {
             if let Ok(n) = val.parse::<u32>() {
                 out.max_fps = n.clamp(15, 1000);
+                out.max_fps_explicit = true;
+            }
+        } else if arg == "--max-dpr" {
+            if let Some(val) = it.next()
+                && let Ok(d) = val.parse::<f32>()
+            {
+                out.max_dpr = d.clamp(1.0, 4.0);
+            }
+        } else if let Some(val) = arg.strip_prefix("--max-dpr=") {
+            if let Ok(d) = val.parse::<f32>() {
+                out.max_dpr = d.clamp(1.0, 4.0);
             }
         } else if arg == "--smoke-frames" {
             if let Some(val) = it.next()
@@ -145,6 +168,7 @@ fn parse_cli_args() -> CliArgs {
                    --height <px>           Initial window height (default: 720)\n  \
                    --vsync <on|off>        Initial VSync mode (default: on)\n  \
                    --max-fps <n>           Maximum frame rate cap (default: {DEFAULT_MAX_FPS})\n  \
+                   --max-dpr <f>           Render target DPR cap (default: {MAX_RENDER_DPR:.1})\n  \
                    --smoke-frames <n>      Render N live windowed frames and exit cleanly\n  \
                    --version, -V           Print version information\n"
             );
@@ -265,6 +289,23 @@ impl InputTracker {
         }
     }
 
+    fn is_dragging(&self) -> bool {
+        self.left_down_canvas || self.right_down_canvas || self.middle_down_canvas
+    }
+
+    fn any_key_held(&self) -> bool {
+        self.key_w
+            || self.key_s
+            || self.key_a
+            || self.key_d
+            || self.key_q
+            || self.key_e
+            || self.key_up
+            || self.key_down
+            || self.key_left
+            || self.key_right
+    }
+
     fn take_sim_input(&mut self, viewport_w: f32, viewport_h: f32) -> SimInput {
         let delta = self.pending_drag_delta;
         let scroll = self.pending_scroll_y;
@@ -318,14 +359,21 @@ struct RuntimeState {
     surface_config: wgpu::SurfaceConfiguration,
     supported_present_modes: Vec<wgpu::PresentMode>,
     window: Arc<Window>,
+    proxy: EventLoopProxy<AppEvent>,
 
     screen: AppScreen,
     home: HomeState,
     sim_rt: Option<SimRuntime>,
+    prestarted_sky_rx: Option<Receiver<sky::RgbaImageData>>,
 
     hud: HudState,
     input: InputTracker,
     frame_interval: Duration,
+    max_fps_explicit: bool,
+    max_dpr: f32,
+    interactive_drag_scale_enabled: bool,
+    drag_settle_until: Option<Instant>,
+    interactive_scale_active: bool,
     next_frame_at: Instant,
     last_frame_at: Instant,
     fps_smoothed: f32,
@@ -333,10 +381,11 @@ struct RuntimeState {
     rendered_frames: u32,
     needs_redraw: bool,
     next_repaint_at: Option<Instant>,
+    last_sim_idle: bool,
 }
 
 impl RuntimeState {
-    fn new(window: Arc<Window>, cli: &CliArgs) -> Self {
+    fn new(window: Arc<Window>, cli: &CliArgs, proxy: EventLoopProxy<AppEvent>) -> Self {
         let size = window.inner_size();
         let win_w = size.width.max(1);
         let win_h = size.height.max(1);
@@ -359,9 +408,16 @@ impl RuntimeState {
 
         let adapter_info = adapter.get_info();
         let adapter_label = format_adapter_label(&adapter_info);
+        let mut required_features = wgpu::Features::empty();
+        if adapter
+            .features()
+            .contains(wgpu::Features::RG11B10UFLOAT_RENDERABLE)
+        {
+            required_features |= wgpu::Features::RG11B10UFLOAT_RENDERABLE;
+        }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("interstellar-desktop-device"),
-            required_features: wgpu::Features::empty(),
+            required_features,
             required_limits: wgpu::Limits::default(),
             memory_hints: wgpu::MemoryHints::Performance,
             trace: wgpu::Trace::Off,
@@ -413,9 +469,20 @@ impl RuntimeState {
             egui_wgpu::RendererOptions::default(),
         );
 
+        // Start 4K Milky Way decode immediately in background so Observatory Homepage / Sim warm-start finishes in parallel
+        let (sky_tx, sky_rx) = mpsc::channel();
+        let sky_proxy = proxy.clone();
+        std::thread::spawn(move || {
+            let real_sky = sky::decode_real_milkyway_4k();
+            if sky_tx.send(real_sky).is_ok() {
+                let _ = sky_proxy.send_event(AppEvent::SkyReady);
+            }
+        });
+
         let now = Instant::now();
         let mut state = Self {
             window,
+            proxy,
             surface,
             surface_config,
             supported_present_modes: caps.present_modes,
@@ -429,12 +496,19 @@ impl RuntimeState {
             screen: AppScreen::Home,
             home: HomeState::default(),
             sim_rt: None,
-            hud: HudState {
-                vsync: cli.vsync,
-                ..Default::default()
+            prestarted_sky_rx: Some(sky_rx),
+            hud: {
+                let mut hud = HudState::default();
+                hud.vsync = cli.vsync;
+                hud
             },
             input: InputTracker::default(),
             frame_interval: Duration::from_secs_f64(1.0 / cli.max_fps.max(15) as f64),
+            max_fps_explicit: cli.max_fps_explicit,
+            max_dpr: cli.max_dpr,
+            interactive_drag_scale_enabled: cli.smoke_frames.is_none(),
+            drag_settle_until: None,
+            interactive_scale_active: false,
             next_frame_at: now,
             last_frame_at: now,
             fps_smoothed: cli.max_fps.min(60) as f32,
@@ -442,6 +516,7 @@ impl RuntimeState {
             rendered_frames: 0,
             needs_redraw: true,
             next_repaint_at: None,
+            last_sim_idle: false,
         };
 
         if let Some(sim_id) = cli.start_sim {
@@ -466,17 +541,27 @@ impl RuntimeState {
     fn enter_sim(&mut self, sim_id: SimId, preset: Option<usize>) {
         let win_w = self.surface_config.width.max(1);
         let win_h = self.surface_config.height.max(1);
+        let scale_factor = self.window.scale_factor() as f32;
+        let max_dpr = self.max_dpr;
 
         if self.sim_rt.is_none() {
+            let wake_proxy = self.proxy.clone();
             let mut assets = SharedGpuAssets::new(
                 self.device.clone(),
                 self.queue.clone(),
                 self.adapter_info.clone(),
                 false,
+                self.prestarted_sky_rx.take(),
+                Some(Box::new(move || {
+                    let _ = wake_proxy.send_event(AppEvent::SkyReady);
+                })),
             );
             let mut sim = create_simulation(sim_id, &mut assets);
             if let Some(idx) = preset {
                 sim.apply_preset(idx);
+            }
+            if sim.get_i32("skyMode") == 2 && assets.ensure_procedural_sky_a() {
+                sim.rebuild_bind_groups(&mut assets);
             }
             let res_scale = (sim.get_i32("resolutionScale") as f32 / 100.0).clamp(0.5, 1.0);
             let post = PostPipeline::new(
@@ -486,6 +571,8 @@ impl RuntimeState {
                 self.surface_config.format,
                 win_w,
                 win_h,
+                scale_factor,
+                max_dpr,
                 res_scale,
             );
             let glass_tex_id = self.egui_renderer.register_native_texture(
@@ -507,11 +594,19 @@ impl RuntimeState {
             if let Some(idx) = preset {
                 sr.sim.apply_preset(idx);
             }
+            if sr.sim.get_i32("skyMode") == 2 && sr.assets.ensure_procedural_sky_a() {
+                sr.sim.rebuild_bind_groups(&mut sr.assets);
+            }
             let res_scale = (sr.sim.get_i32("resolutionScale") as f32 / 100.0).clamp(0.5, 1.0);
-            if sr
-                .post
-                .resize(&sr.assets.device, &sr.assets.queue, win_w, win_h, res_scale)
-            {
+            if sr.post.resize(
+                &sr.assets.device,
+                &sr.assets.queue,
+                win_w,
+                win_h,
+                scale_factor,
+                max_dpr,
+                res_scale,
+            ) {
                 self.egui_renderer.update_egui_texture_from_wgpu_texture(
                     &sr.assets.device,
                     &sr.post.glass_backdrop_rt.view,
@@ -527,12 +622,41 @@ impl RuntimeState {
         self.home.inspect_sim = None;
         self.hud.hud_hidden = false;
         self.hud.drawer_open = false;
+        self.hud.invalidate_metadata();
         self.input.clear();
+        self.drag_settle_until = None;
+        self.interactive_scale_active = false;
+        self.last_sim_idle = false;
         let now = Instant::now();
         self.last_frame_at = now;
         self.next_frame_at = now;
         self.window.set_title(&formatted_window_title(sim_id));
         self.needs_redraw = true;
+    }
+
+    fn sync_post_resize(&mut self, effective_scale: f32) {
+        let win_w = self.surface_config.width.max(1);
+        let win_h = self.surface_config.height.max(1);
+        let scale_factor = self.window.scale_factor() as f32;
+        let max_dpr = self.max_dpr;
+        if let Some(sr) = &mut self.sim_rt
+            && sr.post.resize(
+                &sr.assets.device,
+                &sr.assets.queue,
+                win_w,
+                win_h,
+                scale_factor,
+                max_dpr,
+                effective_scale,
+            )
+        {
+            self.egui_renderer.update_egui_texture_from_wgpu_texture(
+                &sr.assets.device,
+                &sr.post.glass_backdrop_rt.view,
+                wgpu::FilterMode::Linear,
+                sr.glass_tex_id,
+            );
+        }
     }
 
     fn reconfigure_surface(&mut self, width: u32, height: u32) {
@@ -543,22 +667,14 @@ impl RuntimeState {
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
 
-        if let Some(sr) = &mut self.sim_rt {
-            let res_scale = (sr.sim.get_i32("resolutionScale") as f32 / 100.0).clamp(0.5, 1.0);
-            if sr.post.resize(
-                &sr.assets.device,
-                &sr.assets.queue,
-                width,
-                height,
-                res_scale,
-            ) {
-                self.egui_renderer.update_egui_texture_from_wgpu_texture(
-                    &sr.assets.device,
-                    &sr.post.glass_backdrop_rt.view,
-                    wgpu::FilterMode::Linear,
-                    sr.glass_tex_id,
-                );
-            }
+        if let Some(sr) = &self.sim_rt {
+            let base = (sr.sim.get_i32("resolutionScale") as f32 / 100.0).clamp(0.5, 1.0);
+            let eff = if self.interactive_scale_active {
+                (base * 0.75).max(0.375)
+            } else {
+                base
+            };
+            self.sync_post_resize(eff);
         }
         self.needs_redraw = true;
     }
@@ -608,6 +724,7 @@ impl RuntimeState {
     }
 
     fn handle_hud_actions(&mut self, actions: Vec<HudAction>) {
+        self.hud.invalidate_metadata();
         for act in actions {
             match act {
                 HudAction::GoHome => {
@@ -667,25 +784,19 @@ impl RuntimeState {
                     reset_primary,
                     resolution_changed,
                 } => {
+                    if resolution_changed {
+                        self.drag_settle_until = None;
+                        self.interactive_scale_active = false;
+                        let base_scale = self
+                            .sim_rt
+                            .as_ref()
+                            .map(|sr| {
+                                (sr.sim.get_i32("resolutionScale") as f32 / 100.0).clamp(0.5, 1.0)
+                            })
+                            .unwrap_or(1.0);
+                        self.sync_post_resize(base_scale);
+                    }
                     if let Some(sr) = &mut self.sim_rt {
-                        if resolution_changed {
-                            let res_scale =
-                                (sr.sim.get_i32("resolutionScale") as f32 / 100.0).clamp(0.5, 1.0);
-                            if sr.post.resize(
-                                &sr.assets.device,
-                                &sr.assets.queue,
-                                self.surface_config.width,
-                                self.surface_config.height,
-                                res_scale,
-                            ) {
-                                self.egui_renderer.update_egui_texture_from_wgpu_texture(
-                                    &sr.assets.device,
-                                    &sr.post.glass_backdrop_rt.view,
-                                    wgpu::FilterMode::Linear,
-                                    sr.glass_tex_id,
-                                );
-                            }
-                        }
                         if reset_primary {
                             sr.post.reset_accumulation(true);
                         } else {
@@ -785,10 +896,9 @@ impl RuntimeState {
 
         let raw_input = self.egui_state.take_egui_input(&self.window);
         let mut home_action = None;
-        let adapter_label = self.adapter_label.clone();
 
         let mut full_output = self.egui_ctx.run_ui(raw_input, |ui| {
-            home_action = draw_homepage(ui.ctx(), &mut self.home, &adapter_label);
+            home_action = draw_homepage(ui.ctx(), &mut self.home, &self.adapter_label);
         });
 
         self.egui_state
@@ -901,15 +1011,7 @@ impl RuntimeState {
         let raw_dt = (now - self.last_frame_at).as_secs_f32();
         self.last_frame_at = now;
         let dt = raw_dt.clamp(0.0, 0.05);
-        if raw_dt > 0.0005 && raw_dt < 0.5 {
-            let inst_fps = 1.0 / raw_dt;
-            self.fps_smoothed = if self.fps_initialized {
-                self.fps_smoothed * 0.88 + inst_fps * 0.12
-            } else {
-                self.fps_initialized = true;
-                inst_fps
-            };
-        }
+        let was_sim_idle = self.last_sim_idle;
 
         let size = self.window.inner_size();
         if size.width == 0 || size.height == 0 {
@@ -922,6 +1024,27 @@ impl RuntimeState {
         let ppp = self.window.scale_factor() as f32;
         let vp_w = size.width as f32 / ppp.max(1.0);
         let vp_h = size.height as f32 / ppp.max(1.0);
+        let input_active = self.input.is_dragging()
+            || self.input.any_key_held()
+            || self.input.pending_scroll_y.abs() > 1e-4;
+        if self.interactive_drag_scale_enabled && input_active {
+            self.drag_settle_until = Some(now + Duration::from_millis(180));
+        }
+        if let Some(until) = self.drag_settle_until {
+            if now >= until {
+                self.drag_settle_until = None;
+                self.interactive_scale_active = false;
+            } else {
+                self.interactive_scale_active = true;
+            }
+        } else {
+            self.interactive_scale_active = false;
+        }
+        let drag_scale_factor = if self.interactive_scale_active {
+            0.75
+        } else {
+            1.0
+        };
         let sim_input = self.input.take_sim_input(vp_w, vp_h);
 
         let (frame, suboptimal) = match self.surface.get_current_texture() {
@@ -942,16 +1065,41 @@ impl RuntimeState {
         let mut hud_actions = Vec::new();
         let fps = self.fps_smoothed;
         let raw_input = self.egui_state.take_egui_input(&self.window);
+        let win_w = self.surface_config.width.max(1);
+        let win_h = self.surface_config.height.max(1);
+        let max_dpr = self.max_dpr;
 
-        let (full_output, cmd_bufs) = {
+        let (free_textures, cmd_bufs, repaint_delay, ran_raytrace, sim_idle_ready, sky_loaded_now) = {
             let sr = self
                 .sim_rt
                 .as_mut()
                 .expect("SimRuntime must be initialized while on AppScreen::Sim");
 
-            if sr.assets.poll_background_sky() {
+            let sky_loaded_now = sr.assets.poll_background_sky();
+            if sky_loaded_now
+                || (sr.sim.get_i32("skyMode") == 2 && sr.assets.ensure_procedural_sky_a())
+            {
                 sr.sim.rebuild_bind_groups(&mut sr.assets);
                 sr.post.reset_accumulation(true);
+            }
+
+            let base_scale = (sr.sim.get_i32("resolutionScale") as f32 / 100.0).clamp(0.5, 1.0);
+            let effective_scale = (base_scale * drag_scale_factor).clamp(0.375, 1.0);
+            if sr.post.resize(
+                &sr.assets.device,
+                &sr.assets.queue,
+                win_w,
+                win_h,
+                ppp,
+                max_dpr,
+                effective_scale,
+            ) {
+                self.egui_renderer.update_egui_texture_from_wgpu_texture(
+                    &sr.assets.device,
+                    &sr.post.glass_backdrop_rt.view,
+                    wgpu::FilterMode::Linear,
+                    sr.glass_tex_id,
+                );
             }
 
             let outcome = sr.sim.step(dt, &sim_input);
@@ -962,6 +1110,17 @@ impl RuntimeState {
             let post_params = sr.sim.post_params(outcome.camera_moved, outcome.sim_time);
             let hard_reset = sr.post.sample_count == 0;
             let plan = sr.post.plan_frame(&post_params);
+
+            if plan.run_raytrace && !was_sim_idle && raw_dt > 0.0005 && raw_dt < 0.5 {
+                let inst_fps = 1.0 / raw_dt;
+                self.fps_smoothed = if self.fps_initialized {
+                    self.fps_smoothed * 0.88 + inst_fps * 0.12
+                } else {
+                    self.fps_initialized = true;
+                    inst_fps
+                };
+            }
+            let hud_fps = self.fps_smoothed.max(fps * 0.0);
 
             let mut encoder =
                 sr.assets
@@ -985,40 +1144,52 @@ impl RuntimeState {
                 sr.post.encode_taa(&sr.assets.queue, &mut encoder, &plan);
             }
 
+            let show_glass = !self.hud.hud_hidden;
             if plan.run_post {
                 sr.post.encode_post_and_composite(
                     &sr.assets.queue,
                     &mut encoder,
                     &post_params,
-                    true,
+                    show_glass,
                 );
-            } else if !self.hud.hud_hidden {
-                sr.post.encode_glass_blur(&sr.assets.queue, &mut encoder);
+            } else if show_glass && sr.post.glass_blur_dirty {
+                sr.post.encode_glass_blur(&mut encoder);
             }
 
-            sr.post.encode_blit_to_target(&mut encoder, &frame_view);
-
             let sample_count = sr.post.sample_count;
-            let glass_tex_id = Some(sr.glass_tex_id);
+            let glass_tex_id = if self.hud.hud_hidden {
+                None
+            } else {
+                Some(sr.glass_tex_id)
+            };
             let sim_ref = sr.sim.as_mut();
             let assets_ref = &sr.assets;
             let hud_ref = &mut self.hud;
+            if sky_loaded_now {
+                hud_ref.invalidate_metadata();
+            }
 
-            let full_output = self.egui_ctx.run_ui(raw_input, |ui| {
+            let mut full_output = self.egui_ctx.run_ui(raw_input, |ui| {
                 hud_actions = draw_hud(
                     ui.ctx(),
                     sim_ref,
                     assets_ref,
                     hud_ref,
                     glass_tex_id,
-                    fps,
+                    hud_fps,
                     sample_count,
                     MAX_PROGRESSIVE_SAMPLES,
                 );
             });
 
             self.egui_state
-                .handle_platform_output(&self.window, full_output.platform_output.clone());
+                .handle_platform_output(&self.window, full_output.platform_output);
+
+            let repaint_delay = full_output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .map(|v| v.repaint_delay)
+                .unwrap_or(Duration::MAX);
 
             for (id, deltas) in &full_output.textures_delta.set {
                 for delta in deltas {
@@ -1033,7 +1204,7 @@ impl RuntimeState {
 
             let paint_jobs = self
                 .egui_ctx
-                .tessellate(full_output.shapes.clone(), full_output.pixels_per_point);
+                .tessellate(full_output.shapes, full_output.pixels_per_point);
             let screen_desc = egui_wgpu::ScreenDescriptor {
                 size_in_pixels: [size.width, size.height],
                 pixels_per_point: full_output.pixels_per_point,
@@ -1047,13 +1218,13 @@ impl RuntimeState {
             );
 
             {
-                let rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("egui-hud-pass"),
+                let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("merged-swapchain-pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &frame_view,
                         resolve_target: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                             store: wgpu::StoreOp::Store,
                         },
                         depth_slice: None,
@@ -1063,6 +1234,7 @@ impl RuntimeState {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
+                sr.post.draw_blit_into_pass(&mut rpass);
                 let mut rpass_static = rpass.forget_lifetime();
                 self.egui_renderer
                     .render(&mut rpass_static, &paint_jobs, &screen_desc);
@@ -1070,7 +1242,20 @@ impl RuntimeState {
 
             let mut cmd_bufs = extra_cmds;
             cmd_bufs.push(encoder.finish());
-            (full_output, cmd_bufs)
+
+            let sim_idle_ready = !plan.run_raytrace
+                && !plan.run_post
+                && !outcome.camera_moved
+                && !sr.assets.is_sky_loading();
+
+            (
+                std::mem::take(&mut full_output.textures_delta.free),
+                cmd_bufs,
+                repaint_delay,
+                plan.run_raytrace,
+                sim_idle_ready,
+                sky_loaded_now,
+            )
         };
 
         self.queue.submit(cmd_bufs);
@@ -1080,16 +1265,54 @@ impl RuntimeState {
             self.reconfigure_surface(size.width, size.height);
         }
 
-        for id in &full_output.textures_delta.free {
+        for id in &free_textures {
             self.egui_renderer.free_texture(id);
         }
 
-        if !hud_actions.is_empty() {
+        let had_actions = !hud_actions.is_empty();
+        if had_actions {
             self.handle_hud_actions(hud_actions);
         }
         self.rendered_frames += 1;
 
+        let toast_deadline = self
+            .hud
+            .status_toast
+            .as_ref()
+            .map(|(_, at)| *at + Duration::from_secs_f32(2.85));
+        let egui_deadline = if repaint_delay.is_zero() || repaint_delay > Duration::from_secs(60) {
+            None
+        } else {
+            Some(Instant::now() + repaint_delay)
+        };
+        let earliest_deadline = [toast_deadline, self.drag_settle_until, egui_deadline]
+            .into_iter()
+            .flatten()
+            .min();
+
+        let sim_still_active = !sim_idle_ready
+            || self.input.any_key_held()
+            || self.input.is_dragging()
+            || self.drag_settle_until.is_some()
+            || had_actions
+            || sky_loaded_now
+            || repaint_delay.is_zero();
+
+        if sim_still_active || !self.interactive_drag_scale_enabled {
+            self.needs_redraw = true;
+            self.next_repaint_at = None;
+            self.last_sim_idle = false;
+        } else {
+            self.needs_redraw = false;
+            self.next_repaint_at = earliest_deadline;
+            self.last_sim_idle = true;
+        }
+
         if self.screen == AppScreen::Sim
+            && !self.last_sim_idle
+            && ran_raytrace
+            && (self.surface_config.present_mode != wgpu::PresentMode::Fifo
+                || self.max_fps_explicit)
             && let Some(rem) = self.next_frame_at.checked_duration_since(Instant::now())
         {
             #[cfg(target_os = "windows")]
@@ -1110,10 +1333,11 @@ impl RuntimeState {
 
 struct DesktopApp {
     cli: CliArgs,
+    proxy: EventLoopProxy<AppEvent>,
     runtime: Option<RuntimeState>,
 }
 
-impl ApplicationHandler for DesktopApp {
+impl ApplicationHandler<AppEvent> for DesktopApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.runtime.is_some() {
             return;
@@ -1132,7 +1356,18 @@ impl ApplicationHandler for DesktopApp {
                 .create_window(attrs)
                 .expect("Failed to create desktop window"),
         );
-        self.runtime = Some(RuntimeState::new(window, &self.cli));
+        self.runtime = Some(RuntimeState::new(window, &self.cli, self.proxy.clone()));
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AppEvent) {
+        if let Some(rt) = &mut self.runtime {
+            match event {
+                AppEvent::SkyReady => {
+                    rt.needs_redraw = true;
+                    rt.last_sim_idle = false;
+                }
+            }
+        }
     }
 
     fn window_event(
@@ -1146,8 +1381,9 @@ impl ApplicationHandler for DesktopApp {
         };
 
         let egui_resp = rt.egui_state.on_window_event(&rt.window, &event);
-        if rt.screen == AppScreen::Home {
+        if !matches!(event, WindowEvent::RedrawRequested) {
             rt.needs_redraw = true;
+            rt.last_sim_idle = false;
         }
         let pointer_over_hud = rt.egui_ctx.is_pointer_over_egui() || egui_resp.consumed;
 
@@ -1307,12 +1543,13 @@ impl ApplicationHandler for DesktopApp {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(rt) = &mut self.runtime {
-            if rt.screen == AppScreen::Sim || rt.needs_redraw || self.cli.smoke_frames.is_some() {
+            if rt.needs_redraw || self.cli.smoke_frames.is_some() {
                 event_loop.set_control_flow(ControlFlow::Poll);
                 rt.window.request_redraw();
             } else if let Some(t) = rt.next_repaint_at {
                 if Instant::now() >= t {
                     rt.next_repaint_at = None;
+                    rt.needs_redraw = true;
                     event_loop.set_control_flow(ControlFlow::Poll);
                     rt.window.request_redraw();
                 } else {
@@ -1364,8 +1601,15 @@ fn main() {
     let _win_timer = win_timer::TimerPeriodGuard::new();
 
     let cli = parse_cli_args();
-    let event_loop = EventLoop::new().expect("Failed to initialize winit EventLoop");
-    let mut app = DesktopApp { cli, runtime: None };
+    let event_loop = EventLoop::<AppEvent>::with_user_event()
+        .build()
+        .expect("Failed to initialize winit EventLoop");
+    let proxy = event_loop.create_proxy();
+    let mut app = DesktopApp {
+        cli,
+        proxy,
+        runtime: None,
+    };
     event_loop
         .run_app(&mut app)
         .expect("Desktop event loop exited with error");

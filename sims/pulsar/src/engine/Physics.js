@@ -484,6 +484,13 @@ export function integrateSchwarzschildDeflection(
   };
 }
 
+let _cachedTelKey0 = Number.NaN;
+let _cachedTelKey1 = Number.NaN;
+let _cachedTelKey2 = Number.NaN;
+let _cachedTelKey3 = false;
+let _cachedTelKey4 = Number.NaN;
+let _cachedTelVal = null;
+
 /**
  * Computes complete relativistic neutron star, magnetosphere, and telemetry state
  * from the active simulator state object.
@@ -505,12 +512,24 @@ export function computePulsarTelemetry(state = {}) {
     : 1.0;
 
   const lensingOn = isLensingEnabled(state.lensingMode);
-  const lensingStrength = lensingOn ? 1.0 : 0.0;
   const obliquityDeg = clamp(
     Number.isFinite(Number(state.obliquityDeg)) ? Number(state.obliquityDeg) : 45.0,
     0.0,
     90.0
   );
+
+  if (
+    _cachedTelVal &&
+    compactness === _cachedTelKey0 &&
+    spinPeriodMs === _cachedTelKey1 &&
+    spinVisualSpeed === _cachedTelKey2 &&
+    lensingOn === _cachedTelKey3 &&
+    obliquityDeg === _cachedTelKey4
+  ) {
+    return _cachedTelVal;
+  }
+
+  const lensingStrength = lensingOn ? 1.0 : 0.0;
   const obliquityRad = obliquityDeg * DEG2RAD;
 
   const stellarRadiusKm = PULSAR_CONSTANTS.SCHWARZSCHILD_RADIUS_1_4_KM / (2.0 * compactness);
@@ -524,7 +543,12 @@ export function computePulsarTelemetry(state = {}) {
   const maxVisibleAngleDeg = maxVisibleAngleRad * RAD2DEG;
   const visibleSurfaceFraction = computeVisibleSurfaceFraction(compactness, lensingOn);
 
-  return {
+  _cachedTelKey0 = compactness;
+  _cachedTelKey1 = spinPeriodMs;
+  _cachedTelKey2 = spinVisualSpeed;
+  _cachedTelKey3 = lensingOn;
+  _cachedTelKey4 = obliquityDeg;
+  _cachedTelVal = {
     compactness,
     massSolar: PULSAR_CONSTANTS.CANONICAL_MASS_SOLAR,
     stellarRadiusKm,
@@ -546,4 +570,5 @@ export function computePulsarTelemetry(state = {}) {
     lensingStrength,
     obliquityRad,
   };
+  return _cachedTelVal;
 }

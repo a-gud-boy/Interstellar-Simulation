@@ -14,6 +14,28 @@ import { mountSimSwitcher } from '../ui/simSwitcher.js';
 const DEFAULT_POST_ONLY_KEYS = new Set(['exposure', 'bloomIntensity', 'anamorphicIntensity']);
 const TELEMETRY_INTERVAL_MS = 85;
 const VALID_BACKENDS = new Set(['webgl2', 'webgpu']);
+const FPS_RING_SIZE = 128;
+const PERF_DRAG_SCALE_KEY = 'interstellar_perf_drag_scale';
+const PERF_REDUCED_GLASS_KEY = 'interstellar_perf_reduced_glass';
+
+function readStoredPerfFlag(storageKey, fallback = false) {
+  try {
+    const raw = window.localStorage?.getItem(storageKey);
+    if (raw === '1' || raw === 'true') return true;
+    if (raw === '0' || raw === 'false') return false;
+  } catch {
+    // Ignore restricted localStorage
+  }
+  return fallback;
+}
+
+function writeStoredPerfFlag(storageKey, value) {
+  try {
+    window.localStorage?.setItem(storageKey, value ? '1' : '0');
+  } catch {
+    // Ignore restricted localStorage
+  }
+}
 
 export function normalizeBackend(value) {
   if (typeof value !== 'string') return null;
@@ -193,7 +215,9 @@ export async function createSimApp(config) {
   let simTime = 0;
   let fpsSmoothed = 0;
   let fpsInitialized = false;
-  const frameTimestamps = [];
+  const fpsRing = new Float64Array(FPS_RING_SIZE);
+  let fpsHead = 0;
+  let fpsCount = 0;
   let lastFrameTime = performance.now();
   let lastSubmitTime = 0;
   let lastTelemetryPush = 0;
@@ -203,7 +227,57 @@ export async function createSimApp(config) {
   let switchTail = Promise.resolve();
   let rendererGeneration = 0;
   let canvasTouched = false;
+  let interactiveDragScale = readStoredPerfFlag(PERF_DRAG_SCALE_KEY, false);
+  let reducedGlass = readStoredPerfFlag(PERF_REDUCED_GLASS_KEY, false);
+  let isPointerDragging = false;
+  let perfDragCheckbox = null;
+  let perfGlassCheckbox = null;
+  const frameRenderOpts = { dt: 0, effectiveResolutionScale: 1.0 };
   const runtimeErrors = [];
+
+  if (typeof document !== 'undefined') {
+    document.body?.classList.toggle('reduced-glass', reducedGlass);
+  }
+
+  function setInteractiveDragScale(enabled, { persist = true, syncUi = true } = {}) {
+    interactiveDragScale = Boolean(enabled);
+    if (persist) writeStoredPerfFlag(PERF_DRAG_SCALE_KEY, interactiveDragScale);
+    if (syncUi && perfDragCheckbox) perfDragCheckbox.checked = interactiveDragScale;
+    if (!interactiveDragScale && renderer && !switchingBackend) {
+      renderer.resize(state.resolutionScale);
+    }
+    return interactiveDragScale;
+  }
+
+  function setReducedGlass(enabled, { persist = true, syncUi = true } = {}) {
+    reducedGlass = Boolean(enabled);
+    if (typeof document !== 'undefined') {
+      document.body?.classList.toggle('reduced-glass', reducedGlass);
+    }
+    if (persist) writeStoredPerfFlag(PERF_REDUCED_GLASS_KEY, reducedGlass);
+    if (syncUi && perfGlassCheckbox) perfGlassCheckbox.checked = reducedGlass;
+    return reducedGlass;
+  }
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener(
+      'pointerdown',
+      (ev) => {
+        if (ev.target === canvas) {
+          isPointerDragging = true;
+        }
+      },
+      { passive: true }
+    );
+    const endPointerDrag = () => {
+      if (isPointerDragging) {
+        isPointerDragging = false;
+      }
+    };
+    window.addEventListener('pointerup', endPointerDrag, { passive: true });
+    window.addEventListener('pointercancel', endPointerDrag, { passive: true });
+    window.addEventListener('blur', endPointerDrag, { passive: true });
+  }
 
   window.addEventListener('error', (ev) => {
     runtimeErrors.push(String(ev?.message || ev?.error || 'Window error'));
@@ -233,16 +307,19 @@ export async function createSimApp(config) {
     renderImmediate: (options = {}) => {
       if (!renderer || !camera || switchingBackend) return;
       const camData = getCameraMatricesCompat(camera);
+      const effScale = Number(options.effectiveResolutionScale ?? state.resolutionScale) || 1.0;
+      const merged = { forceComposite: true, effectiveResolutionScale: effScale, ...options };
       if (typeof renderFrame === 'function') {
-        renderFrame(renderer, state, camData, simTime, { forceComposite: true, ...options }, ctx);
+        renderFrame(renderer, state, camData, simTime, merged, ctx);
       } else {
-        renderer.render(state, camData, simTime, { forceComposite: true, ...options });
+        renderer.render(state, camData, simTime, merged);
       }
     },
     handleAction: (actionName, payload) => handleAction(actionName, payload),
   };
 
   function replaceCanvas() {
+    isPointerDragging = false;
     if (resizeObserver && canvas) {
       resizeObserver.unobserve(canvas);
     }
@@ -264,7 +341,8 @@ export async function createSimApp(config) {
   }
 
   function resetFpsTracker() {
-    frameTimestamps.length = 0;
+    fpsHead = 0;
+    fpsCount = 0;
     fpsSmoothed = 0;
     fpsInitialized = false;
     lastSubmitTime = 0;
@@ -529,6 +607,14 @@ export async function createSimApp(config) {
       void switchBackend(value, { isInitial: false, persist: true });
       return;
     }
+    if (key === 'interactiveDragScale') {
+      setInteractiveDragScale(value, { persist: true, syncUi });
+      return;
+    }
+    if (key === 'reducedGlass') {
+      setReducedGlass(value, { persist: true, syncUi });
+      return;
+    }
 
     if (typeof onParamChange === 'function') {
       const handled = onParamChange(key, value, { syncUi }, ctx);
@@ -667,6 +753,57 @@ export async function createSimApp(config) {
     onAction: handleAction,
   });
 
+  if (typeof document !== 'undefined') {
+    const sectionsEl = document.getElementById('controls-sections');
+    if (sectionsEl && !document.getElementById('section-performance')) {
+      const details = document.createElement('details');
+      details.className = 'control-section';
+      details.id = 'section-performance';
+      const summary = document.createElement('summary');
+      summary.textContent = 'Display & Performance';
+      const body = document.createElement('div');
+      body.className = 'control-section-body';
+
+      const makeToggleRow = (id, labelText, initialChecked, onChange) => {
+        const row = document.createElement('label');
+        row.className = 'control-label-row';
+        row.style.cursor = 'pointer';
+        row.htmlFor = id;
+        const span = document.createElement('span');
+        span.className = 'control-label';
+        span.textContent = labelText;
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.id = id;
+        input.checked = initialChecked;
+        input.style.accentColor = 'var(--accent)';
+        input.style.cursor = 'pointer';
+        input.addEventListener('change', () => onChange(input.checked));
+        row.appendChild(span);
+        row.appendChild(input);
+        body.appendChild(row);
+        return input;
+      };
+
+      perfDragCheckbox = makeToggleRow(
+        'ctrl-drag-scale',
+        '0.75× Scale While Dragging',
+        interactiveDragScale,
+        (v) => setInteractiveDragScale(v, { persist: true, syncUi: false })
+      );
+      perfGlassCheckbox = makeToggleRow(
+        'ctrl-reduced-glass',
+        'Reduced Glass (No Blur)',
+        reducedGlass,
+        (v) => setReducedGlass(v, { persist: true, syncUi: false })
+      );
+
+      details.appendChild(summary);
+      details.appendChild(body);
+      sectionsEl.appendChild(details);
+    }
+  }
+
   hud.setActivePreset(initialPreset.id);
   hud.setSkyStatus('Procedural Sky');
 
@@ -746,6 +883,8 @@ export async function createSimApp(config) {
       const out = {
         ...state,
         backend: activeBackend,
+        interactiveDragScale,
+        reducedGlass,
         camera: camera ? camera.getState() : null,
       };
       if (Array.isArray(state.skyRotation)) out.skyRotation = [...state.skyRotation];
@@ -755,6 +894,14 @@ export async function createSimApp(config) {
         Object.assign(out, getStateExtra(ctx));
       }
       return out;
+    },
+
+    setInteractiveDragScale(enabled) {
+      return setInteractiveDragScale(enabled, { persist: true, syncUi: true });
+    },
+
+    setReducedGlass(enabled) {
+      return setReducedGlass(enabled, { persist: true, syncUi: true });
     },
 
     setState(patch = {}) {
@@ -845,6 +992,8 @@ export async function createSimApp(config) {
         samples: renderer ? renderer.sampleCount : 0,
         paused: state.paused,
         activePreset: state.presetId,
+        interactiveDragScale,
+        reducedGlass,
         runtimeErrors: [...runtimeErrors],
         errors: [...runtimeErrors, ...(renderer?.errors || [])],
         ...(typeof renderer?.getDiagnostics === 'function' && renderer.getDiagnostics() && typeof renderer.getDiagnostics() === 'object'
@@ -887,23 +1036,45 @@ export async function createSimApp(config) {
       camera.update(dt, { paused: state.paused, autoOrbit: state.autoOrbit });
     }
     const camData = getCameraMatricesCompat(camera);
+    const isDraggingCanvas =
+      isPointerDragging ||
+      Boolean(camera && ((camera._pointers && camera._pointers.size > 0) || camera._dragMode));
+    const baseScale = Number(state.resolutionScale) || 1.0;
+    const effectiveResolutionScale =
+      interactiveDragScale && isDraggingCanvas ? Math.max(0.25, baseScale * 0.75) : baseScale;
+
+    let renderOpts;
+    if (tickMeta) {
+      renderOpts = { dt, effectiveResolutionScale, ...tickMeta };
+    } else {
+      frameRenderOpts.dt = dt;
+      frameRenderOpts.effectiveResolutionScale = effectiveResolutionScale;
+      renderOpts = frameRenderOpts;
+    }
+
     const submitted = Boolean(
       typeof renderFrame === 'function'
-        ? renderFrame(renderer, state, camData, simTime, { dt, ...(tickMeta || {}) }, ctx)
-        : renderer.render(state, camData, simTime, { dt, ...(tickMeta || {}) })
+        ? renderFrame(renderer, state, camData, simTime, renderOpts, ctx)
+        : renderer.render(state, camData, simTime, renderOpts)
     );
 
     if (submitted) {
       lastSubmitTime = now;
-      frameTimestamps.push(now);
-      const cutoff = now - 750;
-      while (frameTimestamps.length > 2 && frameTimestamps[0] < cutoff) {
-        frameTimestamps.shift();
+      if (fpsCount === FPS_RING_SIZE) {
+        fpsHead = (fpsHead + 1) % FPS_RING_SIZE;
+        fpsCount--;
       }
-      if (frameTimestamps.length >= 2) {
-        const spanSec = (now - frameTimestamps[0]) / 1000;
+      fpsRing[(fpsHead + fpsCount) % FPS_RING_SIZE] = now;
+      fpsCount++;
+      const cutoff = now - 750;
+      while (fpsCount > 2 && fpsRing[fpsHead] < cutoff) {
+        fpsHead = (fpsHead + 1) % FPS_RING_SIZE;
+        fpsCount--;
+      }
+      if (fpsCount >= 2) {
+        const spanSec = (now - fpsRing[fpsHead]) / 1000;
         if (spanSec >= 0.15) {
-          const measuredFps = (frameTimestamps.length - 1) / spanSec;
+          const measuredFps = (fpsCount - 1) / spanSec;
           fpsSmoothed = fpsInitialized ? fpsSmoothed * 0.7 + measuredFps * 0.3 : measuredFps;
           fpsInitialized = true;
         }
@@ -912,10 +1083,11 @@ export async function createSimApp(config) {
       if (state.paused && renderer.sampleCount >= 128) {
         fpsSmoothed = 0;
         fpsInitialized = false;
-        frameTimestamps.length = 0;
-      } else if (frameTimestamps.length >= 1) {
-        const spanSec = Math.max((now - frameTimestamps[0]) / 1000, 1.0);
-        const liveRate = frameTimestamps.length / spanSec;
+        fpsHead = 0;
+        fpsCount = 0;
+      } else if (fpsCount >= 1) {
+        const spanSec = Math.max((now - fpsRing[fpsHead]) / 1000, 1.0);
+        const liveRate = fpsCount / spanSec;
         fpsSmoothed = fpsSmoothed * 0.7 + liveRate * 0.3;
       }
     }

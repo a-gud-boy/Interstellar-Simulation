@@ -19,6 +19,7 @@ import {
   stepCriticallyDamped,
   isEditableElement,
   applyLocalLookTriad,
+  createCanvasRectCache,
 } from '../../../../shared/engine/BaseCamera.js';
 
 const MIN_LOOK_PITCH = -85.0 * DEG2RAD;
@@ -112,7 +113,8 @@ export class StarflightCamera {
     this._forward = [0.0, 0.0, 1.0];
     this._basis = new Float32Array(9);
     this._moved = true;
-    this._prevSignature = null;
+    this._hasPrevSignature = false;
+    this._prevSignature = new Float64Array(10);
 
     this._pointers = new Map();
     this._pinchPrevDist = null;
@@ -121,6 +123,7 @@ export class StarflightCamera {
     this._windowBound = false;
     this._canvasBoundTo = null;
     this._handlersReady = false;
+    this._rectCache = createCanvasRectCache(() => this.canvas);
 
     this._recomputeBasis();
     this.attachEvents(this.canvas);
@@ -357,9 +360,7 @@ export class StarflightCamera {
         return;
       }
 
-      const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
-      const vh = typeof window !== 'undefined' ? window.innerHeight : 720;
-      const rect = this.canvas ? this.canvas.getBoundingClientRect() : { width: vw, height: vh };
+      const rect = this._rectCache.getRect();
       const scale = 1.0 / Math.max(Math.min(rect.width, rect.height), 320);
 
       if (this._dragMode === 'roll') {
@@ -515,6 +516,7 @@ export class StarflightCamera {
     if (this.canvas) {
       this.attachEvents(this.canvas);
     }
+    this._rectCache?.invalidate();
     this._moved = true;
   }
 
@@ -707,24 +709,33 @@ export class StarflightCamera {
     b[7] = pose.forward[1];
     b[8] = pose.forward[2];
 
-    const sig = [
-      this._right[0], this._right[1], this._right[2],
-      this._up[0], this._up[1], this._up[2],
-      this._forward[0], this._forward[1], this._forward[2],
-      this.fov,
-    ];
-    if (!this._prevSignature) {
+    const prev = this._prevSignature;
+    if (!this._hasPrevSignature) {
       this._moved = true;
-      this._prevSignature = sig;
+      this._hasPrevSignature = true;
+      prev[0] = this._right[0]; prev[1] = this._right[1]; prev[2] = this._right[2];
+      prev[3] = this._up[0]; prev[4] = this._up[1]; prev[5] = this._up[2];
+      prev[6] = this._forward[0]; prev[7] = this._forward[1]; prev[8] = this._forward[2];
+      prev[9] = this.fov;
     } else {
-      let maxDiff = 0.0;
-      for (let i = 0; i < sig.length; i++) {
-        const d = Math.abs(sig[i] - this._prevSignature[i]);
-        if (d > maxDiff) maxDiff = d;
-      }
+      const maxDiff = Math.max(
+        Math.abs(this._right[0] - prev[0]),
+        Math.abs(this._right[1] - prev[1]),
+        Math.abs(this._right[2] - prev[2]),
+        Math.abs(this._up[0] - prev[3]),
+        Math.abs(this._up[1] - prev[4]),
+        Math.abs(this._up[2] - prev[5]),
+        Math.abs(this._forward[0] - prev[6]),
+        Math.abs(this._forward[1] - prev[7]),
+        Math.abs(this._forward[2] - prev[8]),
+        Math.abs(this.fov - prev[9])
+      );
       this._moved = maxDiff > 1e-6;
       if (this._moved) {
-        this._prevSignature = sig;
+        prev[0] = this._right[0]; prev[1] = this._right[1]; prev[2] = this._right[2];
+        prev[3] = this._up[0]; prev[4] = this._up[1]; prev[5] = this._up[2];
+        prev[6] = this._forward[0]; prev[7] = this._forward[1]; prev[8] = this._forward[2];
+        prev[9] = this.fov;
       }
     }
   }
@@ -746,6 +757,7 @@ export class StarflightCamera {
   }
 
   dispose() {
+    this._rectCache?.dispose();
     this.detachEvents();
   }
 }

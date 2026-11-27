@@ -1,9 +1,18 @@
 /**
  * Physically-based lookup tables for relativistic blackbody radiation (CIE 1931 2-deg
  * Planck chromaticity, 800 K..40,000 K) and high-frequency 4-channel toroidal
- * void-and-cluster blue-noise dithering for both WebGL2 and WebGPU, with lazy
- * module-level CPU data caching for near-instantaneous live backend toggling.
+ * void-and-cluster blue-noise dithering for both WebGL2 and WebGPU, with pre-baked
+ * standard payloads (512x1 blackbody, 128x128x4 blue noise) for near-zero boot latency
+ * and module-level CPU data caching for live backend toggling.
  */
+
+import {
+  PREBAKED_BLUE_NOISE_SIZE,
+  PREBAKED_BLUE_NOISE_128_B64,
+  PREBAKED_BLACKBODY_SIZE,
+  PREBAKED_BLACKBODY_512_HALF_RGB_B64,
+  PREBAKED_BLACKBODY_512_BYTE_RGB_B64,
+} from './physicalLutsData.js';
 
 export const BLACKBODY_T_MIN = 800.0;
 export const BLACKBODY_T_MAX = 40000.0;
@@ -111,6 +120,18 @@ function isWebGPUDevice(target) {
   return Boolean(target && typeof target.createTexture === 'function' && target.queue);
 }
 
+function decodeBase64ToBytes(b64) {
+  if (typeof atob === 'function') {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) {
+      out[i] = bin.charCodeAt(i);
+    }
+    return out;
+  }
+  return new Uint8Array(Buffer.from(b64, 'base64'));
+}
+
 /**
  * Converts a JS number to IEEE-754 binary16 (half-float) bits.
  * @param {number} value
@@ -180,6 +201,7 @@ export function computeBlackbodyLinearRgb(temperatureK) {
 
 /**
  * Returns cached CPU-side Planck blackbody LUT arrays (`halfData` & `byteData`).
+ * Uses the pre-baked payload when `size === 512` to eliminate startup Planck integration.
  * @param {number} [size=512]
  * @returns {{ halfData: Uint16Array, byteData: Uint8Array, tMin: number, tMax: number }}
  */
@@ -189,8 +211,35 @@ export function getBlackbodyData(size = 512) {
 
   const tMin = BLACKBODY_T_MIN;
   const tMax = BLACKBODY_T_MAX;
-  const logRatio = Math.log(tMax / tMin);
 
+  if (size === PREBAKED_BLACKBODY_SIZE) {
+    const rawHalf = decodeBase64ToBytes(PREBAKED_BLACKBODY_512_HALF_RGB_B64);
+    const rawByte = decodeBase64ToBytes(PREBAKED_BLACKBODY_512_BYTE_RGB_B64);
+    const halfData = new Uint16Array(size * 4);
+    const byteData = new Uint8Array(size * 4);
+    const oneHalf = 0x3c00;
+
+    for (let i = 0; i < size; i++) {
+      const hSrc = i * 6;
+      const bSrc = i * 3;
+      const dst = i * 4;
+      halfData[dst + 0] = rawHalf[hSrc + 0] | (rawHalf[hSrc + 1] << 8);
+      halfData[dst + 1] = rawHalf[hSrc + 2] | (rawHalf[hSrc + 3] << 8);
+      halfData[dst + 2] = rawHalf[hSrc + 4] | (rawHalf[hSrc + 5] << 8);
+      halfData[dst + 3] = oneHalf;
+
+      byteData[dst + 0] = rawByte[bSrc + 0];
+      byteData[dst + 1] = rawByte[bSrc + 1];
+      byteData[dst + 2] = rawByte[bSrc + 2];
+      byteData[dst + 3] = 255;
+    }
+
+    const entry = { halfData, byteData, tMin, tMax };
+    blackbodyDataCache.set(size, entry);
+    return entry;
+  }
+
+  const logRatio = Math.log(tMax / tMin);
   const halfData = new Uint16Array(size * 4);
   const byteData = new Uint8Array(size * 4);
   const oneHalf = floatToHalf(1.0);
@@ -477,12 +526,19 @@ function generateBlueNoiseChannel(size, seed) {
 
 /**
  * Returns cached 4-channel tileable void-and-cluster blue-noise RGBA bytes.
+ * Uses the pre-baked payload when `size === 128` for instant startup.
  * @param {number} [size=128]
  * @returns {Uint8Array}
  */
 export function getBlueNoiseData(size = 128) {
   const cached = blueNoiseDataCache.get(size);
   if (cached) return cached;
+
+  if (size === PREBAKED_BLUE_NOISE_SIZE) {
+    const rgba = decodeBase64ToBytes(PREBAKED_BLUE_NOISE_128_B64);
+    blueNoiseDataCache.set(size, rgba);
+    return rgba;
+  }
 
   const total = size * size;
   const ch0 = generateBlueNoiseChannel(size, 0x13579bdf);

@@ -13,11 +13,15 @@ import { FULLSCREEN_VERT, NOISE_BAKE_FRAG } from '../../../../shared/shaders/com
 import { WARP_FRAG } from '../shaders/warp.frag.js';
 import {
   SharedWebGLPostPipeline,
+  detectWebGLHdrFormats,
   MAX_PROGRESSIVE_SAMPLES,
   halton,
   formatShaderError,
 } from '../../../../shared/engine/SharedWebGLPostPipeline.js';
-import { createProceduralSkyTextureWebGL } from '../../../../shared/assets/skyLoader.js';
+import {
+  createProceduralSkyTextureWebGL,
+  createPlaceholderSkyTextureWebGL,
+} from '../../../../shared/assets/skyLoader.js';
 import { createBlackbodyLUTWebGL, createBlueNoiseLUTWebGL } from '../../../../shared/assets/physicalLuts.js';
 
 const VOLUME_SIZE = 128;
@@ -43,29 +47,6 @@ function extractCamVectors(camMatrices) {
     ? camMatrices.frameBlend
     : ((cameraMode | 0) === 1 ? 1.0 : 0.0);
   return { pos, right, up, forward, fovY, cameraMode, frameBlend };
-}
-
-function formatShaderError(name, stage, source, infoLog) {
-  const lines = source.split('\n');
-  const errorLines = [];
-  const lineMatchRegex = /ERROR:\s*\d+:(\d+):/g;
-  const highlighted = new Set();
-  let m;
-  while ((m = lineMatchRegex.exec(infoLog || '')) !== null) {
-    highlighted.add(parseInt(m[1], 10));
-  }
-
-  for (const ln of highlighted) {
-    const start = Math.max(1, ln - 2);
-    const end = Math.min(lines.length, ln + 2);
-    for (let i = start; i <= end; i++) {
-      const marker = i === ln ? '>>>' : '   ';
-      errorLines.push(`${marker} ${String(i).padStart(4, ' ')} | ${lines[i - 1]}`);
-    }
-    errorLines.push('---');
-  }
-
-  return `[WebGLRenderer] ${name} (${stage}) compile failed:\n${infoLog || 'Unknown error'}\n${errorLines.join('\n')}`;
 }
 
 export class WebGLRenderer {
@@ -164,7 +145,8 @@ export class WebGLRenderer {
     const blackbodyRes = createBlackbodyLUTWebGL(gl);
     this.blackbodyTex = blackbodyRes?.texture || blackbodyRes;
     this.blueNoiseTex = createBlueNoiseLUTWebGL(gl);
-    this.procSkyTex = createProceduralSkyTextureWebGL(gl, 2048, 1024);
+    this.procSkyTex = createPlaceholderSkyTextureWebGL(gl);
+    this._procSkyBaked = false;
     this.skyTex = this.procSkyTex;
 
     this.volumeNoiseTex = this._bakeVolumeNoise();
@@ -173,6 +155,7 @@ export class WebGLRenderer {
       gl,
       emptyVao: this.emptyVao,
       hdrSpec: this._hdrSpec,
+      taaSpec: this._taaSpec,
       opticsProfile: 'default',
       vertSrc: FULLSCREEN_VERT,
       compileProgram: (name, vs, fs) => this._createProgram(name, vs, fs),
@@ -184,62 +167,14 @@ export class WebGLRenderer {
   }
 
   _detectHdrFboFormat() {
-    const gl = this.gl;
-    const candidates = [];
-
-    if (this.extColorBufferFloat || this.extColorBufferHalfFloat) {
-      candidates.push({
-        name: 'RGBA16F',
-        internalFormat: gl.RGBA16F,
-        format: gl.RGBA,
-        type: gl.HALF_FLOAT,
-      });
-    }
-    if (this.extColorBufferFloat) {
-      candidates.push({
-        name: 'R11F_G11F_B10F',
-        internalFormat: gl.R11F_G11F_B10F,
-        format: gl.RGB,
-        type: gl.HALF_FLOAT,
-      });
-    }
-    candidates.push({
-      name: 'RGBA8',
-      internalFormat: gl.RGBA8,
-      format: gl.RGBA,
-      type: gl.UNSIGNED_BYTE,
-    });
-
-    const probeFbo = gl.createFramebuffer();
-    const probeTex = gl.createTexture();
-
-    for (const spec of candidates) {
-      gl.bindTexture(gl.TEXTURE_2D, probeTex);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.texImage2D(gl.TEXTURE_2D, 0, spec.internalFormat, 4, 4, 0, spec.format, spec.type, null);
-
-      gl.bindFramebuffer(gl.FRAMEBUFFER, probeFbo);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, probeTex, 0);
-      const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
-
-      if (status === gl.FRAMEBUFFER_COMPLETE) {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.deleteTexture(probeTex);
-        gl.deleteFramebuffer(probeFbo);
-        this.hdrFormat = spec.name;
-        return spec;
-      }
-    }
-
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.deleteTexture(probeTex);
-    gl.deleteFramebuffer(probeFbo);
-    const fallback = candidates[candidates.length - 1];
-    this.hdrFormat = fallback.name;
-    return fallback;
+    const { hdrSpec, taaSpec } = detectWebGLHdrFormats(
+      this.gl,
+      this.extColorBufferFloat,
+      this.extColorBufferHalfFloat
+    );
+    this._taaSpec = taaSpec;
+    this.hdrFormat = hdrSpec.name;
+    return hdrSpec;
   }
 
   _compileShader(name, type, source) {
@@ -422,11 +357,36 @@ export class WebGLRenderer {
       this.skyDimensions = [width || 4096, height || 2048];
       this.resetAccumulation(true);
     } else {
-      if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
+      if (texture && !this._procSkyBaked) {
+        const oldPlaceholder = this.procSkyTex;
+        this.procSkyTex = texture;
+        if (!this.skyMapLoaded) {
+          this.skyTex = texture;
+        }
+        if (oldPlaceholder && oldPlaceholder !== texture && oldPlaceholder !== this.skyTex) {
+          gl.deleteTexture(oldPlaceholder);
+        }
+        this._procSkyBaked = true;
+        this.resetAccumulation(true);
+      } else if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
         gl.deleteTexture(texture);
       }
       this.skyMapLoaded = false;
     }
+  }
+
+  _ensureProceduralSky() {
+    if (this._procSkyBaked || this._disposed || this.gl.isContextLost()) return;
+    const oldPlaceholder = this.procSkyTex;
+    const baked = createProceduralSkyTextureWebGL(this.gl, 2048, 1024);
+    this.procSkyTex = baked;
+    if (!this.skyMapLoaded && (!this.skyTex || this.skyTex === oldPlaceholder)) {
+      this.skyTex = baked;
+    }
+    if (oldPlaceholder && oldPlaceholder !== baked && oldPlaceholder !== this.skyTex) {
+      this.gl.deleteTexture(oldPlaceholder);
+    }
+    this._procSkyBaked = true;
   }
 
   resetAccumulation(hard = false) {
@@ -528,6 +488,9 @@ export class WebGLRenderer {
   }
 
   _runWarpPass(state, cam, simTime, jitterX, jitterY) {
+    if ((state?.skyMode | 0) === 2 && !this._procSkyBaked) {
+      this._ensureProceduralSky();
+    }
     const gl = this.gl;
     const prog = this.programs.warp;
     if (!prog) return;
@@ -565,7 +528,10 @@ export class WebGLRenderer {
     if (this._disposed || this.gl.isContextLost() || !this.getAllShadersCompiled()) return false;
 
     const opts = options || {};
-    this.resize(state.resolutionScale);
+    const targetScale = Number(opts.effectiveResolutionScale ?? state?.resolutionScale ?? this.resolutionScale) || 1.0;
+    if (this.width === 0 || this.height === 0 || Math.abs(targetScale - this.resolutionScale) > 1e-4) {
+      this.resize(targetScale);
+    }
 
     const cam = extractCamVectors(camMatrices);
     const camMoved = this._didCameraMove(camMatrices, cam);

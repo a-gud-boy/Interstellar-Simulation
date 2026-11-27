@@ -194,20 +194,23 @@ async function bootstrap() {
     }),
     onTick: (dt, ctx) => {
       const s = ctx.state;
+      let frameTel = null;
       if (!s.paused) {
         ctx.simTime += dt;
         if ((s.flightMode | 0) === 1) {
           s.properTimeYr = (Number(s.properTimeYr) || 0) + dt * 0.14;
-          s.rapidity = computeStarflightTelemetry(s).rapidity;
+          frameTel = computeStarflightTelemetry(s);
+          s.rapidity = frameTel.rapidity;
+        } else {
+          frameTel = computeStarflightTelemetry(s);
         }
-        const tel = computeStarflightTelemetry(s);
         const dirSign = (Number(s.flightDir) || 1) >= 0 ? 1 : -1;
-        const nextPosZ = (Number(s.flightPosZ) || 0) + dt * tel.visualPace * dirSign;
+        const nextPosZ = (Number(s.flightPosZ) || 0) + dt * frameTel.visualPace * dirSign;
         s.flightPosZ = ((nextPosZ % FLIGHT_PERIOD_Z) + FLIGHT_PERIOD_Z) % FLIGHT_PERIOD_Z;
       }
       const camMoving = typeof ctx.camera?.hasMotion === 'function' ? ctx.camera.hasMotion() : false;
       const isMotion = Boolean(camMoving || !s.paused);
-      return { forceComposite: false, dt: s.paused ? 0 : dt, isMotion };
+      return { forceComposite: false, dt: s.paused ? 0 : dt, isMotion, telemetry: frameTel };
     },
   });
 

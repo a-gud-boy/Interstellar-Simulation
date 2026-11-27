@@ -56,6 +56,11 @@ uniform int   uPlanetVisible;
 uniform vec2  uSkyRotationA;
 uniform vec2  uSkyRotationB;
 uniform int   uQuality;
+uniform float uTanHalfFov;
+uniform float uCamR;
+uniform float uEscapeL;
+uniform vec4  uSkyTrigA;
+uniform vec4  uSkyTrigB;
 
 const float PI      = 3.14159265359;
 const float TAU     = 6.28318530718;
@@ -132,9 +137,7 @@ vec3 rotateAroundAxis(vec3 v, vec3 axis, float angle) {
 void evalThroatMatter(
   float l,
   float pl,
-  float r,
   vec3 nVec,
-  float rho,
   float a,
   float M,
   float matterBound,
@@ -152,7 +155,8 @@ void evalThroatMatter(
 
   // Smooth fade from throat interior out to matterBound
   float outerEnv = 1.0 - smoothstep(a + lipWidth * 0.4, matterBound, absL);
-  float lipPeak = exp(-pow((absL - (a + 0.35 * lipWidth)) / max(lipWidth * 0.72, 0.32), 2.0));
+  float lipCenterDist = (absL - (a + 0.35 * lipWidth)) / max(lipWidth * 0.72, 0.32);
+  float lipPeak = exp(-(lipCenterDist * lipCenterDist));
   float interiorEnv = smoothstep(a + 0.65 * lipWidth, max(a - 0.2, 0.0), absL);
   float env = max(outerEnv * 0.45, max(lipPeak * 0.92, interiorEnv * 0.68));
   if (env < 1e-4) return;
@@ -164,10 +168,10 @@ void evalThroatMatter(
 
   float flowT = uTime * uSwirlSpeed * 0.028;
   vec3 uvw1 = rotN * 0.78 + vec3(l * 0.11 - flowT * 0.45, flowT, -l * 0.08);
-  vec4 n1 = texture(uVolumeNoise, uvw1);
+  vec4 n1 = textureLod(uVolumeNoise, uvw1, 0.0);
 
   vec3 uvw2 = rotN * 1.85 + vec3(n1.r * 0.18, l * 0.22 + flowT * 1.4, n1.g * 0.18);
-  vec4 n2 = texture(uVolumeNoise, uvw2);
+  vec4 n2 = textureLod(uVolumeNoise, uvw2, 0.0);
 
   float ridgedFil = pow(clamp(n1.g * 0.58 + n2.a * 0.52, 0.0, 1.0), 1.65);
   float billow = smoothstep(0.20, 0.85, n1.r * 0.65 + n1.b * 0.35);
@@ -198,10 +202,10 @@ void evalThroatMatter(
 // 3. DUAL-UNIVERSE SKY BACKGROUND, MICRO-STARS & ICONIC LANDMARKS
 // ============================================================================
 
-vec3 rotateSkyDir(vec3 d, vec2 rot) {
-  float cy = cos(rot.x), sy = sin(rot.x);
+vec3 rotateSkyDirTrig(vec3 d, vec4 trig) {
+  float cy = trig.x, sy = trig.y;
   vec3 r1 = vec3(cy * d.x + sy * d.z, d.y, -sy * d.x + cy * d.z);
-  float cp = cos(rot.y), sp = sin(rot.y);
+  float cp = trig.z, sp = trig.w;
   return vec3(r1.x, cp * r1.y - sp * r1.z, sp * r1.y + cp * r1.z);
 }
 
@@ -250,28 +254,30 @@ vec3 evalMicroStarLayer(vec3 dir, float scale, float densityThresh, float boost,
 
 // Universe A Landmark: Crisp Saturn-like ringed gas giant + distant Sun & glare
 vec3 evalUniverseALandmarks(vec3 dir, float dirFw, inout float skyOcc) {
-  vec3 saturnDir = normalize(vec3(-0.18, 0.22, -0.958));
-  vec3 sunDir    = normalize(vec3(-0.62, 0.30, -0.725));
+  vec3 saturnDir  = normalize(vec3(-0.18, 0.22, -0.958));
+  vec3 sunDir     = normalize(vec3(-0.62, 0.30, -0.725));
   vec3 ringNormal = normalize(vec3(0.28, 0.90, 0.33));
 
-  float distUnits = 31.0; // Angular radius ~1/31 = 0.032 rad (~3.7 deg diameter)
-  vec3 C = saturnDir * distUnits;
-  float aaUnit = clamp(min(dirFw, 0.012) * distUnits, 0.014, 0.25);
+  float saturnCos = dot(dir, saturnDir);
+  vec3 saturnTotal = vec3(0.0);
+  float saturnOcc = 0.0;
 
-  // 1. Ray-sphere test for Saturn globe
-  float tCa = dot(C, dir);
-  bool hitGlobe = false;
-  float tGlobe = 1e6;
-  float globeAlpha = 0.0;
-  vec3 globeCol = vec3(0.0);
+  if (saturnCos > 0.985) {
+    float distUnits = 31.0; // Angular radius ~1/31 = 0.032 rad (~3.7 deg diameter)
+    vec3 C = saturnDir * distUnits;
+    float aaUnit = clamp(min(dirFw, 0.012) * distUnits, 0.014, 0.25);
 
-  if (tCa > 0.0) {
+    // 1. Ray-sphere test for Saturn globe
+    float tCa = saturnCos * distUnits;
+    float tGlobe = 1e6;
+    float globeAlpha = 0.0;
+    vec3 globeCol = vec3(0.0);
+
     vec3 perp = dir * tCa - C;
     float d2 = dot(perp, perp);
     float d = sqrt(d2);
     globeAlpha = 1.0 - smoothstep(1.0 - aaUnit, 1.0 + aaUnit, d);
     if (globeAlpha > 0.001) {
-      hitGlobe = true;
       float zHit = sqrt(max(1.0 - min(d2, 0.9999), 0.0));
       tGlobe = tCa - zHit;
       vec3 hitP = dir * tGlobe - C;
@@ -292,7 +298,8 @@ vec3 evalUniverseALandmarks(vec3 dir, float dirFw, inout float skyOcc) {
         if (tS > 0.0) {
           float rShad = length(hitP + sunDir * tS);
           float inRingShad = smoothstep(1.30, 1.38, rShad) * (1.0 - smoothstep(2.34, 2.40, rShad));
-          float cassiniGap = exp(-pow((rShad - 1.97) / 0.045, 2.0));
+          float cassiniDist = (rShad - 1.97) / 0.045;
+          float cassiniGap = exp(-(cassiniDist * cassiniDist));
           ringShadow = 1.0 - inRingShad * (1.0 - cassiniGap * 0.85) * 0.78;
         }
       }
@@ -303,66 +310,69 @@ vec3 evalUniverseALandmarks(vec3 dir, float dirFw, inout float skyOcc) {
       vec3 limbGlow = vec3(0.72, 0.78, 0.88) * (fresnel * ndotl * 0.25);
       globeCol = baseAlbedo * (0.025 + 1.55 * lit) + limbGlow;
     }
-  }
 
-  // 2. Ray-plane test for Saturn rings
-  float denom = dot(dir, ringNormal);
-  float tRing = 1e6;
-  float ringAlpha = 0.0;
-  vec3 ringCol = vec3(0.0);
-  if (abs(denom) > 1e-4) {
-    float tr = dot(C, ringNormal) / denom;
-    if (tr > 0.0) {
-      vec3 rPos = dir * tr - C;
-      float rDist = length(rPos);
-      float innerFade = smoothstep(1.30 - aaUnit, 1.34 + aaUnit, rDist);
-      float outerFade = 1.0 - smoothstep(2.36 - aaUnit, 2.40 + aaUnit, rDist);
-      float ringMask = innerFade * outerFade;
-      if (ringMask > 0.001) {
-        tRing = tr;
-        float cassini = 1.0 - 0.94 * exp(-pow((rDist - 1.97) / max(0.042, aaUnit * 0.5), 2.0));
-        float encke   = 1.0 - 0.65 * exp(-pow((rDist - 2.27) / max(0.018, aaUnit * 0.4), 2.0));
-        float cRing   = mix(0.28, 1.0, smoothstep(1.32, 1.54, rDist));
-        float ringlets = 0.82 + 0.18 * sin(rDist * 48.0) * cos(rDist * 19.0);
-        float density = ringMask * cassini * encke * cRing * ringlets;
+    // 2. Ray-plane test for Saturn rings
+    float denom = dot(dir, ringNormal);
+    float tRing = 1e6;
+    float ringAlpha = 0.0;
+    vec3 ringCol = vec3(0.0);
+    if (abs(denom) > 1e-4) {
+      float tr = dot(C, ringNormal) / denom;
+      if (tr > 0.0) {
+        vec3 rPos = dir * tr - C;
+        float rDist = length(rPos);
+        float innerFade = smoothstep(1.30 - aaUnit, 1.34 + aaUnit, rDist);
+        float outerFade = 1.0 - smoothstep(2.36 - aaUnit, 2.40 + aaUnit, rDist);
+        float ringMask = innerFade * outerFade;
+        if (ringMask > 0.001) {
+          tRing = tr;
+          float casW = (rDist - 1.97) / max(0.042, aaUnit * 0.5);
+          float encW = (rDist - 2.27) / max(0.018, aaUnit * 0.4);
+          float cassini = 1.0 - 0.94 * exp(-(casW * casW));
+          float encke   = 1.0 - 0.65 * exp(-(encW * encW));
+          float cRing   = mix(0.28, 1.0, smoothstep(1.32, 1.54, rDist));
+          float ringlets = 0.82 + 0.18 * sin(rDist * 48.0) * cos(rDist * 19.0);
+          float density = ringMask * cassini * encke * cRing * ringlets;
 
-        // Planet shadow across rear half of rings
-        float sunProj = dot(rPos, sunDir);
-        float planetShadow = 1.0;
-        if (sunProj < 0.0) {
-          float perpSun = length(rPos - sunDir * sunProj);
-          planetShadow = smoothstep(0.96, 1.05, perpSun);
+          // Planet shadow across rear half of rings
+          float sunProj = dot(rPos, sunDir);
+          float planetShadow = 1.0;
+          if (sunProj < 0.0) {
+            float perpSun = length(rPos - sunDir * sunProj);
+            planetShadow = smoothstep(0.96, 1.05, perpSun);
+          }
+
+          vec3 rAlbedo = mix(vec3(0.74, 0.66, 0.56), vec3(0.95, 0.89, 0.77), smoothstep(1.52, 1.88, rDist));
+          float sunLit = 0.03 + 1.45 * planetShadow * (0.55 + 0.45 * abs(dot(ringNormal, sunDir)));
+          ringCol = rAlbedo * sunLit;
+          ringAlpha = clamp(density * 0.86, 0.0, 0.94);
         }
-
-        vec3 rAlbedo = mix(vec3(0.74, 0.66, 0.56), vec3(0.95, 0.89, 0.77), smoothstep(1.52, 1.88, rDist));
-        float sunLit = 0.03 + 1.45 * planetShadow * (0.55 + 0.45 * abs(dot(ringNormal, sunDir)));
-        ringCol = rAlbedo * sunLit;
-        ringAlpha = clamp(density * 0.86, 0.0, 0.94);
       }
     }
-  }
 
-  // Depth-sort globe and rings cleanly
-  vec3 saturnTotal = vec3(0.0);
-  float saturnOcc = 0.0;
-  if (tRing < tGlobe) {
-    // Ring in front of planet
-    saturnTotal = ringCol * ringAlpha + globeCol * globeAlpha * (1.0 - ringAlpha);
-    saturnOcc = clamp(ringAlpha + globeAlpha * (1.0 - ringAlpha), 0.0, 1.0);
-  } else {
-    // Planet occludes ring behind it
-    saturnTotal = globeCol * globeAlpha + ringCol * ringAlpha * (1.0 - globeAlpha);
-    saturnOcc = clamp(globeAlpha + ringAlpha * (1.0 - globeAlpha), 0.0, 1.0);
+    // Depth-sort globe and rings cleanly
+    if (tRing < tGlobe) {
+      // Ring in front of planet
+      saturnTotal = ringCol * ringAlpha + globeCol * globeAlpha * (1.0 - ringAlpha);
+      saturnOcc = clamp(ringAlpha + globeAlpha * (1.0 - ringAlpha), 0.0, 1.0);
+    } else {
+      // Planet occludes ring behind it
+      saturnTotal = globeCol * globeAlpha + ringCol * ringAlpha * (1.0 - globeAlpha);
+      saturnOcc = clamp(globeAlpha + ringAlpha * (1.0 - globeAlpha), 0.0, 1.0);
+    }
   }
 
   // 3. Distant Sun photosphere disc + tight physical solar corona
   float sunCos = dot(dir, sunDir);
-  float sunAng = atan(length(cross(dir, sunDir)), sunCos);
-  float sunFw = min(dirFw, 0.009);
-  float sunEnergy = min(1.0, 0.012 / max(dirFw * 1.5, 1e-4));
-  float sunDisc = (1.0 - smoothstep(0.0085, 0.0115 + sunFw, sunAng)) * sunEnergy;
-  float corona  = (exp(-sunAng * 56.0) * 0.72 + exp(-sunAng * 18.0) * 0.032) * (0.20 + 0.80 * sunEnergy);
-  vec3 sunCol = vec3(1.00, 0.95, 0.84) * (sunDisc * 10.5 + corona);
+  vec3 sunCol = vec3(0.0);
+  if (sunCos > 0.75) {
+    float sunAng = atan(length(cross(dir, sunDir)), sunCos);
+    float sunFw = min(dirFw, 0.009);
+    float sunEnergy = min(1.0, 0.012 / max(dirFw * 1.5, 1e-4));
+    float sunDisc = (1.0 - smoothstep(0.0085, 0.0115 + sunFw, sunAng)) * sunEnergy;
+    float corona  = (exp(-sunAng * 56.0) * 0.72 + exp(-sunAng * 18.0) * 0.032) * (0.20 + 0.80 * sunEnergy);
+    sunCol = vec3(1.00, 0.95, 0.84) * (sunDisc * 10.5 + corona);
+  }
 
   skyOcc = 1.0 - saturnOcc;
   return saturnTotal + sunCol;
@@ -388,8 +398,9 @@ vec3 evalUniverseBLandmark(vec3 dir, float dirFw) {
   // Tilted luminous golden-teal accretion disk around primary beacon
   vec2 diskCoord = vec2(rel.x * 0.92 + rel.y * 0.39, (-rel.x * 0.39 + rel.y * 0.92) * 3.1);
   float rDisk = length(diskCoord);
-  float diskRing = exp(-pow((rDisk - 0.022) / max(0.0085, bFw * 1.4), 2.0))
-                 + 0.45 * exp(-pow((rDisk - 0.036) / max(0.011, bFw * 1.6), 2.0));
+  float d1 = (rDisk - 0.022) / max(0.0085, bFw * 1.4);
+  float d2 = (rDisk - 0.036) / max(0.011, bFw * 1.6);
+  float diskRing = exp(-(d1 * d1)) + 0.45 * exp(-(d2 * d2));
   vec3 diskTint = mix(vec3(1.00, 0.72, 0.24), vec3(0.18, 0.88, 0.96), smoothstep(0.014, 0.042, rDisk));
 
   // Primary radiant champagne-gold star core
@@ -422,7 +433,10 @@ void main() {
   vec2 ndc = (pixelCoord / res) * 2.0 - 1.0;
 
   float aspect = res.x / res.y;
-  float tanHalfFov = tan(clamp(uFovY, 0.1, 2.8) * 0.5);
+  float tanHalfFov = uTanHalfFov;
+  if (tanHalfFov <= 1e-4) {
+    tanHalfFov = tan(clamp(uFovY, 0.1, 2.8) * 0.5);
+  }
   vec3 localRay = normalize(vec3(ndc.x * aspect * tanHalfFov, ndc.y * tanHalfFov, 1.0));
   vec3 d = normalize(uCamBasis * localRay);
 
@@ -432,7 +446,10 @@ void main() {
   float M   = max(uLensingWidth, 1e-4);
 
   // Great-circle geodesic initialization
-  float r0 = evalMetricR(uCamL, uMetricType, rho, a, M);
+  float r0 = uCamR;
+  if (r0 <= 1e-4) {
+    r0 = evalMetricR(uCamL, uMetricType, rho, a, M);
+  }
   float pl = dot(d, n0);
   vec3 t = d - pl * n0;
   float sinAlpha = length(t);
@@ -456,7 +473,7 @@ void main() {
     qualScale = 0.68;
   }
 
-  float escapeL = max(abs(uCamL) * 3.0 + 40.0, a + 4.0 * max(M, 0.35) + 80.0);
+  float escapeL = max(uEscapeL, max(abs(uCamL) * 3.0 + 40.0, a + 4.0 * max(M, 0.35) + 80.0));
   float matterBound = a + 2.8 * max(M, 0.35);
   bool hasMatter = (uThroatGlow > 0.001 || uDustDensity > 0.001);
 
@@ -465,11 +482,11 @@ void main() {
   vec3 radiance = vec3(0.0);
   float transmittance = 1.0;
   bool escaped = false;
+  GeodesicDeriv k1 = evalGeodesicRHS(l, pl, b, b2, uMetricType, rho, a, M);
 
   for (int step = 0; step < 320; ++step) {
     if (step >= maxSteps) break;
 
-    GeodesicDeriv k1 = evalGeodesicRHS(l, pl, b, b2, uMetricType, rho, a, M);
     float r = k1.r;
     float absL = abs(l);
 
@@ -482,7 +499,8 @@ void main() {
     float curvScale = (uMetricType == 0) ? max(M, 0.35) : rho;
     float h;
 
-    if (uMetricType == 0 && absL <= a) {
+    bool inCylThroat = (uMetricType == 0 && absL <= a);
+    if (inCylThroat) {
       float wallDist = (pl > 0.0) ? (a - l) : (l + a);
       h = max(0.08, min(0.50 * rho * qualScale, wallDist + 0.05));
       if (abs(pl) < 0.08) {
@@ -509,14 +527,32 @@ void main() {
       h *= (0.55 + 0.45 * bn.x);
     }
 
-    // Adaptive RK4 integration step
-    GeodesicDeriv k2 = evalGeodesicRHS(l + 0.5 * h * k1.dl, pl + 0.5 * h * k1.dpl, b, b2, uMetricType, rho, a, M);
-    GeodesicDeriv k3 = evalGeodesicRHS(l + 0.5 * h * k2.dl, pl + 0.5 * h * k2.dpl, b, b2, uMetricType, rho, a, M);
-    GeodesicDeriv k4 = evalGeodesicRHS(l + h * k3.dl,       pl + h * k3.dpl,       b, b2, uMetricType, rho, a, M);
+    // Hybrid integrator: safe cylindrical throat / weak-exterior RK2 / strong-field RK4 + FSAL
+    float lNext;
+    float plNext;
+    float psiNext;
+    GeodesicDeriv kNext;
+    if (inCylThroat && abs(l + h * pl) <= a) {
+      lNext   = l + h * pl;
+      plNext  = pl;
+      psiNext = psi + h * k1.dpsi;
+      kNext   = k1;
+    } else if (!inCylThroat && r > 3.0 * rho && distEdge > 2.5 * curvScale) {
+      GeodesicDeriv k2 = evalGeodesicRHS(l + 0.5 * h * k1.dl, pl + 0.5 * h * k1.dpl, b, b2, uMetricType, rho, a, M);
+      lNext   = l   + h * k2.dl;
+      plNext  = pl  + h * k2.dpl;
+      psiNext = psi + h * k2.dpsi;
+      kNext   = evalGeodesicRHS(lNext, plNext, b, b2, uMetricType, rho, a, M);
+    } else {
+      GeodesicDeriv k2 = evalGeodesicRHS(l + 0.5 * h * k1.dl, pl + 0.5 * h * k1.dpl, b, b2, uMetricType, rho, a, M);
+      GeodesicDeriv k3 = evalGeodesicRHS(l + 0.5 * h * k2.dl, pl + 0.5 * h * k2.dpl, b, b2, uMetricType, rho, a, M);
+      GeodesicDeriv k4 = evalGeodesicRHS(l + h * k3.dl,       pl + h * k3.dpl,       b, b2, uMetricType, rho, a, M);
 
-    float lNext   = l   + (h / 6.0) * (k1.dl   + 2.0 * k2.dl   + 2.0 * k3.dl   + k4.dl);
-    float plNext  = pl  + (h / 6.0) * (k1.dpl  + 2.0 * k2.dpl  + 2.0 * k3.dpl  + k4.dpl);
-    float psiNext = psi + (h / 6.0) * (k1.dpsi + 2.0 * k2.dpsi + 2.0 * k3.dpsi + k4.dpsi);
+      lNext   = l   + (h / 6.0) * (k1.dl   + 2.0 * k2.dl   + 2.0 * k3.dl   + k4.dl);
+      plNext  = pl  + (h / 6.0) * (k1.dpl  + 2.0 * k2.dpl  + 2.0 * k3.dpl  + k4.dpl);
+      psiNext = psi + (h / 6.0) * (k1.dpsi + 2.0 * k2.dpsi + 2.0 * k3.dpsi + k4.dpsi);
+      kNext   = evalGeodesicRHS(lNext, plNext, b, b2, uMetricType, rho, a, M);
+    }
 
     // Volumetric Throat Matter (pure vacuum when throatGlow <= 0.001 && dustDensity <= 0.001)
     if (hasMatter && transmittance > 0.004) {
@@ -524,7 +560,7 @@ void main() {
       float segMaxL = max(l, lNext);
       if (segMinL < matterBound && segMaxL > -matterBound) {
         int nSub = (h > 0.45) ? 2 : 1;
-        float rMidSeg = max(0.5 * (r + evalMetricR(lNext, uMetricType, rho, a, M)), rho);
+        float rMidSeg = max(0.5 * (r + kNext.r), rho);
         float totalDs = length(vec2(lNext - l, rMidSeg * (psiNext - psi)));
         float dsSub = totalDs / float(nSub);
         float jitBase = fract(bn.y + float(step) * 0.61803399);
@@ -535,18 +571,18 @@ void main() {
           float lSub = mix(l, lNext, frac);
           float plSub = mix(pl, plNext, frac);
           float psiSub = mix(psi, psiNext, frac);
-          float rSub = (nSub == 1) ? rMidSeg : evalMetricR(lSub, uMetricType, rho, a, M);
           vec3 nSubVec = normalize(cos(psiSub) * n0 + sin(psiSub) * tHat);
 
           vec3 emit;
           float ext;
-          evalThroatMatter(lSub, plSub, rSub, nSubVec, rho, a, M, matterBound, emit, ext);
+          evalThroatMatter(lSub, plSub, nSubVec, a, M, matterBound, emit, ext);
           if (ext > 1e-6 || dot(emit, emit) > 1e-10) {
             float tau = ext * dsSub;
             float stepT = exp(-tau);
-            vec3 stepRad = (tau > 1e-4)
-              ? emit * ((1.0 - stepT) / max(ext, 1e-5))
-              : emit * dsSub;
+            vec3 stepRad = emit * dsSub;
+            if (tau > 1e-4) {
+              stepRad = emit * ((1.0 - stepT) / max(ext, 1e-5));
+            }
             radiance += transmittance * stepRad;
             transmittance *= stepT;
           }
@@ -557,6 +593,7 @@ void main() {
     l = lNext;
     pl = plNext;
     psi = psiNext;
+    k1 = kNext;
 
     if (transmittance < 0.004) break;
   }
@@ -576,15 +613,24 @@ void main() {
   // tangential orientation preserves 3D handedness so Universe B views & camera controls stay natural.
   float psiFinal = psi;
   if ((l * pl) > 0.0) {
-    float rEnd = evalMetricR(l, uMetricType, rho, a, M);
+    float rEnd = k1.r;
     psiFinal += atan(b / max(rEnd, 1e-5), abs(pl));
   }
   vec3 nPsi = cos(psiFinal) * n0 + sin(psiFinal) * tHat;
   vec3 dSky = onSideA ? nPsi : (nPsi - 2.0 * dot(nPsi, n0) * n0);
   dSky = normalize(dSky);
 
-  vec3 dirA = normalize(rotateSkyDir(dSky, uSkyRotationA));
-  vec3 dirB = normalize(rotateSkyDir(dSky, uSkyRotationB));
+  vec4 trigA = uSkyTrigA;
+  if (dot(trigA, trigA) <= 0.5) {
+    trigA = vec4(cos(uSkyRotationA.x), sin(uSkyRotationA.x), cos(uSkyRotationA.y), sin(uSkyRotationA.y));
+  }
+  vec4 trigB = uSkyTrigB;
+  if (dot(trigB, trigB) <= 0.5) {
+    trigB = vec4(cos(uSkyRotationB.x), sin(uSkyRotationB.x), cos(uSkyRotationB.y), sin(uSkyRotationB.y));
+  }
+
+  vec3 dirA = normalize(rotateSkyDirTrig(dSky, trigA));
+  vec3 dirB = normalize(rotateSkyDirTrig(dSky, trigB));
 
   // Compute screen-space equirectangular UV gradients & silhouette mask in uniform control flow
   vec2 uvA2, uvB2;
@@ -623,12 +669,10 @@ void main() {
   vec2 sampleUvA = vec2(uvA.x, clamp(uvA.y, 0.005, 0.995));
   vec2 sampleUvB = vec2(uvB.x, clamp(uvB.y, 0.005, 0.995));
 
-  vec3 texA     = textureGrad(uSkyMapA, sampleUvA, dUVdxA, dUVdyA).rgb;
-  vec3 procTexA = textureGrad(uProcSkyMapA, sampleUvA, dUVdxA, dUVdyA).rgb;
-  vec3 texB     = textureGrad(uSkyMapB, sampleUvB, dUVdxB, dUVdyB).rgb;
-
   vec3 skyColor = vec3(0.0);
   if (onSideA) {
+    vec3 texA     = textureGrad(uSkyMapA, sampleUvA, dUVdxA, dUVdyA).rgb;
+    vec3 procTexA = textureGrad(uProcSkyMapA, sampleUvA, dUVdxA, dUVdyA).rgb;
     vec3 srgbA = mix(texA, procTexA, 0.015);
     vec3 skyLinA = pow(max(srgbA, vec3(0.0)), vec3(2.2));
     vec3 coresA = max(skyLinA - vec3(0.32), vec3(0.0));
@@ -644,6 +688,7 @@ void main() {
     }
     skyColor = skyLinA;
   } else {
+    vec3 texB = textureGrad(uSkyMapB, sampleUvB, dUVdxB, dUVdyB).rgb;
     vec3 skyLinB = pow(max(texB, vec3(0.0)), vec3(2.2));
     vec3 coresB = max(skyLinB - vec3(0.28), vec3(0.0));
     skyLinB += coresB * coresB * 2.2;

@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
 use bytemuck::{Pod, Zeroable};
 
-use crate::renderer::SharedGpuAssets;
-use crate::renderer::post::{PostFrameParams, PostTuning, make_fs_pipe, run_fs_pass};
+use crate::renderer::post::{PostFrameParams, PostTuning, run_fs_pass};
+use crate::renderer::{SharedGpuAssets, SimBglKind};
 use crate::shaders;
 use crate::sims::{
     ControlItem, ControlKind, ControlSection, HudMetadata, PresetMeta, SimId, SimInput, Simulation,
@@ -917,7 +919,7 @@ pub struct StarflightSim {
     sim_time: f32,
     camera: StarflightCamera,
 
-    pipeline: wgpu::RenderPipeline,
+    pipeline: Arc<wgpu::RenderPipeline>,
     ubo: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
 }
@@ -925,18 +927,11 @@ pub struct StarflightSim {
 impl StarflightSim {
     pub fn new(assets: &mut SharedGpuAssets) -> Self {
         let p = &PRESETS[1]; // Default preset is headlight_90
-        let shader = assets
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("starflight-shader"),
-                source: wgpu::ShaderSource::Wgsl(shaders::STARFLIGHT.into()),
-            });
-        let pipeline = make_fs_pipe(
-            &assets.device,
-            "starflight-pipeline",
-            &assets.standard_sim_bgl,
-            &shader,
-            wgpu::TextureFormat::Rgba16Float,
+        let pipeline = assets.get_or_create_sim_pipeline(
+            SimId::Starflight,
+            "starflight",
+            SimBglKind::Standard,
+            shaders::STARFLIGHT,
         );
         let ubo = assets.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("starflight-ubo"),
@@ -1132,8 +1127,16 @@ impl Simulation for StarflightSim {
         }
     }
 
-    fn presets(&self) -> Vec<PresetMeta> {
-        PRESETS.iter().map(|p| p.meta).collect()
+    fn presets(&self) -> &'static [PresetMeta] {
+        const METAS: [PresetMeta; 6] = [
+            PRESETS[0].meta,
+            PRESETS[1].meta,
+            PRESETS[2].meta,
+            PRESETS[3].meta,
+            PRESETS[4].meta,
+            PRESETS[5].meta,
+        ];
+        &METAS
     }
 
     fn active_preset_index(&self) -> Option<usize> {
@@ -1173,18 +1176,18 @@ impl Simulation for StarflightSim {
         }
     }
 
-    fn control_sections(&self) -> Vec<ControlSection> {
-        vec![
+    fn control_sections(&self) -> &'static [ControlSection] {
+        const SECTIONS: &[ControlSection] = &[
             ControlSection {
                 id: "flight",
-                title: "Relativistic Flight",
+                title: "RELATIVISTIC FLIGHT",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "flightMode",
                         label: "Flight Mode",
                         kind: ControlKind::Segmented {
-                            options: vec![(0, "Manual v/c"), (1, "1g Accel")],
+                            options: &[(0, "Manual v/c"), (1, "1g Accel")],
                         },
                     },
                     ControlItem {
@@ -1211,23 +1214,23 @@ impl Simulation for StarflightSim {
                         key: "flightDir",
                         label: "Thrust Direction",
                         kind: ControlKind::Segmented {
-                            options: vec![(1, "Forward"), (-1, "Reverse")],
+                            options: &[(1, "Forward"), (-1, "Reverse")],
                         },
                     },
                     ControlItem {
                         key: "aberrationMode",
                         label: "Lorentz Aberration",
                         kind: ControlKind::Segmented {
-                            options: vec![(1, "Exact SR"), (0, "Rest Frame")],
+                            options: &[(1, "Exact SR"), (0, "Rest Frame")],
                         },
                     },
                 ],
             },
             ControlSection {
                 id: "spectral",
-                title: "Spectral Sky & Foreground",
+                title: "SPECTRAL SKY & FOREGROUND",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "cmbVisibility",
                         label: "CMB Shell Gain",
@@ -1282,9 +1285,9 @@ impl Simulation for StarflightSim {
             },
             ControlSection {
                 id: "optics",
-                title: "Optics, Sky & Quality",
+                title: "OPTICS, SKY & QUALITY",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "exposure",
                         label: "Exposure",
@@ -1329,26 +1332,27 @@ impl Simulation for StarflightSim {
                         key: "skyMode",
                         label: "Background Sky Source",
                         kind: ControlKind::Select {
-                            options: vec![(0, "4K Milky Way"), (1, "Procedural")],
+                            options: &[(0, "4K Milky Way"), (1, "Procedural")],
                         },
                     },
                     ControlItem {
                         key: "quality",
                         label: "Ray-Trace Quality",
                         kind: ControlKind::Segmented {
-                            options: vec![(0, "Performance"), (1, "Balanced"), (2, "Cinema")],
+                            options: &[(0, "Performance"), (1, "Balanced"), (2, "Cinema")],
                         },
                     },
                     ControlItem {
                         key: "resolutionScale",
                         label: "Render Resolution",
                         kind: ControlKind::Segmented {
-                            options: vec![(50, "0.5×"), (75, "0.75×"), (100, "1.0×")],
+                            options: &[(50, "0.5×"), (75, "0.75×"), (100, "1.0×")],
                         },
                     },
                 ],
             },
-        ]
+        ];
+        SECTIONS
     }
 
     fn get_f32(&self, key: &str) -> f32 {
@@ -1560,7 +1564,7 @@ impl Simulation for StarflightSim {
             preset_badge,
             secondary_badge,
             secondary_badge_warm: true,
-            drawer_title: "SR Flight & Spectral Optics",
+            drawer_title: "SR FLIGHT & SPECTRAL OPTICS",
             drawer_subtitle,
             hint_text: "Drag to look · Right-drag roll · Scroll/W/S FOV · T Aft/Fwd · Space 128× Still · H HUD",
             telemetry: [

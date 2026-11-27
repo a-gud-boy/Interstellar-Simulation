@@ -19,6 +19,7 @@ import {
   formatWgslMessages,
 } from '../../../../shared/engine/SharedWebGPUPostPipeline.js';
 import {
+  createPlaceholderSkyTextureWebGPU,
   createProceduralSkyTextureAWebGPU,
   createExoticNebulaTextureBWebGPU,
 } from '../../../../shared/assets/skyLoader.js';
@@ -326,9 +327,9 @@ export class WebGPURenderer {
 
     const mipGen = (t, w, h, m) => this.generateMipmaps(t, w, h, m);
 
-    const procSkyRes = createProceduralSkyTextureAWebGPU(device, mipGen, 2048, 1024);
-    this.procSkyTexA = procSkyRes?.texture || procSkyRes;
-    this.procSkyViewA = procSkyRes?.view || this.procSkyTexA.createView();
+    this.procSkyTexA = createPlaceholderSkyTextureWebGPU(device, 'proc-sky-a-placeholder');
+    this._procSkyBakedA = false;
+    this.procSkyViewA = this.procSkyTexA.createView();
     this.skyTexA = this.procSkyTexA;
     this.skyViewA = this.procSkyViewA;
 
@@ -491,7 +492,21 @@ export class WebGPURenderer {
       this._rebuildWormholeBindGroup();
       this.resetAccumulation(true);
     } else {
-      if (texture && texture !== this.procSkyTexA && texture !== this.skyTexA) {
+      if (texture && !this._procSkyBakedA) {
+        const oldPlaceholder = this.procSkyTexA;
+        this.procSkyTexA = texture;
+        this.procSkyViewA = texture.createView();
+        if (!this.skyMapLoaded) {
+          this.skyTexA = texture;
+          this.skyViewA = this.procSkyViewA;
+        }
+        this._procSkyBakedA = true;
+        this._rebuildWormholeBindGroup();
+        if (oldPlaceholder && oldPlaceholder !== texture && oldPlaceholder !== this.skyTexA) {
+          oldPlaceholder.destroy();
+        }
+        this.resetAccumulation(true);
+      } else if (texture && texture !== this.procSkyTexA && texture !== this.skyTexA) {
         texture.destroy();
       }
       this.skyMapLoaded = false;
@@ -668,7 +683,10 @@ export class WebGPURenderer {
   render(state, camData, simTime, options = {}) {
     if (this._disposed || !this.getAllShadersCompiled()) return false;
 
-    this.resize(state.resolutionScale);
+    const targetScale = Number(options?.effectiveResolutionScale ?? state?.resolutionScale ?? this.resolutionScale) || 1.0;
+    if (this.width === 0 || this.height === 0 || Math.abs(targetScale - this.resolutionScale) > 1e-4) {
+      this.resize(targetScale);
+    }
 
     // Prevent unthrottled rAF loops on Chrome Dawn without hitting Firefox 100ms polling cap
     if (

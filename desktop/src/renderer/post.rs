@@ -4,6 +4,7 @@ use crate::shaders;
 
 pub const BLOOM_MIP_COUNT: usize = 6;
 pub const MAX_PROGRESSIVE_SAMPLES: u32 = 128;
+pub const MAX_RENDER_DPR: f32 = 1.5;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -29,7 +30,7 @@ struct CompositeUniforms {
     weights_pad: [f32; 4],
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PostTuning {
     pub bloom_threshold: f32,
     pub bloom_knee: f32,
@@ -161,6 +162,7 @@ pub fn halton(index: u32, base: u32) -> f32 {
 }
 
 pub struct PostPipeline {
+    pub scene_hdr_format: wgpu::TextureFormat,
     pub hdr_format: wgpu::TextureFormat,
     pub composite_format: wgpu::TextureFormat,
     pub target_format: wgpu::TextureFormat,
@@ -169,6 +171,8 @@ pub struct PostPipeline {
     pub render_height: u32,
     pub window_width: u32,
     pub window_height: u32,
+    pub scale_factor: f32,
+    pub max_render_dpr: f32,
     pub resolution_scale: f32,
 
     pub frame_index: u32,
@@ -178,6 +182,8 @@ pub struct PostPipeline {
     hard_reset: bool,
     post_dirty: bool,
     was_progressive: bool,
+    last_tuning: Option<PostTuning>,
+    pub glass_blur_dirty: bool,
 
     taa_bgl: wgpu::BindGroupLayout,
     single_src_post_bgl: wgpu::BindGroupLayout,
@@ -229,6 +235,7 @@ pub struct PostPipeline {
 }
 
 impl PostPipeline {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -236,8 +243,18 @@ impl PostPipeline {
         target_format: wgpu::TextureFormat,
         window_width: u32,
         window_height: u32,
+        scale_factor: f32,
+        max_render_dpr: f32,
         resolution_scale: f32,
     ) -> Self {
+        let scene_hdr_format = if device
+            .features()
+            .contains(wgpu::Features::RG11B10UFLOAT_RENDERABLE)
+        {
+            wgpu::TextureFormat::Rg11b10Ufloat
+        } else {
+            wgpu::TextureFormat::Rgba16Float
+        };
         let hdr_format = wgpu::TextureFormat::Rgba16Float;
         let composite_format = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -305,28 +322,28 @@ impl PostPipeline {
             "bloom-pre-pipe",
             &single_src_post_bgl,
             &mod_bloom_pre,
-            hdr_format,
+            scene_hdr_format,
         );
         let bloom_down_pipeline = make_fs_pipe(
             device,
             "bloom-down-pipe",
             &single_src_post_bgl,
             &mod_bloom_down,
-            hdr_format,
+            scene_hdr_format,
         );
         let bloom_up_pipeline = make_fs_pipe(
             device,
             "bloom-up-pipe",
             &bloom_up_bgl,
             &mod_bloom_up,
-            hdr_format,
+            scene_hdr_format,
         );
         let ana_pipeline = make_fs_pipe(
             device,
             "ana-pipe",
             &single_src_post_bgl,
             &mod_ana,
-            hdr_format,
+            scene_hdr_format,
         );
         let comp_pipeline =
             make_fs_pipe(device, "comp-pipe", &comp_bgl, &mod_comp, composite_format);
@@ -368,12 +385,18 @@ impl PostPipeline {
         let glass_ubo_0 = make_ubo("glass-ubo-0", 16);
         let glass_ubo_1 = make_ubo("glass-ubo-1", 16);
 
-        let (render_width, render_height) =
-            compute_render_dims(window_width, window_height, resolution_scale);
+        let (render_width, render_height) = compute_render_dims(
+            window_width,
+            window_height,
+            scale_factor,
+            max_render_dpr,
+            resolution_scale,
+        );
 
         let targets = create_targets(
             device,
             queue,
+            scene_hdr_format,
             hdr_format,
             composite_format,
             render_width,
@@ -401,7 +424,8 @@ impl PostPipeline {
             &targets,
         );
 
-        Self {
+        let pipeline = Self {
+            scene_hdr_format,
             hdr_format,
             composite_format,
             target_format,
@@ -409,7 +433,9 @@ impl PostPipeline {
             render_height,
             window_width: window_width.max(1),
             window_height: window_height.max(1),
-            resolution_scale,
+            scale_factor: scale_factor.max(1.0),
+            max_render_dpr: max_render_dpr.max(1.0),
+            resolution_scale: resolution_scale.clamp(0.25, 1.0),
             frame_index: 0,
             sample_count: 0,
             taa_read_idx: 0,
@@ -417,6 +443,8 @@ impl PostPipeline {
             hard_reset: true,
             post_dirty: true,
             was_progressive: false,
+            last_tuning: None,
+            glass_blur_dirty: true,
             taa_bgl,
             single_src_post_bgl,
             bloom_up_bgl,
@@ -459,7 +487,42 @@ impl PostPipeline {
             glass_bg_1: bgs.glass_bg_1,
             blit_bg: bgs.blit_bg,
             s_linear_clamp,
+        };
+        pipeline.write_size_invariant_ubos(queue);
+        pipeline
+    }
+
+    fn write_size_invariant_ubos(&self, queue: &wgpu::Queue) {
+        for i in 1..BLOOM_MIP_COUNT {
+            let src = &self.bloom_down_rts[i - 1];
+            let df: [f32; 4] = [
+                1.0 / src.width as f32,
+                1.0 / src.height as f32,
+                if i == 1 { 1.0 } else { 0.0 },
+                0.0,
+            ];
+            queue.write_buffer(&self.bloom_down_ubos[i], 0, bytemuck::cast_slice(&df));
         }
+        for i in 0..(BLOOM_MIP_COUNT - 1) {
+            let low_src = if i == BLOOM_MIP_COUNT - 2 {
+                &self.bloom_down_rts[i + 1]
+            } else {
+                &self.bloom_up_rts[i + 1]
+            };
+            let uf: [f32; 4] = [
+                1.0 / low_src.width as f32,
+                1.0 / low_src.height as f32,
+                1.05,
+                0.66,
+            ];
+            queue.write_buffer(&self.bloom_up_ubos[i], 0, bytemuck::cast_slice(&uf));
+        }
+        let gw = self.glass_backdrop_rt.width as f32;
+        let gh = self.glass_backdrop_rt.height as f32;
+        let g0: [f32; 4] = [1.0 / gw, 0.0, 1.0, 0.0];
+        let g1: [f32; 4] = [0.0, 1.0 / gh, 1.25, 0.0];
+        queue.write_buffer(&self.glass_ubo_0, 0, bytemuck::cast_slice(&g0));
+        queue.write_buffer(&self.glass_ubo_1, 0, bytemuck::cast_slice(&g1));
     }
 
     pub fn reset_accumulation(&mut self, hard: bool) {
@@ -474,23 +537,30 @@ impl PostPipeline {
         self.post_dirty = true;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn resize(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         window_width: u32,
         window_height: u32,
+        scale_factor: f32,
+        max_render_dpr: f32,
         resolution_scale: f32,
     ) -> bool {
         let win_w = window_width.max(1);
         let win_h = window_height.max(1);
+        let dpr = scale_factor.max(1.0);
+        let cap = max_render_dpr.max(1.0);
         let scale = resolution_scale.clamp(0.25, 1.0);
-        let (next_rw, next_rh) = compute_render_dims(win_w, win_h, scale);
+        let (next_rw, next_rh) = compute_render_dims(win_w, win_h, dpr, cap, scale);
 
         if next_rw == self.render_width
             && next_rh == self.render_height
             && win_w == self.window_width
             && win_h == self.window_height
+            && (dpr - self.scale_factor).abs() < 1e-4
+            && (cap - self.max_render_dpr).abs() < 1e-4
             && (scale - self.resolution_scale).abs() < 1e-4
         {
             return false;
@@ -500,11 +570,14 @@ impl PostPipeline {
         self.render_height = next_rh;
         self.window_width = win_w;
         self.window_height = win_h;
+        self.scale_factor = dpr;
+        self.max_render_dpr = cap;
         self.resolution_scale = scale;
 
         let targets = create_targets(
             device,
             queue,
+            self.scene_hdr_format,
             self.hdr_format,
             self.composite_format,
             next_rw,
@@ -553,6 +626,9 @@ impl PostPipeline {
         self.glass_bg_1 = bgs.glass_bg_1;
         self.blit_bg = bgs.blit_bg;
 
+        self.last_tuning = None;
+        self.glass_blur_dirty = true;
+        self.write_size_invariant_ubos(queue);
         self.reset_accumulation(true);
         true
     }
@@ -676,76 +752,20 @@ impl PostPipeline {
         let need_bloom = params.bloom_intensity > 0.001;
         let need_ana = params.anamorphic_intensity > 0.001;
 
+        let tuning_changed = self.last_tuning != Some(params.tuning);
         if need_bloom || need_ana {
-            // 1. Bloom prefilter
-            let pre_ubo = BloomPrefilterUniforms {
-                texel_thresh_knee: [
-                    1.0 / self.render_width as f32,
-                    1.0 / self.render_height as f32,
-                    tuning.bloom_threshold,
-                    tuning.bloom_knee,
-                ],
-                clamp_max_pad: [tuning.bloom_clamp, 0.0, 0.0, 0.0],
-            };
-            queue.write_buffer(&self.bloom_pre_ubo, 0, bytemuck::bytes_of(&pre_ubo));
-            run_fs_pass(
-                encoder,
-                "bloom-prefilter",
-                &self.bloom_down_rts[0].view,
-                &self.bloom_pre_pipeline,
-                &self.bloom_pre_bgs[self.taa_read_idx],
-            );
+            if tuning_changed {
+                let pre_ubo = BloomPrefilterUniforms {
+                    texel_thresh_knee: [
+                        1.0 / self.render_width as f32,
+                        1.0 / self.render_height as f32,
+                        tuning.bloom_threshold,
+                        tuning.bloom_knee,
+                    ],
+                    clamp_max_pad: [tuning.bloom_clamp, 0.0, 0.0, 0.0],
+                };
+                queue.write_buffer(&self.bloom_pre_ubo, 0, bytemuck::bytes_of(&pre_ubo));
 
-            // 2. 6-level Jimenez 13-tap Downsample Chain
-            let max_down = if need_bloom { BLOOM_MIP_COUNT - 1 } else { 1 };
-            for i in 1..=max_down {
-                let src = &self.bloom_down_rts[i - 1];
-                let dst = &self.bloom_down_rts[i];
-                if let Some(bg) = &self.bloom_down_bgs[i] {
-                    let df: [f32; 4] = [
-                        1.0 / src.width as f32,
-                        1.0 / src.height as f32,
-                        if i == 1 { 1.0 } else { 0.0 },
-                        0.0,
-                    ];
-                    queue.write_buffer(&self.bloom_down_ubos[i], 0, bytemuck::cast_slice(&df));
-                    run_fs_pass(
-                        encoder,
-                        "bloom-downsample",
-                        &dst.view,
-                        &self.bloom_down_pipeline,
-                        bg,
-                    );
-                }
-            }
-
-            // 3. 9-tap tent upsample chain
-            if need_bloom {
-                for i in (0..=(BLOOM_MIP_COUNT - 2)).rev() {
-                    let low_src = if i == BLOOM_MIP_COUNT - 2 {
-                        &self.bloom_down_rts[i + 1]
-                    } else {
-                        &self.bloom_up_rts[i + 1]
-                    };
-                    let uf: [f32; 4] = [
-                        1.0 / low_src.width as f32,
-                        1.0 / low_src.height as f32,
-                        1.05,
-                        0.66,
-                    ];
-                    queue.write_buffer(&self.bloom_up_ubos[i], 0, bytemuck::cast_slice(&uf));
-                    run_fs_pass(
-                        encoder,
-                        "bloom-upsample",
-                        &self.bloom_up_rts[i].view,
-                        &self.bloom_up_pipeline,
-                        &self.bloom_up_bgs[i],
-                    );
-                }
-            }
-
-            // 4. 2-pass horizontal anamorphic optical streak
-            if need_ana {
                 let src0 = &self.bloom_down_rts[1];
                 let a0 = AnamorphicUniforms {
                     texel_thresh_spread: [
@@ -769,13 +789,6 @@ impl PostPipeline {
                     ],
                 };
                 queue.write_buffer(&self.ana_ubo_0, 0, bytemuck::bytes_of(&a0));
-                run_fs_pass(
-                    encoder,
-                    "anamorphic-pass-0",
-                    &self.ana_rt_a.view,
-                    &self.ana_pipeline,
-                    &self.ana_bg_0,
-                );
 
                 let a1 = AnamorphicUniforms {
                     texel_thresh_spread: [
@@ -789,6 +802,55 @@ impl PostPipeline {
                     tint_outer_mix: a0.tint_outer_mix,
                 };
                 queue.write_buffer(&self.ana_ubo_1, 0, bytemuck::bytes_of(&a1));
+                self.last_tuning = Some(params.tuning);
+            }
+
+            // 1. Bloom prefilter
+            run_fs_pass(
+                encoder,
+                "bloom-prefilter",
+                &self.bloom_down_rts[0].view,
+                &self.bloom_pre_pipeline,
+                &self.bloom_pre_bgs[self.taa_read_idx],
+            );
+
+            // 2. 6-level Jimenez 13-tap Downsample Chain
+            let max_down = if need_bloom { BLOOM_MIP_COUNT - 1 } else { 1 };
+            for i in 1..=max_down {
+                let dst = &self.bloom_down_rts[i];
+                if let Some(bg) = &self.bloom_down_bgs[i] {
+                    run_fs_pass(
+                        encoder,
+                        "bloom-downsample",
+                        &dst.view,
+                        &self.bloom_down_pipeline,
+                        bg,
+                    );
+                }
+            }
+
+            // 3. 9-tap tent upsample chain
+            if need_bloom {
+                for i in (0..=(BLOOM_MIP_COUNT - 2)).rev() {
+                    run_fs_pass(
+                        encoder,
+                        "bloom-upsample",
+                        &self.bloom_up_rts[i].view,
+                        &self.bloom_up_pipeline,
+                        &self.bloom_up_bgs[i],
+                    );
+                }
+            }
+
+            // 4. 2-pass horizontal anamorphic optical streak
+            if need_ana {
+                run_fs_pass(
+                    encoder,
+                    "anamorphic-pass-0",
+                    &self.ana_rt_a.view,
+                    &self.ana_pipeline,
+                    &self.ana_bg_0,
+                );
                 run_fs_pass(
                     encoder,
                     "anamorphic-pass-1",
@@ -827,18 +889,13 @@ impl PostPipeline {
         self.post_dirty = false;
 
         if update_glass_blur {
-            self.encode_glass_blur(queue, encoder);
+            self.encode_glass_blur(encoder);
+        } else {
+            self.glass_blur_dirty = true;
         }
     }
 
-    pub fn encode_glass_blur(&self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
-        let gw = self.glass_backdrop_rt.width as f32;
-        let gh = self.glass_backdrop_rt.height as f32;
-        let g0: [f32; 4] = [1.0 / gw, 0.0, 1.0, 0.0];
-        let g1: [f32; 4] = [0.0, 1.0 / gh, 1.25, 0.0];
-        queue.write_buffer(&self.glass_ubo_0, 0, bytemuck::cast_slice(&g0));
-        queue.write_buffer(&self.glass_ubo_1, 0, bytemuck::cast_slice(&g1));
-
+    pub fn encode_glass_blur(&mut self, encoder: &mut wgpu::CommandEncoder) {
         run_fs_pass(
             encoder,
             "glass-blur-h",
@@ -853,6 +910,13 @@ impl PostPipeline {
             &self.glass_blur_pipeline,
             &self.glass_bg_1,
         );
+        self.glass_blur_dirty = false;
+    }
+
+    pub fn draw_blit_into_pass(&self, rpass: &mut wgpu::RenderPass<'_>) {
+        rpass.set_pipeline(&self.blit_pipeline);
+        rpass.set_bind_group(0, &self.blit_bg, &[]);
+        rpass.draw(0..3, 0..1);
     }
 
     pub fn encode_blit_to_target(
@@ -878,9 +942,19 @@ pub struct FramePlan {
     pub is_progressive: bool,
 }
 
-fn compute_render_dims(window_width: u32, window_height: u32, scale: f32) -> (u32, u32) {
-    let rw = ((window_width as f32) * scale).round().max(64.0) as u32;
-    let rh = ((window_height as f32) * scale).round().max(64.0) as u32;
+fn compute_render_dims(
+    window_width: u32,
+    window_height: u32,
+    scale_factor: f32,
+    max_render_dpr: f32,
+    scale: f32,
+) -> (u32, u32) {
+    let dpr = scale_factor.max(1.0);
+    let cap = max_render_dpr.max(1.0);
+    let dpr_scale = if dpr > cap { cap / dpr } else { 1.0 };
+    let eff = (scale.clamp(0.25, 1.0) * dpr_scale).clamp(0.2, 1.0);
+    let rw = ((window_width as f32) * eff).round().max(64.0) as u32;
+    let rh = ((window_height as f32) * eff).round().max(64.0) as u32;
     (rw, rh)
 }
 
@@ -900,7 +974,8 @@ struct Targets {
 fn create_targets(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    hdr_format: wgpu::TextureFormat,
+    scene_hdr_format: wgpu::TextureFormat,
+    taa_hdr_format: wgpu::TextureFormat,
     composite_format: wgpu::TextureFormat,
     render_w: u32,
     render_h: u32,
@@ -912,7 +987,7 @@ fn create_targets(
         "scene-rt",
         render_w,
         render_h,
-        hdr_format,
+        scene_hdr_format,
         wgpu::TextureUsages::empty(),
     );
     let taa_rts = [
@@ -921,7 +996,7 @@ fn create_targets(
             "taa-rt-0",
             render_w,
             render_h,
-            hdr_format,
+            taa_hdr_format,
             wgpu::TextureUsages::empty(),
         ),
         RenderTarget::new(
@@ -929,7 +1004,7 @@ fn create_targets(
             "taa-rt-1",
             render_w,
             render_h,
-            hdr_format,
+            taa_hdr_format,
             wgpu::TextureUsages::empty(),
         ),
     ];
@@ -944,7 +1019,7 @@ fn create_targets(
             &format!("bloom-down-{i}"),
             mip_w,
             mip_h,
-            hdr_format,
+            scene_hdr_format,
             wgpu::TextureUsages::empty(),
         ));
         if i < BLOOM_MIP_COUNT - 1 {
@@ -953,7 +1028,7 @@ fn create_targets(
                 &format!("bloom-up-{i}"),
                 mip_w,
                 mip_h,
-                hdr_format,
+                scene_hdr_format,
                 wgpu::TextureUsages::empty(),
             ));
         }
@@ -968,7 +1043,7 @@ fn create_targets(
         "ana-rt-a",
         ana_w,
         ana_h,
-        hdr_format,
+        scene_hdr_format,
         wgpu::TextureUsages::empty(),
     );
     let ana_rt_b = RenderTarget::new(
@@ -976,7 +1051,7 @@ fn create_targets(
         "ana-rt-b",
         ana_w,
         ana_h,
-        hdr_format,
+        scene_hdr_format,
         wgpu::TextureUsages::empty(),
     );
 

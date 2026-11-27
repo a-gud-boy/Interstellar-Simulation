@@ -1,9 +1,10 @@
 use std::f32::consts::PI;
+use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::renderer::SharedGpuAssets;
-use crate::renderer::post::{PostFrameParams, PostTuning, make_fs_pipe, run_fs_pass};
+use crate::renderer::post::{PostFrameParams, PostTuning, run_fs_pass};
+use crate::renderer::{SharedGpuAssets, SimBglKind};
 use crate::shaders;
 use crate::sims::{
     ControlItem, ControlKind, ControlSection, HudMetadata, PresetMeta, SimId, SimInput, Simulation,
@@ -834,7 +835,7 @@ pub struct WormholeSim {
     sim_time: f32,
 
     camera: WormholeCamera,
-    pipeline: wgpu::RenderPipeline,
+    pipeline: Arc<wgpu::RenderPipeline>,
     ubo: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
 }
@@ -842,18 +843,12 @@ pub struct WormholeSim {
 impl WormholeSim {
     pub fn new(assets: &mut SharedGpuAssets) -> Self {
         let p = &PRESETS[0];
-        let shader = assets
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("wormhole-wgsl"),
-                source: wgpu::ShaderSource::Wgsl(shaders::WORMHOLE.into()),
-            });
-        let pipeline = make_fs_pipe(
-            &assets.device,
-            "wormhole-pipe",
-            &assets.wormhole_sim_bgl,
-            &shader,
-            wgpu::TextureFormat::Rgba16Float,
+        assets.ensure_procedural_sky_a();
+        let pipeline = assets.get_or_create_sim_pipeline(
+            SimId::Wormhole,
+            "wormhole",
+            SimBglKind::Wormhole,
+            shaders::WORMHOLE,
         );
         let ubo = assets.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("wormhole-ubo"),
@@ -981,8 +976,16 @@ impl Simulation for WormholeSim {
         }
     }
 
-    fn presets(&self) -> Vec<PresetMeta> {
-        PRESETS.iter().map(|p| p.meta).collect()
+    fn presets(&self) -> &'static [PresetMeta] {
+        const METAS: [PresetMeta; 6] = [
+            PRESETS[0].meta,
+            PRESETS[1].meta,
+            PRESETS[2].meta,
+            PRESETS[3].meta,
+            PRESETS[4].meta,
+            PRESETS[5].meta,
+        ];
+        &METAS
     }
 
     fn active_preset_index(&self) -> Option<usize> {
@@ -1012,18 +1015,18 @@ impl Simulation for WormholeSim {
         }
     }
 
-    fn control_sections(&self) -> Vec<ControlSection> {
-        vec![
+    fn control_sections(&self) -> &'static [ControlSection] {
+        const SECTIONS: &[ControlSection] = &[
             ControlSection {
                 id: "spacetime",
-                title: "Wormhole Metric & Throat",
+                title: "WORMHOLE METRIC & THROAT",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "metricType",
                         label: "Spacetime Metric",
                         kind: ControlKind::Segmented {
-                            options: vec![(0, "Interstellar"), (1, "Ellis")],
+                            options: &[(0, "Interstellar"), (1, "Ellis")],
                         },
                     },
                     ControlItem {
@@ -1060,9 +1063,9 @@ impl Simulation for WormholeSim {
             },
             ControlSection {
                 id: "matter",
-                title: "Throat Matter & Dual Universes",
+                title: "THROAT MATTER & DUAL UNIVERSES",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "throatGlow",
                         label: "Refractive Throat Glow",
@@ -1117,16 +1120,16 @@ impl Simulation for WormholeSim {
                         key: "planetVisible",
                         label: "Cosmic Landmarks",
                         kind: ControlKind::Segmented {
-                            options: vec![(1, "Visible"), (0, "Hidden")],
+                            options: &[(1, "Visible"), (0, "Hidden")],
                         },
                     },
                 ],
             },
             ControlSection {
                 id: "optics",
-                title: "Optics, Sky & Quality",
+                title: "OPTICS, SKY & QUALITY",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "exposure",
                         label: "Exposure",
@@ -1161,19 +1164,20 @@ impl Simulation for WormholeSim {
                         key: "quality",
                         label: "Ray-Trace Quality",
                         kind: ControlKind::Segmented {
-                            options: vec![(0, "Medium"), (1, "High"), (2, "Ultra Cinema")],
+                            options: &[(0, "Medium"), (1, "High"), (2, "Ultra Cinema")],
                         },
                     },
                     ControlItem {
                         key: "resolutionScale",
                         label: "Render Resolution",
                         kind: ControlKind::Segmented {
-                            options: vec![(50, "0.5×"), (75, "0.75×"), (100, "1.0×")],
+                            options: &[(50, "0.5×"), (75, "0.75×"), (100, "1.0×")],
                         },
                     },
                 ],
             },
-        ]
+        ];
+        SECTIONS
     }
 
     fn get_f32(&self, key: &str) -> f32 {
@@ -1322,7 +1326,7 @@ impl Simulation for WormholeSim {
             preset_badge,
             secondary_badge: tel.region.to_string(),
             secondary_badge_warm: false,
-            drawer_title: "Physics & Optics",
+            drawer_title: "PHYSICS & OPTICS",
             drawer_subtitle: format!(
                 "ρ {:.2} M · θportal {:.1}°",
                 tel.throat_radius, tel.apparent_throat_deg

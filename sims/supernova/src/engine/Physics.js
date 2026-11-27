@@ -247,6 +247,15 @@ export function estimateOpticalDepth(state = {}) {
   return { opticalDepth, transmittance };
 }
 
+export function evalSupernovaCentralTempK(ageYears, starLuminosity = 1.4) {
+  const lum = clamp(Number(starLuminosity ?? 1.4), 0.05, 5.0);
+  return (
+    125000.0 *
+    Math.pow(1000.0 / Math.max(ageYears, 50.0), 0.28) *
+    Math.pow(lum, 0.25)
+  );
+}
+
 /**
  * Computes live HUD and shader telemetry from current simulator state.
  *
@@ -267,12 +276,7 @@ export function estimateOpticalDepth(state = {}) {
 export function computeSupernovaTelemetry(state = {}) {
   const st = evalSedovTaylor(state.shockAge);
   const { opticalDepth, transmittance } = estimateOpticalDepth(state);
-
-  const starLuminosity = clamp(Number(state.starLuminosity ?? 1.4), 0.05, 5.0);
-  const centralTempK =
-    125000.0 *
-    Math.pow(1000.0 / Math.max(st.ageYears, 50.0), 0.28) *
-    Math.pow(starLuminosity, 0.25);
+  const centralTempK = evalSupernovaCentralTempK(st.ageYears, state.starLuminosity);
 
   const paletteMode = (Number(state.paletteMode) | 0) === 1 ? 1 : 0;
 

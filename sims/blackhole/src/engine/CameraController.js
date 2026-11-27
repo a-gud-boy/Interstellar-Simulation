@@ -13,6 +13,8 @@ import {
   easeOutCubic,
   stepCriticallyDamped,
   isEditableElement,
+  computeSphericalOrbitBasisInto,
+  createCanvasRectCache,
 } from '../../../../shared/engine/BaseCamera.js';
 export { computeKerrTelemetry };
 
@@ -79,9 +81,11 @@ export class CameraController {
 
     // Cached output buffers
     this._pos = [0, 0, r0];
+    this._posUnit = [0, 0, 1];
     this._basis = new Float32Array(9);
     this._moved = true;
-    this._prevSignature = null;
+    this._hasPrevSignature = false;
+    this._prevSignature = new Float64Array(10);
 
     // Active pointer & keyboard state
     this._pointers = new Map();
@@ -90,6 +94,7 @@ export class CameraController {
     this._keys = new Set();
     this._windowBound = false;
     this._canvasBoundTo = null;
+    this._rectCache = createCanvasRectCache(() => this.canvas);
 
     this._recomputeBasis();
     this._bindEvents();
@@ -247,9 +252,7 @@ export class CameraController {
         return;
       }
 
-      const rect = this.canvas
-        ? this.canvas.getBoundingClientRect()
-        : { width: window.innerWidth, height: window.innerHeight };
+      const rect = this._rectCache.getRect();
       const scale = 1.0 / Math.max(Math.min(rect.width, rect.height), 320);
 
       if (this._dragMode === 'roll' || e.shiftKey) {
@@ -380,6 +383,7 @@ export class CameraController {
     if (this.canvas) {
       this._bindCanvasEvents(this.canvas);
     }
+    this._rectCache?.invalidate();
     this._moved = true;
   }
 
@@ -527,86 +531,46 @@ export class CameraController {
 
   _recomputeBasis() {
     const r = Math.exp(this.logRadius);
-    const cosEl = Math.cos(this.elevation);
-    const sinEl = Math.sin(this.elevation);
-    const cosAz = Math.cos(this.azimuth);
-    const sinAz = Math.sin(this.azimuth);
+    const b = this._basis;
+    computeSphericalOrbitBasisInto(this._posUnit, b, this.azimuth, this.elevation, this.roll);
 
     // Camera position in Kerr-Schild Cartesian coords (spin = +Y, disk = X-Z plane)
     // At az=0, el=0: pos = (0, 0, +r) looking toward origin along -Z
-    const px = r * cosEl * sinAz;
-    const py = r * sinEl;
-    const pz = r * cosEl * cosAz;
+    const px = r * this._posUnit[0];
+    const py = r * this._posUnit[1];
+    const pz = r * this._posUnit[2];
     this._pos[0] = px;
     this._pos[1] = py;
     this._pos[2] = pz;
 
-    // Forward unit vector pointing toward black hole center (0, 0, 0)
-    const invR = 1.0 / Math.max(r, 1e-6);
-    const fx = -px * invR;
-    const fy = -py * invR;
-    const fz = -pz * invR;
-
-    // Right0 = normalize(cross(forward, worldUp=(0,1,0))) = normalize(-fz, 0, fx)
-    let r0x = -fz;
-    let r0y = 0.0;
-    let r0z = fx;
-    const r0Len = Math.hypot(r0x, r0z);
-    if (r0Len < 1e-6) {
-      r0x = cosAz;
-      r0z = -sinAz;
-    } else {
-      r0x /= r0Len;
-      r0z /= r0Len;
-    }
-
-    // Up0 = normalize(cross(right0, forward))
-    let u0x = r0y * fz - r0z * fy;
-    let u0y = r0z * fx - r0x * fz;
-    let u0z = r0x * fy - r0y * fx;
-    const u0Len = Math.hypot(u0x, u0y, u0z) || 1.0;
-    u0x /= u0Len;
-    u0y /= u0Len;
-    u0z /= u0Len;
-
-    // Apply camera Dutch roll around forward axis
-    const cosR = Math.cos(this.roll);
-    const sinR = Math.sin(this.roll);
-
-    const rx = cosR * r0x + sinR * u0x;
-    const ry = cosR * r0y + sinR * u0y;
-    const rz = cosR * r0z + sinR * u0z;
-
-    const ux = -sinR * r0x + cosR * u0x;
-    const uy = -sinR * r0y + cosR * u0y;
-    const uz = -sinR * r0z + cosR * u0z;
-
-    // Column-major mat3: col0 = right, col1 = up, col2 = forward
-    const b = this._basis;
-    b[0] = rx;
-    b[1] = ry;
-    b[2] = rz;
-    b[3] = ux;
-    b[4] = uy;
-    b[5] = uz;
-    b[6] = fx;
-    b[7] = fy;
-    b[8] = fz;
-
-    // Check whether camera pose actually changed since last frame
-    const sig = [px, py, pz, rx, ry, rz, ux, uy, uz, this.fov];
-    if (!this._prevSignature) {
+    // Check whether camera pose actually changed since last frame (zero allocation)
+    const prev = this._prevSignature;
+    if (!this._hasPrevSignature) {
       this._moved = true;
-      this._prevSignature = sig;
+      this._hasPrevSignature = true;
+      prev[0] = px; prev[1] = py; prev[2] = pz;
+      prev[3] = b[0]; prev[4] = b[1]; prev[5] = b[2];
+      prev[6] = b[3]; prev[7] = b[4]; prev[8] = b[5];
+      prev[9] = this.fov;
     } else {
-      let maxDiff = 0;
-      for (let i = 0; i < sig.length; i++) {
-        const d = Math.abs(sig[i] - this._prevSignature[i]);
-        if (d > maxDiff) maxDiff = d;
-      }
+      const maxDiff = Math.max(
+        Math.abs(px - prev[0]),
+        Math.abs(py - prev[1]),
+        Math.abs(pz - prev[2]),
+        Math.abs(b[0] - prev[3]),
+        Math.abs(b[1] - prev[4]),
+        Math.abs(b[2] - prev[5]),
+        Math.abs(b[3] - prev[6]),
+        Math.abs(b[4] - prev[7]),
+        Math.abs(b[5] - prev[8]),
+        Math.abs(this.fov - prev[9])
+      );
       this._moved = maxDiff > 1e-6;
       if (this._moved) {
-        this._prevSignature = sig;
+        prev[0] = px; prev[1] = py; prev[2] = pz;
+        prev[3] = b[0]; prev[4] = b[1]; prev[5] = b[2];
+        prev[6] = b[3]; prev[7] = b[4]; prev[8] = b[5];
+        prev[9] = this.fov;
       }
     }
   }
@@ -625,6 +589,7 @@ export class CameraController {
   }
 
   dispose() {
+    this._rectCache?.dispose();
     if (this.canvas) {
       this._unbindCanvasEvents(this.canvas);
     }

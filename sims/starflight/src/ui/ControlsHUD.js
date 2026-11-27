@@ -313,6 +313,8 @@ export function createHUD({
   let drawerOpen = false;
   let hudVisible = true;
   let lastHideTrigger = btnHideUi || btnHideHud;
+  let latestRapidity = Number.isFinite(state.rapidity) ? state.rapidity : undefined;
+  let lastFlipPressed = null;
 
   function setDrawerOpen(open, { returnFocus = false } = {}) {
     drawerOpen = Boolean(open);
@@ -322,6 +324,12 @@ export function createHUD({
     controlsToggle.setAttribute('aria-expanded', drawerOpen ? 'true' : 'false');
 
     if (drawerOpen) {
+      if (Number.isFinite(latestRapidity) && !draggingKeys.has('rapidity')) {
+        const rapBinding = controlBindings.get('rapidity');
+        if (rapBinding && Math.abs(rapBinding.get() - latestRapidity) > 5e-4) {
+          rapBinding.set(latestRapidity);
+        }
+      }
       controlsClose.focus({ preventScroll: true });
     } else if (returnFocus && hudVisible) {
       controlsToggle.focus({ preventScroll: true });
@@ -614,7 +622,11 @@ export function createHUD({
     }
 
     if ('isAft' in targetState && btnFlipView) {
-      btnFlipView.setAttribute('aria-pressed', targetState.isAft ? 'true' : 'false');
+      const nextFlip = targetState.isAft ? 'true' : 'false';
+      if (nextFlip !== lastFlipPressed) {
+        lastFlipPressed = nextFlip;
+        btnFlipView.setAttribute('aria-pressed', nextFlip);
+      }
     }
   }
 
@@ -739,8 +751,12 @@ export function createHUD({
       setTextIfChanged(drawerRendererName, textCache, 'rendererName', String(rendererName));
     }
 
+    if (Number.isFinite(rapidity)) {
+      latestRapidity = rapidity;
+    }
+
     // Keep #ctrl-rapidity visually synced during 1g Accel without fighting manual slider drag
-    if (flightMode === 1 && Number.isFinite(rapidity) && !draggingKeys.has('rapidity')) {
+    if (drawerOpen && flightMode === 1 && Number.isFinite(rapidity) && !draggingKeys.has('rapidity')) {
       const rapBinding = controlBindings.get('rapidity');
       if (rapBinding && document.activeElement !== rapBinding.input) {
         if (Math.abs(rapBinding.get() - rapidity) > 5e-4) {
@@ -750,7 +766,11 @@ export function createHUD({
     }
 
     if (btnFlipView && typeof tel?.isAft === 'boolean') {
-      btnFlipView.setAttribute('aria-pressed', tel.isAft ? 'true' : 'false');
+      const nextFlip = tel.isAft ? 'true' : 'false';
+      if (nextFlip !== lastFlipPressed) {
+        lastFlipPressed = nextFlip;
+        btnFlipView.setAttribute('aria-pressed', nextFlip);
+      }
     }
   }
 

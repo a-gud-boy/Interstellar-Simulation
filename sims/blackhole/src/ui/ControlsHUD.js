@@ -268,6 +268,7 @@ export function createHUD({
   const loadingMessage = document.getElementById('loading-message');
   const errorNotice = document.getElementById('webgl-error');
   const errorMessage = document.getElementById('webgl-error-message');
+  let spinInputEl = null;
 
   const controlBindings = new Map();
   const presetButtons = new Map();
@@ -516,6 +517,7 @@ export function createHUD({
       details.appendChild(body);
       controlsSections.appendChild(details);
     }
+    spinInputEl = document.getElementById('ctrl-spin');
   }
 
   function buildPresets() {
@@ -613,7 +615,7 @@ export function createHUD({
     }
 
     const spinVal = controlBindings.has('spin')
-      ? document.getElementById('ctrl-spin')?.value
+      ? spinInputEl?.value
       : null;
     if (spinVal !== null && spinVal !== undefined) {
       setTextIfChanged(telSpin, textCache, 'spin', Number(spinVal).toFixed(3));

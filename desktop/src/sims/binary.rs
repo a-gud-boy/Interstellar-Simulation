@@ -1,9 +1,10 @@
 use std::f32::consts::{PI, TAU};
+use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::renderer::SharedGpuAssets;
-use crate::renderer::post::{PostFrameParams, PostTuning, make_fs_pipe, run_fs_pass};
+use crate::renderer::post::{PostFrameParams, PostTuning, run_fs_pass};
+use crate::renderer::{SharedGpuAssets, SimBglKind};
 use crate::shaders;
 use crate::sims::blackhole::format_thousands;
 use crate::sims::{
@@ -894,7 +895,7 @@ pub struct BinaryBhSim {
     orbit: OrbitState,
     camera: BinaryCamera,
 
-    tidal_pipeline: wgpu::ComputePipeline,
+    tidal_pipeline: Arc<wgpu::ComputePipeline>,
     tidal_ubo: wgpu::Buffer,
     _tidal_tex_a: wgpu::Texture,
     _tidal_tex_b: wgpu::Texture,
@@ -905,7 +906,7 @@ pub struct BinaryBhSim {
     tidal_reset: bool,
     last_tidal_sig: Option<[f32; 5]>,
 
-    pipeline: wgpu::RenderPipeline,
+    pipeline: Arc<wgpu::RenderPipeline>,
     ubo: wgpu::Buffer,
     bin_bgs: [wgpu::BindGroup; 2],
 }
@@ -914,73 +915,7 @@ impl BinaryBhSim {
     pub fn new(assets: &mut SharedGpuAssets) -> Self {
         let p = &PRESETS[0];
 
-        let tidal_mod = assets
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("tidal-wgsl"),
-                source: wgpu::ShaderSource::Wgsl(shaders::TIDAL.into()),
-            });
-        let tidal_bgl = assets
-            .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("tidal-bgl"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 3,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: wgpu::TextureFormat::Rgba16Float,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-        let tidal_layout = assets
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("tidal-layout"),
-                bind_group_layouts: &[Some(&tidal_bgl)],
-                immediate_size: 0,
-            });
-        let tidal_pipeline =
-            assets
-                .device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("tidal-pipe"),
-                    layout: Some(&tidal_layout),
-                    module: &tidal_mod,
-                    entry_point: Some("main"),
-                    compilation_options: Default::default(),
-                    cache: None,
-                });
+        let (tidal_bgl, tidal_pipeline) = assets.get_or_create_tidal_pipeline();
 
         let tidal_ubo = assets.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("tidal-ubo"),
@@ -1015,7 +950,7 @@ impl BinaryBhSim {
         let tidal_bgs = [
             assets.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("tidal-bg-0"),
-                layout: &tidal_bgl,
+                layout: tidal_bgl.as_ref(),
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
@@ -1037,7 +972,7 @@ impl BinaryBhSim {
             }),
             assets.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("tidal-bg-1"),
-                layout: &tidal_bgl,
+                layout: tidal_bgl.as_ref(),
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
@@ -1059,18 +994,11 @@ impl BinaryBhSim {
             }),
         ];
 
-        let shader = assets
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("binary-wgsl"),
-                source: wgpu::ShaderSource::Wgsl(shaders::BINARY.into()),
-            });
-        let pipeline = make_fs_pipe(
-            &assets.device,
-            "binary-pipe",
-            &assets.binary_sim_bgl,
-            &shader,
-            wgpu::TextureFormat::Rgba16Float,
+        let pipeline = assets.get_or_create_sim_pipeline(
+            SimId::BinaryBh,
+            "binary",
+            SimBglKind::Binary,
+            shaders::BINARY,
         );
         let ubo = assets.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("binary-ubo"),
@@ -1330,8 +1258,16 @@ impl Simulation for BinaryBhSim {
         }
     }
 
-    fn presets(&self) -> Vec<PresetMeta> {
-        PRESETS.iter().map(|p| p.meta).collect()
+    fn presets(&self) -> &'static [PresetMeta] {
+        const METAS: [PresetMeta; 6] = [
+            PRESETS[0].meta,
+            PRESETS[1].meta,
+            PRESETS[2].meta,
+            PRESETS[3].meta,
+            PRESETS[4].meta,
+            PRESETS[5].meta,
+        ];
+        &METAS
     }
 
     fn active_preset_index(&self) -> Option<usize> {
@@ -1375,13 +1311,13 @@ impl Simulation for BinaryBhSim {
         }
     }
 
-    fn control_sections(&self) -> Vec<ControlSection> {
-        vec![
+    fn control_sections(&self) -> &'static [ControlSection] {
+        const SECTIONS: &[ControlSection] = &[
             ControlSection {
                 id: "spacetime",
-                title: "Binary Spacetime & GW",
+                title: "BINARY SPACETIME & GW",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "massRatio",
                         label: "Mass Ratio (q = m₂/m₁)",
@@ -1426,7 +1362,7 @@ impl Simulation for BinaryBhSim {
                         key: "inspiralMode",
                         label: "2.5PN Inspiral Evolution",
                         kind: ControlKind::Segmented {
-                            options: vec![(0, "Orbital Lock"), (1, "2.5PN Inspiral")],
+                            options: &[(0, "Orbital Lock"), (1, "2.5PN Inspiral")],
                         },
                     },
                     ControlItem {
@@ -1463,9 +1399,9 @@ impl Simulation for BinaryBhSim {
             },
             ControlSection {
                 id: "accretion",
-                title: "Circumbinary Disk & Bridges",
+                title: "CIRCUMBINARY DISK & BRIDGES",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "diskTemp",
                         label: "Inner Temperature",
@@ -1530,9 +1466,9 @@ impl Simulation for BinaryBhSim {
             },
             ControlSection {
                 id: "optics",
-                title: "Optics, Sky & Quality",
+                title: "OPTICS, SKY & QUALITY",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "exposure",
                         label: "Exposure",
@@ -1577,7 +1513,7 @@ impl Simulation for BinaryBhSim {
                         key: "skyMode",
                         label: "Background Sky Source",
                         kind: ControlKind::Select {
-                            options: vec![
+                            options: &[
                                 (0, "Hybrid 4K + Micro-Stars"),
                                 (1, "4K NASA/ESO Map"),
                                 (2, "Procedural Deep Field"),
@@ -1588,19 +1524,20 @@ impl Simulation for BinaryBhSim {
                         key: "quality",
                         label: "Ray-Trace Quality",
                         kind: ControlKind::Segmented {
-                            options: vec![(0, "Medium"), (1, "High"), (2, "Ultra Cinema")],
+                            options: &[(0, "Medium"), (1, "High"), (2, "Ultra Cinema")],
                         },
                     },
                     ControlItem {
                         key: "resolutionScale",
                         label: "Render Resolution",
                         kind: ControlKind::Segmented {
-                            options: vec![(50, "0.5×"), (75, "0.75×"), (100, "1.0×")],
+                            options: &[(50, "0.5×"), (75, "0.75×"), (100, "1.0×")],
                         },
                     },
                 ],
             },
-        ]
+        ];
+        SECTIONS
     }
 
     fn get_f32(&self, key: &str) -> f32 {
@@ -1780,7 +1717,7 @@ impl Simulation for BinaryBhSim {
             preset_badge,
             secondary_badge,
             secondary_badge_warm: false,
-            drawer_title: "Binary Physics & Optics",
+            drawer_title: "BINARY PHYSICS & OPTICS",
             drawer_subtitle: format!(
                 "m1 {:.2} · m2 {:.2} · rcav {:.1} M",
                 bin.m1, bin.m2, bin.r_cavity
@@ -1870,26 +1807,31 @@ impl Simulation for BinaryBhSim {
         let bin = self.active_binary_state();
         let field_half_size = (self.disk_outer_radius * 1.15).max(bin.d as f32 * 3.8);
 
-        let mut need_reset = self.tidal_reset || self.last_tidal_sig.is_none();
-        if let Some(prev) = self.last_tidal_sig
-            && ((bin.q as f32 - prev[0]).abs() > 1e-4
-                || (self.disk_density - prev[1]).abs() > 1e-3
-                || (self.bridge_intensity - prev[2]).abs() > 1e-3
-                || (self.disk_outer_radius - prev[3]).abs() > 0.1
-                || (bin.d as f32 - prev[4]).abs() > 0.35)
-        {
-            need_reset = true;
-        }
-        let is_progressive = self.paused && !self.camera.moved;
-        if need_reset || (!is_progressive && dt > 0.0) {
-            self.dispatch_tidal(
-                assets,
-                encoder,
-                &bin,
-                field_half_size,
-                if is_progressive { 0.0 } else { dt },
-                need_reset,
-            );
+        if self.disk_density <= 0.001 && self.bridge_intensity <= 0.001 {
+            self.tidal_reset = true;
+            self.last_tidal_sig = None;
+        } else {
+            let mut need_reset = self.tidal_reset || self.last_tidal_sig.is_none();
+            if let Some(prev) = self.last_tidal_sig
+                && ((bin.q as f32 - prev[0]).abs() > 1e-4
+                    || (self.disk_density - prev[1]).abs() > 1e-3
+                    || (self.bridge_intensity - prev[2]).abs() > 1e-3
+                    || (self.disk_outer_radius - prev[3]).abs() > 0.1
+                    || (bin.d as f32 - prev[4]).abs() > 0.35)
+            {
+                need_reset = true;
+            }
+            let is_progressive = self.paused && !self.camera.moved;
+            if need_reset || (!is_progressive && dt > 0.0) {
+                self.dispatch_tidal(
+                    assets,
+                    encoder,
+                    &bin,
+                    field_half_size,
+                    if is_progressive { 0.0 } else { dt },
+                    need_reset,
+                );
+            }
         }
 
         let ubo_data = self.build_uniforms(

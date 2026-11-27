@@ -231,12 +231,18 @@ fn stellarTint(tNorm: f32, alienPalette: bool) -> vec3f {
     let gold  = vec3f(1.00, 0.68, 0.28);
     let ivory = vec3f(1.00, 0.94, 0.82);
     let teal  = vec3f(0.42, 0.92, 1.00);
-    return select(mix(ivory, teal, (tNorm - 0.55) / 0.45), mix(gold, ivory, tNorm / 0.55), tNorm < 0.55);
+    if (tNorm < 0.55) {
+      return mix(gold, ivory, tNorm / 0.55);
+    }
+    return mix(ivory, teal, (tNorm - 0.55) / 0.45);
   }
   let redK  = vec3f(1.00, 0.56, 0.26);
   let solG  = vec3f(1.00, 0.95, 0.88);
   let blueO = vec3f(0.64, 0.82, 1.00);
-  return select(mix(solG, blueO, (tNorm - 0.5) * 2.0), mix(redK, solG, tNorm * 2.0), tNorm < 0.5);
+  if (tNorm < 0.5) {
+    return mix(redK, solG, tNorm * 2.0);
+  }
+  return mix(solG, blueO, (tNorm - 0.5) * 2.0);
 }
 
 fn evalMicroStarLayer(dir: vec3f, scale: f32, densityThresh: f32, boost: f32, pixelFw: f32, alienPalette: bool) -> vec3f {
@@ -278,16 +284,20 @@ fn evalUniverseALandmarks(dir: vec3f, dirFw: f32) -> LandmarkResult {
   let sunDir     = normalize(vec3f(-0.62, 0.30, -0.725));
   let ringNormal = normalize(vec3f(0.28, 0.90, 0.33));
 
-  let distUnits : f32 = 31.0;
-  let C = saturnDir * distUnits;
-  let aaUnit = clamp(min(dirFw, 0.012) * distUnits, 0.014, 0.25);
+  let saturnCos = dot(dir, saturnDir);
+  var saturnTotal = vec3f(0.0);
+  var saturnOcc : f32 = 0.0;
 
-  let tCa = dot(C, dir);
-  var tGlobe : f32 = 1e6;
-  var globeAlpha : f32 = 0.0;
-  var globeCol = vec3f(0.0);
+  if (saturnCos > 0.985) {
+    let distUnits : f32 = 31.0;
+    let C = saturnDir * distUnits;
+    let aaUnit = clamp(min(dirFw, 0.012) * distUnits, 0.014, 0.25);
 
-  if (tCa > 0.0) {
+    let tCa = saturnCos * distUnits;
+    var tGlobe : f32 = 1e6;
+    var globeAlpha : f32 = 0.0;
+    var globeCol = vec3f(0.0);
+
     let perp = dir * tCa - C;
     let d2 = dot(perp, perp);
     let d = sqrt(d2);
@@ -323,62 +333,63 @@ fn evalUniverseALandmarks(dir: vec3f, dirFw: f32) -> LandmarkResult {
       let limbGlow = vec3f(0.72, 0.78, 0.88) * (fresnel * ndotl * 0.25);
       globeCol = baseAlbedo * (0.025 + 1.55 * lit) + limbGlow;
     }
-  }
 
-  let denom = dot(dir, ringNormal);
-  var tRing : f32 = 1e6;
-  var ringAlpha : f32 = 0.0;
-  var ringCol = vec3f(0.0);
-  if (abs(denom) > 1e-4) {
-    let tr = dot(C, ringNormal) / denom;
-    if (tr > 0.0) {
-      let rPos = dir * tr - C;
-      let rDist = length(rPos);
-      let innerFade = smoothstep(1.30 - aaUnit, 1.34 + aaUnit, rDist);
-      let outerFade = 1.0 - smoothstep(2.36 - aaUnit, 2.40 + aaUnit, rDist);
-      let ringMask = innerFade * outerFade;
-      if (ringMask > 0.001) {
-        tRing = tr;
-        let casW = (rDist - 1.97) / max(0.042, aaUnit * 0.5);
-        let encW = (rDist - 2.27) / max(0.018, aaUnit * 0.4);
-        let cassini = 1.0 - 0.94 * exp(-(casW * casW));
-        let encke   = 1.0 - 0.65 * exp(-(encW * encW));
-        let cRing   = mix(0.28, 1.0, smoothstep(1.32, 1.54, rDist));
-        let ringlets = 0.82 + 0.18 * sin(rDist * 48.0) * cos(rDist * 19.0);
-        let density = ringMask * cassini * encke * cRing * ringlets;
+    let denom = dot(dir, ringNormal);
+    var tRing : f32 = 1e6;
+    var ringAlpha : f32 = 0.0;
+    var ringCol = vec3f(0.0);
+    if (abs(denom) > 1e-4) {
+      let tr = dot(C, ringNormal) / denom;
+      if (tr > 0.0) {
+        let rPos = dir * tr - C;
+        let rDist = length(rPos);
+        let innerFade = smoothstep(1.30 - aaUnit, 1.34 + aaUnit, rDist);
+        let outerFade = 1.0 - smoothstep(2.36 - aaUnit, 2.40 + aaUnit, rDist);
+        let ringMask = innerFade * outerFade;
+        if (ringMask > 0.001) {
+          tRing = tr;
+          let casW = (rDist - 1.97) / max(0.042, aaUnit * 0.5);
+          let encW = (rDist - 2.27) / max(0.018, aaUnit * 0.4);
+          let cassini = 1.0 - 0.94 * exp(-(casW * casW));
+          let encke   = 1.0 - 0.65 * exp(-(encW * encW));
+          let cRing   = mix(0.28, 1.0, smoothstep(1.32, 1.54, rDist));
+          let ringlets = 0.82 + 0.18 * sin(rDist * 48.0) * cos(rDist * 19.0);
+          let density = ringMask * cassini * encke * cRing * ringlets;
 
-        let sunProj = dot(rPos, sunDir);
-        var planetShadow : f32 = 1.0;
-        if (sunProj < 0.0) {
-          let perpSun = length(rPos - sunDir * sunProj);
-          planetShadow = smoothstep(0.96, 1.05, perpSun);
+          let sunProj = dot(rPos, sunDir);
+          var planetShadow : f32 = 1.0;
+          if (sunProj < 0.0) {
+            let perpSun = length(rPos - sunDir * sunProj);
+            planetShadow = smoothstep(0.96, 1.05, perpSun);
+          }
+
+          let rAlbedo = mix(vec3f(0.74, 0.66, 0.56), vec3f(0.95, 0.89, 0.77), smoothstep(1.52, 1.88, rDist));
+          let sunLit = 0.03 + 1.45 * planetShadow * (0.55 + 0.45 * abs(dot(ringNormal, sunDir)));
+          ringCol = rAlbedo * sunLit;
+          ringAlpha = clamp(density * 0.86, 0.0, 0.94);
         }
-
-        let rAlbedo = mix(vec3f(0.74, 0.66, 0.56), vec3f(0.95, 0.89, 0.77), smoothstep(1.52, 1.88, rDist));
-        let sunLit = 0.03 + 1.45 * planetShadow * (0.55 + 0.45 * abs(dot(ringNormal, sunDir)));
-        ringCol = rAlbedo * sunLit;
-        ringAlpha = clamp(density * 0.86, 0.0, 0.94);
       }
+    }
+
+    if (tRing < tGlobe) {
+      saturnTotal = ringCol * ringAlpha + globeCol * globeAlpha * (1.0 - ringAlpha);
+      saturnOcc = clamp(ringAlpha + globeAlpha * (1.0 - ringAlpha), 0.0, 1.0);
+    } else {
+      saturnTotal = globeCol * globeAlpha + ringCol * ringAlpha * (1.0 - globeAlpha);
+      saturnOcc = clamp(globeAlpha + ringAlpha * (1.0 - globeAlpha), 0.0, 1.0);
     }
   }
 
-  var saturnTotal = vec3f(0.0);
-  var saturnOcc : f32 = 0.0;
-  if (tRing < tGlobe) {
-    saturnTotal = ringCol * ringAlpha + globeCol * globeAlpha * (1.0 - ringAlpha);
-    saturnOcc = clamp(ringAlpha + globeAlpha * (1.0 - ringAlpha), 0.0, 1.0);
-  } else {
-    saturnTotal = globeCol * globeAlpha + ringCol * ringAlpha * (1.0 - globeAlpha);
-    saturnOcc = clamp(globeAlpha + ringAlpha * (1.0 - globeAlpha), 0.0, 1.0);
-  }
-
   let sunCos = dot(dir, sunDir);
-  let sunAng = atan2(length(cross(dir, sunDir)), sunCos);
-  let sunFw = min(dirFw, 0.009);
-  let sunEnergy = min(1.0, 0.012 / max(dirFw * 1.5, 1e-4));
-  let sunDisc = (1.0 - smoothstep(0.0085, 0.0115 + sunFw, sunAng)) * sunEnergy;
-  let corona  = (exp(-sunAng * 56.0) * 0.72 + exp(-sunAng * 18.0) * 0.032) * (0.20 + 0.80 * sunEnergy);
-  let sunCol = vec3f(1.00, 0.95, 0.84) * (sunDisc * 10.5 + corona);
+  var sunCol = vec3f(0.0);
+  if (sunCos > 0.75) {
+    let sunAng = atan2(length(cross(dir, sunDir)), sunCos);
+    let sunFw = min(dirFw, 0.009);
+    let sunEnergy = min(1.0, 0.012 / max(dirFw * 1.5, 1e-4));
+    let sunDisc = (1.0 - smoothstep(0.0085, 0.0115 + sunFw, sunAng)) * sunEnergy;
+    let corona  = (exp(-sunAng * 56.0) * 0.72 + exp(-sunAng * 18.0) * 0.032) * (0.20 + 0.80 * sunEnergy);
+    sunCol = vec3f(1.00, 0.95, 0.84) * (sunDisc * 10.5 + corona);
+  }
 
   var resOut: LandmarkResult;
   resOut.color = saturnTotal + sunCol;
@@ -437,11 +448,10 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   );
 
   let aspect = res.x / res.y;
-  let tanHalfFov = select(
-    tan(clamp(u.jitter_fov_camL.z, 0.1, 2.8) * 0.5),
-    u.camN0_tanHalfFov.w,
-    u.camN0_tanHalfFov.w > 1e-4
-  );
+  var tanHalfFov = u.camN0_tanHalfFov.w;
+  if (tanHalfFov <= 1e-4) {
+    tanHalfFov = tan(clamp(u.jitter_fov_camL.z, 0.1, 2.8) * 0.5);
+  }
   let localRay = normalize(vec3f(ndc.x * aspect * tanHalfFov, ndc.y * tanHalfFov, 1.0));
 
   let camBasis = mat3x3f(
@@ -458,11 +468,10 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   let a   = max(u.camUp_throatLen.w, 0.0);
   let M   = max(u.camForward_lensingW.w, 1e-4);
 
-  let r0 = select(
-    evalMetricR(camL, metricType, rho, a, M),
-    u.rotBy_camR_escapeL_pad.y,
-    u.rotBy_camR_escapeL_pad.y > 1e-4
-  );
+  var r0 = u.rotBy_camR_escapeL_pad.y;
+  if (r0 <= 1e-4) {
+    r0 = evalMetricR(camL, metricType, rho, a, M);
+  }
   var pl = dot(d, n0);
   let t = d - pl * n0;
   let sinAlpha = length(t);
@@ -498,11 +507,11 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   var radiance = vec3f(0.0);
   var transmittance : f32 = 1.0;
   var escaped = false;
+  var k1 = evalGeodesicRHS(l, pl, b, b2, metricType, rho, a, M);
 
   for (var step: i32 = 0; step < 320; step++) {
     if (step >= maxSteps) { break; }
 
-    let k1 = evalGeodesicRHS(l, pl, b, b2, metricType, rho, a, M);
     let r = k1.r;
     let absL = abs(l);
 
@@ -515,7 +524,8 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
     let curvScale = select(rho, max(M, 0.35), metricType == 0);
     var h: f32;
 
-    if (metricType == 0 && absL <= a) {
+    let inCylThroat = (metricType == 0 && absL <= a);
+    if (inCylThroat) {
       let wallDist = select(l + a, a - l, pl > 0.0);
       h = max(0.08, min(0.50 * rho * qualScale, wallDist + 0.05));
       if (abs(pl) < 0.08) {
@@ -542,20 +552,38 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
       h *= (0.55 + 0.45 * bn.x);
     }
 
-    let k2 = evalGeodesicRHS(l + 0.5 * h * k1.dl, pl + 0.5 * h * k1.dpl, b, b2, metricType, rho, a, M);
-    let k3 = evalGeodesicRHS(l + 0.5 * h * k2.dl, pl + 0.5 * h * k2.dpl, b, b2, metricType, rho, a, M);
-    let k4 = evalGeodesicRHS(l + h * k3.dl,       pl + h * k3.dpl,       b, b2, metricType, rho, a, M);
+    var lNext : f32;
+    var plNext : f32;
+    var psiNext : f32;
+    var kNext : GeodesicDeriv;
+    if (inCylThroat && abs(l + h * pl) <= a) {
+      lNext   = l + h * pl;
+      plNext  = pl;
+      psiNext = psi + h * k1.dpsi;
+      kNext   = k1;
+    } else if (!inCylThroat && r > 3.0 * rho && distEdge > 2.5 * curvScale) {
+      let k2 = evalGeodesicRHS(l + 0.5 * h * k1.dl, pl + 0.5 * h * k1.dpl, b, b2, metricType, rho, a, M);
+      lNext   = l   + h * k2.dl;
+      plNext  = pl  + h * k2.dpl;
+      psiNext = psi + h * k2.dpsi;
+      kNext   = evalGeodesicRHS(lNext, plNext, b, b2, metricType, rho, a, M);
+    } else {
+      let k2 = evalGeodesicRHS(l + 0.5 * h * k1.dl, pl + 0.5 * h * k1.dpl, b, b2, metricType, rho, a, M);
+      let k3 = evalGeodesicRHS(l + 0.5 * h * k2.dl, pl + 0.5 * h * k2.dpl, b, b2, metricType, rho, a, M);
+      let k4 = evalGeodesicRHS(l + h * k3.dl,       pl + h * k3.dpl,       b, b2, metricType, rho, a, M);
 
-    let lNext   = l   + (h / 6.0) * (k1.dl   + 2.0 * k2.dl   + 2.0 * k3.dl   + k4.dl);
-    let plNext  = pl  + (h / 6.0) * (k1.dpl  + 2.0 * k2.dpl  + 2.0 * k3.dpl  + k4.dpl);
-    let psiNext = psi + (h / 6.0) * (k1.dpsi + 2.0 * k2.dpsi + 2.0 * k3.dpsi + k4.dpsi);
+      lNext   = l   + (h / 6.0) * (k1.dl   + 2.0 * k2.dl   + 2.0 * k3.dl   + k4.dl);
+      plNext  = pl  + (h / 6.0) * (k1.dpl  + 2.0 * k2.dpl  + 2.0 * k3.dpl  + k4.dpl);
+      psiNext = psi + (h / 6.0) * (k1.dpsi + 2.0 * k2.dpsi + 2.0 * k3.dpsi + k4.dpsi);
+      kNext   = evalGeodesicRHS(lNext, plNext, b, b2, metricType, rho, a, M);
+    }
 
     if (hasMatter && transmittance > 0.004) {
       let segMinL = min(l, lNext);
       let segMaxL = max(l, lNext);
       if (segMinL < matterBound && segMaxL > -matterBound) {
         let nSub : i32 = select(1, 2, h > 0.45);
-        let rMidSeg = max(0.5 * (r + evalMetricR(lNext, metricType, rho, a, M)), rho);
+        let rMidSeg = max(0.5 * (r + kNext.r), rho);
         let totalDs = length(vec2f(lNext - l, rMidSeg * (psiNext - psi)));
         let dsSub = totalDs / f32(nSub);
         let jitBase = fract(bn.y + f32(step) * 0.61803399);
@@ -572,11 +600,10 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
           if (ms.extinction > 1e-6 || dot(ms.emission, ms.emission) > 1e-10) {
             let tau = ms.extinction * dsSub;
             let stepT = exp(-tau);
-            let stepRad = select(
-              ms.emission * dsSub,
-              ms.emission * ((1.0 - stepT) / max(ms.extinction, 1e-5)),
-              tau > 1e-4
-            );
+            var stepRad = ms.emission * dsSub;
+            if (tau > 1e-4) {
+              stepRad = ms.emission * ((1.0 - stepT) / max(ms.extinction, 1e-5));
+            }
             radiance += transmittance * stepRad;
             transmittance *= stepT;
           }
@@ -587,6 +614,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
     l = lNext;
     pl = plNext;
     psi = psiNext;
+    k1 = kNext;
 
     if (transmittance < 0.004) {
       break;
@@ -607,23 +635,21 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
 
   var psiFinal = psi;
   if ((l * pl) > 0.0) {
-    let rEnd = evalMetricR(l, metricType, rho, a, M);
+    let rEnd = k1.r;
     psiFinal += atan2(b / max(rEnd, 1e-5), abs(pl));
   }
   let nPsi = cos(psiFinal) * n0 + sin(psiFinal) * tHat;
   let dSkyRaw = select(nPsi - 2.0 * dot(nPsi, n0) * n0, nPsi, onSideA);
   let dSky = normalize(dSkyRaw);
 
-  let trigA = select(
-    vec4f(cos(u.skyB_rotA_rotBx.y), sin(u.skyB_rotA_rotBx.y), cos(u.skyB_rotA_rotBx.z), sin(u.skyB_rotA_rotBx.z)),
-    u.skyTrigA,
-    dot(u.skyTrigA, u.skyTrigA) > 0.5
-  );
-  let trigB = select(
-    vec4f(cos(u.skyB_rotA_rotBx.w), sin(u.skyB_rotA_rotBx.w), cos(u.rotBy_camR_escapeL_pad.x), sin(u.rotBy_camR_escapeL_pad.x)),
-    u.skyTrigB,
-    dot(u.skyTrigB, u.skyTrigB) > 0.5
-  );
+  var trigA = u.skyTrigA;
+  if (dot(trigA, trigA) <= 0.5) {
+    trigA = vec4f(cos(u.skyB_rotA_rotBx.y), sin(u.skyB_rotA_rotBx.y), cos(u.skyB_rotA_rotBx.z), sin(u.skyB_rotA_rotBx.z));
+  }
+  var trigB = u.skyTrigB;
+  if (dot(trigB, trigB) <= 0.5) {
+    trigB = vec4f(cos(u.skyB_rotA_rotBx.w), sin(u.skyB_rotA_rotBx.w), cos(u.rotBy_camR_escapeL_pad.x), sin(u.rotBy_camR_escapeL_pad.x));
+  }
 
   let dirA = normalize(rotateSkyDirTrig(dSky, trigA));
   let dirB = normalize(rotateSkyDirTrig(dSky, trigB));
@@ -675,14 +701,12 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   let sampleUvA = vec2f(uvA1.x, clamp(uvA1.y, 0.005, 0.995));
   let sampleUvB = vec2f(uvB1.x, clamp(uvB1.y, 0.005, 0.995));
 
-  let texA     = textureSampleGrad(uSkyMapA, sSky, sampleUvA, dUVdxA, dUVdyA).rgb;
-  let procTexA = textureSampleGrad(uProcSkyMapA, sSky, sampleUvA, dUVdxA, dUVdyA).rgb;
-  let texB     = textureSampleGrad(uSkyMapB, sSky, sampleUvB, dUVdxB, dUVdyB).rgb;
-
   let planetVisible = (u.modes.w == 1);
   var skyColor = vec3f(0.0);
 
   if (onSideA) {
+    let texA     = textureSampleGrad(uSkyMapA, sSky, sampleUvA, dUVdxA, dUVdyA).rgb;
+    let procTexA = textureSampleGrad(uProcSkyMapA, sSky, sampleUvA, dUVdxA, dUVdyA).rgb;
     let srgbA = mix(texA, procTexA, 0.015);
     var skyLinA = pow(max(srgbA, vec3f(0.0)), vec3f(2.2));
     let coresA = max(skyLinA - vec3f(0.32), vec3f(0.0));
@@ -697,6 +721,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
     }
     skyColor = skyLinA;
   } else {
+    let texB = textureSampleGrad(uSkyMapB, sSky, sampleUvB, dUVdxB, dUVdyB).rgb;
     var skyLinB = pow(max(texB, vec3f(0.0)), vec3f(2.2));
     let coresB = max(skyLinB - vec3f(0.28), vec3f(0.0));
     skyLinB += coresB * coresB * 2.2;

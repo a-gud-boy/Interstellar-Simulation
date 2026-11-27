@@ -124,18 +124,39 @@ struct GeodesicDeriv {
   dpos : vec3f,
   dp   : vec3f,
   r    : f32,
+  f    : KSFields,
 };
 
 fn evalGeodesicRHS(pos: vec3f, p: vec3f, pt: f32, a: f32, a2: f32, lensing: f32) -> GeodesicDeriv {
-  var r2: f32;
-  let y2 = pos.y * pos.y;
+  var outD: GeodesicDeriv;
   if (a2 < 1e-8) {
-    r2 = max(dot(pos, pos), 1e-8);
-  } else {
-    let uVal = dot(pos, pos) - a2;
-    let disc = sqrt(max(uVal * uVal + 4.0 * a2 * y2, 1e-12));
-    r2 = max(0.5 * (uVal + disc), 1e-8);
+    let r2 = max(dot(pos, pos), 1e-8);
+    let invR = inverseSqrt(r2);
+    let r = r2 * invR;
+    let H = lensing * invR;
+    let l = pos * invR;
+    outD.f.r = r;
+    outD.f.r2 = r2;
+    outD.f.D = r2 * r2;
+    outD.f.H = H;
+    outD.f.R2 = r2;
+    outD.f.l = l;
+    let L = pt + dot(l, p);
+    let twoHL = 2.0 * H * L;
+    outD.dpos = p - twoHL * l;
+    outD.r = r;
+    if (lensing <= 1e-6) {
+      outD.dp = vec3f(0.0);
+      return outD;
+    }
+    outD.dp = -(L * L * H * invR) * l + (twoHL * invR) * (p - dot(p, l) * l);
+    return outD;
   }
+
+  let y2 = pos.y * pos.y;
+  let uVal = dot(pos, pos) - a2;
+  let disc = sqrt(max(uVal * uVal + 4.0 * a2 * y2, 1e-12));
+  let r2 = max(0.5 * (uVal + disc), 1e-8);
   let invR  = inverseSqrt(r2);
   let r     = r2 * invR;
   let D     = r2 * r2 + a2 * y2;
@@ -149,10 +170,16 @@ fn evalGeodesicRHS(pos: vec3f, p: vec3f, pt: f32, a: f32, a2: f32, lensing: f32)
     (r * pos.z - a * pos.x) * invR2
   );
 
+  outD.f.r = r;
+  outD.f.r2 = r2;
+  outD.f.D = D;
+  outD.f.H = H;
+  outD.f.R2 = R2;
+  outD.f.l = l;
+
   let L = pt + dot(l, p);
   let twoHL = 2.0 * H * L;
 
-  var outD: GeodesicDeriv;
   outD.dpos = p - twoHL * l;
   outD.r = r;
 
@@ -260,28 +287,40 @@ fn computeDiskFrequencyShiftFromFields(
   return clamp(1.0 / max(emitEnergy, 0.08), 0.06, 3.6);
 }
 
-fn sampleDiskPlasmaNoise(r: f32, phi: f32, yNorm: f32, a: f32, lowDetail: bool) -> vec4f {
+fn sampleDiskPlasmaNoise(
+  r: f32,
+  logR: f32,
+  log2R: f32,
+  phi: f32,
+  yNorm: f32,
+  a: f32,
+  lowDetail: bool
+) -> vec4f {
   let orbitSpeed = u.diskParams.w;
 
-  let logR = log(max(r, 0.6));
   let phiU = phi * INV_TAU;
   let rm = max(r, 1.0);
-  let omegaVis = orbitSpeed * 1.65 / (rm * pow(rm, 0.28) + 0.45 * a);
+  let rmPow = exp2(0.28 * max(log2R, 0.0));
+  let omegaVis = orbitSpeed * 1.65 / (rm * rmPow + 0.45 * a);
 
   let blend     = u.flowConsts.x;
   let dt0       = u.flowConsts.y;
   let dt1       = u.flowConsts.z;
   let globalRot = u.flowConsts.w;
+  let staticFlow = (abs(orbitSpeed) <= 1e-4);
 
   let spiralU0 = phiU + 2.35 * logR - (omegaVis * dt0 + globalRot) * INV_TAU;
-  let spiralU1 = phiU + 2.35 * logR - (omegaVis * dt1 + globalRot) * INV_TAU;
   let radV0    = logR * 1.15 + dt0 * 0.012 * orbitSpeed;
-  let radV1    = logR * 1.15 + dt1 * 0.012 * orbitSpeed;
   let zCoord   = yNorm * 0.28 + 0.5;
 
   let n0 = textureSampleLevel(uVolumeNoise, sVolume, vec3f(spiralU0, radV0, zCoord), 0.0);
-  let n1 = textureSampleLevel(uVolumeNoise, sVolume, vec3f(spiralU1, radV1, zCoord), 0.0);
-  let primary = mix(n1, n0, blend);
+  var primary = n0;
+  if (!staticFlow) {
+    let spiralU1 = phiU + 2.35 * logR - (omegaVis * dt1 + globalRot) * INV_TAU;
+    let radV1    = logR * 1.15 + dt1 * 0.012 * orbitSpeed;
+    let n1 = textureSampleLevel(uVolumeNoise, sVolume, vec3f(spiralU1, radV1, zCoord), 0.0);
+    primary = mix(n1, n0, blend);
+  }
 
   if (lowDetail) {
     return primary;
@@ -290,12 +329,16 @@ fn sampleDiskPlasmaNoise(r: f32, phi: f32, yNorm: f32, a: f32, lowDetail: bool) 
   let mhdWarpU = (primary.r - 0.5) * 0.095 + (primary.b - 0.5) * 0.055;
   let mhdWarpV = (primary.r - 0.5) * 0.36  + (primary.g - 0.5) * 0.18;
   let fineU0 = 2.0 * phiU + 4.85 * logR - (omegaVis * dt0 * 1.18 + globalRot * 1.8) * INV_TAU + mhdWarpU;
-  let fineU1 = 2.0 * phiU + 4.85 * logR - (omegaVis * dt1 * 1.18 + globalRot * 1.8) * INV_TAU + mhdWarpU;
   let fineV0 = logR * 3.15 + mhdWarpV;
+  let fineZ = yNorm * 0.55 + 0.25;
 
-  let d0 = textureSampleLevel(uVolumeNoise, sVolume, vec3f(fineU0, fineV0, yNorm * 0.55 + 0.25), 0.0);
-  let d1 = textureSampleLevel(uVolumeNoise, sVolume, vec3f(fineU1, fineV0, yNorm * 0.55 + 0.25), 0.0);
-  let detail = mix(d1, d0, blend);
+  let d0 = textureSampleLevel(uVolumeNoise, sVolume, vec3f(fineU0, fineV0, fineZ), 0.0);
+  var detail = d0;
+  if (!staticFlow) {
+    let fineU1 = 2.0 * phiU + 4.85 * logR - (omegaVis * dt1 * 1.18 + globalRot * 1.8) * INV_TAU + mhdWarpU;
+    let d1 = textureSampleLevel(uVolumeNoise, sVolume, vec3f(fineU1, fineV0, fineZ), 0.0);
+    detail = mix(d1, d0, blend);
+  }
 
   return vec4f(
     mix(primary.r, detail.r, 0.42),
@@ -313,13 +356,15 @@ struct DiskSample {
 fn evalDiskVolume(
   pos: vec3f,
   r: f32,
-  gShift: f32,
+  gColor: f32,
+  beaming: f32,
   rIsco: f32,
   rOuter: f32,
   rPlus: f32,
   a: f32,
   camDistFade: f32,
-  lowDetail: bool
+  lowDetail: bool,
+  log2RPeak: f32
 ) -> DiskSample {
   var outDisk: DiskSample;
   outDisk.emission = vec3f(0.0);
@@ -338,9 +383,10 @@ fn evalDiskVolume(
   let yNorm = pos.y / max(H, 1e-4);
   let absYNorm = abs(yNorm);
   let phi = atan2(pos.z, pos.x);
-  let logR = log(max(r, 0.6));
+  let log2R = log2(max(r, 0.6));
+  let logR = log2R * 0.69314718056;
 
-  let n = sampleDiskPlasmaNoise(r, phi, yNorm, a, lowDetail || absYNorm > 1.32);
+  let n = sampleDiskPlasmaNoise(r, logR, log2R, phi, yNorm, a, lowDetail || absYNorm > 1.32);
   let turb = clamp(u.diskParams.z, 0.0, 2.2);
 
   let mainInner = smoothstep(rIsco * 0.90, rIsco * 1.16, r);
@@ -375,19 +421,20 @@ fn evalDiskVolume(
 
   let rWarp = logR + (n.x - 0.5) * 0.24 * turb + (n.z - 0.5) * 0.12 * turb;
   let laneBroad = max(0.5 + 0.5 * sin(rWarp * 18.5 + 0.72 * sin(phi + logR * 3.5 + n.x * 2.6)), 0.0);
-  let laneFine  = max(0.5 + 0.5 * sin(rWarp * 46.0 - 0.62 * cos(2.0 * phi - logR * 5.2 + n.z * 3.0)), 0.0);
-  let laneMicro = max(0.5 + 0.5 * sin(rWarp * 94.0 + 0.50 * sin(3.0 * phi + logR * 7.0 - n.y * 2.4)), 0.0);
-
   let lbSqrt = sqrt(laneBroad);
   let lbPow = laneBroad * lbSqrt;
-  let lmPow = laneMicro * laneMicro * sqrt(laneMicro);
-  let concentricLanes = mix(
-    0.56 + 0.44 * laneBroad,
-    0.26 + 0.34 * lbPow
-         + 0.36 * (laneFine * laneFine)
-         + 0.24 * lmPow,
-    0.76
-  );
+  var laneFine = 0.5;
+  var concentricLanes = 0.56 + 0.44 * laneBroad;
+  if (!lowDetail) {
+    laneFine = max(0.5 + 0.5 * sin(rWarp * 46.0 - 0.62 * cos(2.0 * phi - logR * 5.2 + n.z * 3.0)), 0.0);
+    let laneMicro = max(0.5 + 0.5 * sin(rWarp * 94.0 + 0.50 * sin(3.0 * phi + logR * 7.0 - n.y * 2.4)), 0.0);
+    let lmPow = laneMicro * laneMicro * sqrt(laneMicro);
+    concentricLanes = mix(
+      concentricLanes,
+      0.26 + 0.34 * lbPow + 0.36 * (laneFine * laneFine) + 0.24 * lmPow,
+      0.76
+    );
+  }
 
   let nyc = clamp(n.y, 0.0, 1.0);
   let ridgeSharp = nyc * sqrt(nyc);
@@ -410,28 +457,19 @@ fn evalDiskVolume(
     return outDisk;
   }
 
-  let rPeak = u.rayConsts.w;
   let rel = clamp(u.camPos_relMode.w, 0.0, 1.0);
   let tempExp = mix(0.42, 0.55, rel);
-  let rRatio = max(r / rPeak, 0.52);
-  let tempRadial = pow(rRatio, -tempExp);
+  let tempRadial = exp2(-tempExp * max(log2R - log2RPeak, -0.94341647));
   let plungeCool = mix(0.76, 1.0, mainInner);
   let filamentHeat = clamp(ridgeSharp * 0.46 + microSharp * 0.24 + laneFine * 0.22 + hotThread * 0.42, 0.0, 1.0);
   let T_local = u.camUp_diskTemp.w * tempRadial * plungeCool * mix(0.72, 1.34, filamentHeat);
-
-  let gColor  = mix(mix(1.0, gShift, 0.26), gShift, rel);
-  let gBeam   = mix(mix(1.0, gShift, 0.34), gShift, rel);
-  let beamExp = mix(1.85, 3.35, rel);
-  var beaming = pow(clamp(gBeam, 0.10, 2.75), beamExp);
-  beaming = beaming / (1.0 + beaming * mix(0.055, 0.165, rel));
-  beaming *= mix(1.0, 0.92, rel);
 
   let T_obs = clamp(T_local * gColor, T_MIN, T_MAX);
   let bbColor = sampleBlackbody(T_obs);
 
   let tr = clamp(T_local / 4750.0, 0.15, 3.8);
   let thermalPower = tr * tr;
-  let heightComp = 1.0 / pow(max(H * 3.0, 0.38), 0.40);
+  let heightComp = exp2(-0.40 * log2(max(H * 3.0, 0.38)));
   let rPeakComp  = u.optConsts.x;
 
   let rimDist = (r - rIsco * 1.18) / max(rIsco * 0.38, 0.42);
@@ -678,6 +716,8 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   let hasDisk = (u.camForward_diskDens.w > 0.001);
   let hasJet  = (u.jet_skyParams.x > 0.001);
   let lowDetailBase = (quality <= 0);
+  let rel = clamp(u.camPos_relMode.w, 0.0, 1.0);
+  let log2RPeak = log2(max(u.rayConsts.w, 1e-4));
 
   var radiance = vec3f(0.0);
   var transmittance : f32 = 1.0;
@@ -734,9 +774,11 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
       h *= (0.25 + 0.75 * bn.x);
     }
 
+    let useRk2 = (r >= 6.5 * rPlus);
     var posNext: vec3f;
     var pNext: vec3f;
-    if (r < 6.5 * rPlus) {
+    var k2Fields: KSFields;
+    if (!useRk2) {
       // Exact 4th-order Runge-Kutta in strong gravity & photon sphere
       let pos2 = pos + (0.5 * h) * k1.dpos;
       let p2   = p   + (0.5 * h) * k1.dp;
@@ -752,6 +794,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
 
       posNext = pos + (h / 6.0) * (k1.dpos + 2.0 * k2.dpos + 2.0 * k3.dpos + k4.dpos);
       pNext   = p   + (h / 6.0) * (k1.dp   + 2.0 * k2.dp   + 2.0 * k3.dp   + k4.dp);
+      k2Fields = k2.f;
     } else {
       // Symplectic/Midpoint RK2 in weak/medium field
       let pos2 = pos + (0.5 * h) * k1.dpos;
@@ -760,6 +803,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
 
       posNext = pos + h * k2.dpos;
       pNext   = p   + h * k2.dp;
+      k2Fields = k2.f;
     }
 
     let segLen = length(posNext - pos);
@@ -774,7 +818,12 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
 
       if (inSlab || crossesPlane) {
         let midPos = 0.5 * (pos + posNext);
-        let fMid = evalKSFields(midPos, a, a2, lensing);
+        var fMid: KSFields;
+        if (useRk2) {
+          fMid = k2Fields;
+        } else {
+          fMid = evalKSFields(midPos, a, a2, lensing);
+        }
         let rMid = fMid.r;
 
         if (rMid > rPlus * 1.025 && rMid < rOuter * 1.07) {
@@ -782,6 +831,12 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
           if (crossesPlane || abs(midPos.y) < hMid * 2.55 || abs(pos.y) < hMid * 2.55 || abs(posNext.y) < hMid * 2.55) {
             let midP = 0.5 * (p + pNext);
             let gSeg = computeDiskFrequencyShiftFromFields(midPos, fMid, midP, pt, rMid, rIsco, rPlus, a, a2, lensing);
+            let gColor = mix(mix(1.0, gSeg, 0.26), gSeg, rel);
+            let gBeam  = mix(mix(1.0, gSeg, 0.34), gSeg, rel);
+            let beamExp = mix(1.85, 3.35, rel);
+            var beaming = pow(clamp(gBeam, 0.10, 2.75), beamExp);
+            beaming = (beaming / (1.0 + beaming * mix(0.055, 0.165, rel))) * mix(1.0, 0.92, rel);
+
             var nSub : i32 = 1;
             let targetDs = max(hMid * 0.95, 0.075) * qualScale;
             if (crossesPlane || segLen > targetDs) {
@@ -795,9 +850,12 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
               if (s >= nSub) { break; }
               let frac = (f32(s) + jitterBase) / f32(nSub);
               let sPos = mix(pos, posNext, frac);
-              let sR   = select(evalKerrR(sPos, a2), rMid, nSub == 1);
+              var sR = rMid;
+              if (nSub != 1) {
+                sR = evalKerrR(sPos, a2);
+              }
 
-              let dsamp = evalDiskVolume(sPos, sR, gSeg, rIsco, rOuter, rPlus, a, camDistFade, lowDet);
+              let dsamp = evalDiskVolume(sPos, sR, gColor, beaming, rIsco, rOuter, rPlus, a, camDistFade, lowDet, log2RPeak);
               let emit = dsamp.emission;
               let ext  = dsamp.extinction;
 

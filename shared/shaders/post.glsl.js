@@ -197,9 +197,7 @@ float karisWeight(vec3 c) {
 }
 
 vec3 sampleSafe(vec2 offset) {
-  vec3 c = texture(uSrcTex, clamp(vUv + offset * uTexelSize, vec2(0.0), vec2(1.0))).rgb;
-  bvec3 bad = bvec3(isnan(c.r) || isinf(c.r), isnan(c.g) || isinf(c.g), isnan(c.b) || isinf(c.b));
-  return max(mix(c, vec3(0.0), bad), vec3(0.0));
+  return texture(uSrcTex, clamp(vUv + offset * uTexelSize, vec2(0.0), vec2(1.0))).rgb;
 }
 
 void main() {
@@ -308,55 +306,94 @@ vec3 isolateHighlights(vec3 c) {
   return c * max(contrib, 0.0);
 }
 
+vec3 samplePass0(vec2 uv) {
+  vec3 s0 = texture(uSrcTex, uv).rgb;
+  vec3 s1 = texture(uSrcTex, vec2(uv.x, max(uv.y - uTexelSize.y, 0.0))).rgb;
+  vec3 s2 = texture(uSrcTex, vec2(uv.x, min(uv.y + uTexelSize.y, 1.0))).rgb;
+  return 0.50 * isolateHighlights(s0)
+       + 0.25 * isolateHighlights(s1)
+       + 0.25 * isolateHighlights(s2);
+}
+
+void pass0SymPair(float dx, float w, float af, inout vec3 sum, inout float weightSum) {
+  vec2 uvR = vec2(vUv.x + dx, vUv.y);
+  vec2 uvL = vec2(vUv.x - dx, vUv.y);
+  vec3 tapSum = vec3(0.0);
+  float tapW = 0.0;
+  if (uvR.x <= 1.0) {
+    tapSum += samplePass0(uvR);
+    tapW += w;
+  }
+  if (uvL.x >= 0.0) {
+    tapSum += samplePass0(uvL);
+    tapW += w;
+  }
+  if (tapW > 0.0) {
+    vec3 tint = mix(
+      uTintInnerEdge.xyz,
+      uTintOuterMix.xyz,
+      smoothstep(uTintInnerEdge.w, 1.0, af) * uTintOuterMix.w
+    );
+    sum += tapSum * (tint * w);
+    weightSum += tapW;
+  }
+}
+
+void pass1SymPair(float dx, float w, inout vec3 sum, inout float weightSum) {
+  float uvR = vUv.x + dx;
+  float uvL = vUv.x - dx;
+  if (uvR <= 1.0) {
+    sum += max(texture(uSrcTex, vec2(uvR, vUv.y)).rgb, vec3(0.0)) * w;
+    weightSum += w;
+  }
+  if (uvL >= 0.0) {
+    sum += max(texture(uSrcTex, vec2(uvL, vUv.y)).rgb, vec3(0.0)) * w;
+    weightSum += w;
+  }
+}
+
 void main() {
   vec3 sum = vec3(0.0);
   float weightSum = 0.0;
 
   if (uPass == 0) {
-    // Pass 0: Extract ultra-bright incandescent highlights + primary horizontal Panavision smear
-    const int HALF_TAPS = 12;
     float stride = uTexelSize.x * uSpread * 1.85;
 
-    for (int i = -HALF_TAPS; i <= HALF_TAPS; ++i) {
-      float fi = float(i);
-      float af = abs(fi) / float(HALF_TAPS);
-      vec2 uv = vec2(vUv.x + fi * stride, vUv.y);
-      if (uv.x < 0.0 || uv.x > 1.0) continue;
+    // Center tap (i = 0: w = 1.22, af = 0.0 -> pure uTintInnerEdge.xyz)
+    sum = samplePass0(vUv) * (uTintInnerEdge.xyz * 1.22);
+    weightSum = 1.22;
 
-      // Subtle vertical stabilization (3-tap weighted) prevents thin 1-pixel shimmer
-      vec3 s =
-        0.50 * isolateHighlights(texture(uSrcTex, uv).rgb) +
-        0.25 * isolateHighlights(texture(uSrcTex, vec2(uv.x, clamp(uv.y - uTexelSize.y, 0.0, 1.0))).rgb) +
-        0.25 * isolateHighlights(texture(uSrcTex, vec2(uv.x, clamp(uv.y + uTexelSize.y, 0.0, 1.0))).rgb);
-
-      // Lorentzian + Gaussian hybrid optical falloff for authentic 70mm glass streak
-      float w = exp(-af * 3.1) + 0.22 / (1.0 + af * af * 9.0);
-
-      // Subtle chromatic glass coating
-      vec3 tint = mix(
-        uTintInnerEdge.xyz,
-        uTintOuterMix.xyz,
-        smoothstep(uTintInnerEdge.w, 1.0, af) * uTintOuterMix.w
-      );
-      sum += s * tint * w;
-      weightSum += w;
-    }
+    // Symmetric +/-i taps with precomputed Lorentzian + Gaussian optical weights
+    pass0SymPair(stride *  1.0, 0.979397, 1.0 / 12.0, sum, weightSum);
+    pass0SymPair(stride *  2.0, 0.772506, 2.0 / 12.0, sum, weightSum);
+    pass0SymPair(stride *  3.0, 0.601504, 3.0 / 12.0, sum, weightSum);
+    pass0SymPair(stride *  4.0, 0.465819, 4.0 / 12.0, sum, weightSum);
+    pass0SymPair(stride *  5.0, 0.360666, 5.0 / 12.0, sum, weightSum);
+    pass0SymPair(stride *  6.0, 0.279940, 6.0 / 12.0, sum, weightSum);
+    pass0SymPair(stride *  7.0, 0.218081, 7.0 / 12.0, sum, weightSum);
+    pass0SymPair(stride *  8.0, 0.170607, 8.0 / 12.0, sum, weightSum);
+    pass0SymPair(stride *  9.0, 0.134072, 9.0 / 12.0, sum, weightSum);
+    pass0SymPair(stride * 10.0, 0.105867, 10.0 / 12.0, sum, weightSum);
+    pass0SymPair(stride * 11.0, 0.084022, 11.0 / 12.0, sum, weightSum);
+    pass0SymPair(stride * 12.0, 0.067049, 1.0,         sum, weightSum);
   } else {
-    // Pass 1: Long-reach secondary horizontal extension for silky cinema streak across viewport
-    const int HALF_TAPS = 10;
     float stride = uTexelSize.x * uSpread * 5.2;
 
-    for (int i = -HALF_TAPS; i <= HALF_TAPS; ++i) {
-      float fi = float(i);
-      float af = abs(fi) / float(HALF_TAPS);
-      vec2 uv = vec2(vUv.x + fi * stride, vUv.y);
-      if (uv.x < 0.0 || uv.x > 1.0) continue;
+    // Center tap (i = 0: w = 1.16)
+    sum = max(texture(uSrcTex, vUv).rgb, vec3(0.0)) * 1.16;
+    weightSum = 1.16;
 
-      vec3 s = max(texture(uSrcTex, uv).rgb, vec3(0.0));
-      float w = exp(-af * 2.45) + 0.16 * exp(-af * 0.9);
-      sum += s * w;
-      weightSum += w;
-    }
+    // Symmetric +/-i taps with precomputed double-exponential weights
+    pass1SymPair(stride *  1.0, 0.928934, sum, weightSum);
+    pass1SymPair(stride *  2.0, 0.746270, sum, weightSum);
+    pass1SymPair(stride *  3.0, 0.601646, sum, weightSum);
+    pass1SymPair(stride *  4.0, 0.486939, sum, weightSum);
+    pass1SymPair(stride *  5.0, 0.395778, sum, weightSum);
+    pass1SymPair(stride *  6.0, 0.323165, sum, weightSum);
+    pass1SymPair(stride *  7.0, 0.265178, sum, weightSum);
+    pass1SymPair(stride *  8.0, 0.218739, sum, weightSum);
+    pass1SymPair(stride *  9.0, 0.181428, sum, weightSum);
+    pass1SymPair(stride * 10.0, 0.151345, sum, weightSum);
   }
 
   fragColor = vec4(sum / max(weightSum, 1e-5), 1.0);
@@ -420,7 +457,15 @@ vec3 agxLookPunchy(vec3 val) {
   return max(vec3(0.0), luma + 1.18 * (graded - luma));
 }
 
-vec3 agxToneMap(vec3 linearColor) {
+// Fold AgX display EOTF pow(v, 2.2) with linear-to-sRGB pow(c, 1/2.4) inside an explicit branch
+float agxDisplayToSrgbChannel(float v) {
+  if (v >= 0.07272128) {
+    return clamp(1.055 * pow(v, 0.91666667) - 0.055, 0.0, 1.0);
+  }
+  return clamp(12.92 * pow(max(v, 0.0), 2.2), 0.0, 1.0);
+}
+
+vec3 agxToneMapToSrgb(vec3 linearColor) {
   vec3 val = max(linearColor, vec3(0.0));
   // Preserve absolute black (deep space shadow stays true #000)
   float maxChannel = max(val.r, max(val.g, val.b));
@@ -438,15 +483,11 @@ vec3 agxToneMap(vec3 linearColor) {
   val = agxLookPunchy(val);
   val = clamp(AGX_OUTSET_MATRIX * val, 0.0, 1.0);
 
-  // AgX EOTF back to linear display light prior to exact piecewise sRGB encoding
-  return pow(val, vec3(2.2));
-}
-
-vec3 linearToSrgb(vec3 linearColor) {
-  vec3 c = clamp(linearColor, 0.0, 1.0);
-  vec3 low = c * 12.92;
-  vec3 high = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
-  return mix(low, high, step(vec3(0.0031308), c));
+  return vec3(
+    agxDisplayToSrgbChannel(val.r),
+    agxDisplayToSrgbChannel(val.g),
+    agxDisplayToSrgbChannel(val.b)
+  );
 }
 
 float hash12(vec2 p) {
@@ -459,12 +500,13 @@ void main() {
   vec2 centered = vUv - 0.5;
   float r2 = dot(centered, centered); // 0 at center, 0.5 at corners
 
-  // Very subtle natural IMAX lens edge chromatic aberration (0 at center, ~0.0012 at far corners)
-  vec2 caOffset = centered * (r2 * 0.0024);
-  vec3 scene;
-  scene.r = texture(uSceneTex, clamp(vUv + caOffset, vec2(0.0), vec2(1.0))).r;
-  scene.g = texture(uSceneTex, vUv).g;
-  scene.b = texture(uSceneTex, clamp(vUv - caOffset, vec2(0.0), vec2(1.0))).b;
+  // Very subtle natural IMAX lens edge chromatic aberration (skipped across center viewport)
+  vec3 scene = texture(uSceneTex, vUv).rgb;
+  if (r2 > 0.04) {
+    vec2 caOffset = centered * (r2 * 0.0024);
+    scene.r = texture(uSceneTex, clamp(vUv + caOffset, vec2(0.0), vec2(1.0))).r;
+    scene.b = texture(uSceneTex, clamp(vUv - caOffset, vec2(0.0), vec2(1.0))).b;
+  }
 
   // Guard against any non-finite pixels before final grading
   bvec3 bad = bvec3(isnan(scene.r) || isinf(scene.r), isnan(scene.g) || isinf(scene.g), isnan(scene.b) || isinf(scene.b));
@@ -488,8 +530,7 @@ void main() {
   hdr *= vignette;
 
   // Troy Sobotka AgX Filmic Tone Mapping -> exact linear-to-sRGB
-  vec3 displayLinear = agxToneMap(hdr);
-  vec3 srgb = linearToSrgb(displayLinear);
+  vec3 srgb = agxToneMapToSrgb(hdr);
 
   // Ultra-fine triangular-PDF dither + subtle cinema film grain to eliminate 8-bit dark sky banding
   vec2 pix = gl_FragCoord.xy;

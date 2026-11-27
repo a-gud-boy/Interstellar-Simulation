@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use egui::{Context, TextureId};
 
@@ -12,7 +12,7 @@ pub use home::{HomeAction, HomeState, draw_homepage};
 pub use theme::configure_fonts;
 
 use crate::renderer::SharedGpuAssets;
-use crate::sims::{SimId, Simulation};
+use crate::sims::{HudMetadata, SimId, Simulation};
 
 pub struct HudState {
     pub drawer_open: bool,
@@ -20,6 +20,8 @@ pub struct HudState {
     pub vsync: bool,
     pub open_sections: HashMap<&'static str, bool>,
     pub status_toast: Option<(String, Instant)>,
+    cached_meta: Option<(SimId, Instant, HudMetadata)>,
+    meta_dirty: bool,
 }
 
 impl Default for HudState {
@@ -30,6 +32,8 @@ impl Default for HudState {
             vsync: true,
             open_sections: HashMap::new(),
             status_toast: None,
+            cached_meta: None,
+            meta_dirty: true,
         }
     }
 }
@@ -37,6 +41,37 @@ impl Default for HudState {
 impl HudState {
     pub fn show_toast(&mut self, msg: impl Into<String>) {
         self.status_toast = Some((msg.into(), Instant::now()));
+    }
+
+    pub fn invalidate_metadata(&mut self) {
+        self.meta_dirty = true;
+    }
+
+    fn get_or_refresh_metadata(
+        &mut self,
+        sim: &dyn Simulation,
+        assets: &SharedGpuAssets,
+        fps: f32,
+        sample_count: u32,
+        max_samples: u32,
+    ) -> HudMetadata {
+        let now = Instant::now();
+        let sim_id = sim.id();
+        let need_refresh = self.meta_dirty
+            || match &self.cached_meta {
+                Some((cached_id, at, _)) => {
+                    *cached_id != sim_id || now.duration_since(*at) >= Duration::from_millis(85)
+                }
+                None => true,
+            };
+        if need_refresh {
+            let fresh = sim.hud_metadata(assets, fps, sample_count, max_samples);
+            self.cached_meta = Some((sim_id, now, fresh.clone()));
+            self.meta_dirty = false;
+            fresh
+        } else {
+            self.cached_meta.as_ref().unwrap().2.clone()
+        }
     }
 }
 
@@ -80,7 +115,7 @@ pub fn draw_hud(
         return actions;
     }
 
-    let meta = sim.hud_metadata(assets, fps, sample_count, max_samples);
+    let meta = hud.get_or_refresh_metadata(sim, assets, fps, sample_count, max_samples);
     hud::draw_top_left_card(ctx, &meta, &theme, screen_size, glass_tex_id);
     hud::draw_top_right_bar(
         ctx,

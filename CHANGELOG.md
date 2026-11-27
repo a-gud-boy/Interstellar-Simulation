@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.1.3.1-beta] - 2026-11-27
+
+- Performance Roadmap Phase P1 (Shared Runtime & Canvas):
+  - Added converged-idle frame gating, default `1.5×` render DPR cap + `0.75×` interactive drag scale, zero-allocation hot loops, cached camera bases, 85 ms HUD telemetry throttling, and CSS compositing cleanup across all 7 simulators.
+- Performance Roadmap Phase P2 (Post-Processing, Hybrid HDR & LUTs):
+  - Switched shared scene/bloom/anamorphic targets to `rg11b10ufloat` / `r11f_g11f_b10f` while keeping `rgba16float` TAA history, hoisted static post UBOs, added pre-baked LUTs (`scripts/bake-luts.mjs`, `shared/assets/physicalLutsData.js`), GPU procedural sky bake (`shared/shaders/sky_bake.wgsl`), and non-blocking sky loading.
+- Performance Roadmap Phase P3 (Per-Simulator Optimizations):
+  - Applied algorithmic, shader, and engine optimizations across all 7 simulators (`blackhole`, `warp`, `supernova`, `starflight`, `pulsar`, `wormhole`, `binary`) with full WebGL2, WebGPU, and canonical `.wgsl` parity.
+- Performance Roadmap Phase P4 (Native Rust Desktop):
+  - Added default `1.5×` render DPR cap + `0.75×` drag scale, hybrid `Rg11b10Ufloat`/`Rgba16Float` HDR targets, converged `ControlFlow::Wait`/`WaitUntil` idle power mode, dirty-gated glass blur, merged single-pass swapchain blit + `egui`, removed the 48 MiB `'static OnceLock` sky RAM cache, parallelized blue-noise LUT generation, added async homepage WebP preview decoding, cached per-sim pipelines, hoisted static post UBOs, deduplicated `egui` text shaping, and enabled `panic = "abort"` in `[profile.release]`.
+
 ## [v0.1.3.0-beta] - 2026-11-27
 
 - Organization Roadmap Phase O1:

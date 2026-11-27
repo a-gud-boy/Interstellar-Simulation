@@ -15,11 +15,15 @@ import { TIDAL_FIELD_FRAG } from '../shaders/tidal.glsl.js';
 import { BINARY_BH_FRAG } from '../shaders/binary.frag.js';
 import {
   SharedWebGLPostPipeline,
+  detectWebGLHdrFormats,
   MAX_PROGRESSIVE_SAMPLES,
   halton,
   formatShaderError,
 } from '../../../../shared/engine/SharedWebGLPostPipeline.js';
-import { createProceduralSkyTextureWebGL } from '../../../../shared/assets/skyLoader.js';
+import {
+  createProceduralSkyTextureWebGL,
+  createPlaceholderSkyTextureWebGL,
+} from '../../../../shared/assets/skyLoader.js';
 import { createBlackbodyLUTWebGL, createBlueNoiseLUTWebGL } from '../../../../shared/assets/physicalLuts.js';
 import { computeBinaryState } from './Physics.js';
 
@@ -52,6 +56,10 @@ export class WebGLRenderer {
     this.tidalWriteIdx = 1;
     this._tidalReset = true;
     this._lastTidalSig = null;
+    this._tidalSigStore = new Float64Array(5);
+    this._fallbackBinOpts = {
+      out: { c1: [0, 0, 0], c2: [0, 0, 0], v1: [0, 0, 0], v2: [0, 0, 0] },
+    };
 
     this._hardReset = true;
     this._postDirty = true;
@@ -112,7 +120,8 @@ export class WebGLRenderer {
     const blackbodyRes = createBlackbodyLUTWebGL(gl);
     this.blackbodyTex = blackbodyRes?.texture || blackbodyRes;
     this.blueNoiseTex = createBlueNoiseLUTWebGL(gl);
-    this.procSkyTex = createProceduralSkyTextureWebGL(gl, 2048, 1024);
+    this.procSkyTex = createPlaceholderSkyTextureWebGL(gl);
+    this._procSkyBaked = false;
     this.skyTex = this.procSkyTex;
 
     this.volumeNoiseTex = this._bakeVolumeNoise();
@@ -121,6 +130,7 @@ export class WebGLRenderer {
       gl,
       emptyVao: this.emptyVao,
       hdrSpec: this._hdrSpec,
+      taaSpec: this._taaSpec,
       opticsProfile: 'default',
       vertSrc: FULLSCREEN_VERT,
       compileProgram: (name, vs, fs) => this._createProgram(name, vs, fs),
@@ -129,70 +139,22 @@ export class WebGLRenderer {
     });
 
     this.tidalFbos = [
-      this.post.createRenderTarget(TIDAL_SIZE, TIDAL_SIZE),
-      this.post.createRenderTarget(TIDAL_SIZE, TIDAL_SIZE),
+      this.post.createRenderTarget(TIDAL_SIZE, TIDAL_SIZE, this._taaSpec),
+      this.post.createRenderTarget(TIDAL_SIZE, TIDAL_SIZE, this._taaSpec),
     ];
 
     this.resize(1.0);
   }
 
   _detectHdrFboFormat() {
-    const gl = this.gl;
-    const candidates = [];
-
-    if (this.extColorBufferFloat || this.extColorBufferHalfFloat) {
-      candidates.push({
-        name: 'RGBA16F',
-        internalFormat: gl.RGBA16F,
-        format: gl.RGBA,
-        type: gl.HALF_FLOAT,
-      });
-    }
-    if (this.extColorBufferFloat) {
-      candidates.push({
-        name: 'R11F_G11F_B10F',
-        internalFormat: gl.R11F_G11F_B10F,
-        format: gl.RGB,
-        type: gl.HALF_FLOAT,
-      });
-    }
-    candidates.push({
-      name: 'RGBA8',
-      internalFormat: gl.RGBA8,
-      format: gl.RGBA,
-      type: gl.UNSIGNED_BYTE,
-    });
-
-    const probeFbo = gl.createFramebuffer();
-    const probeTex = gl.createTexture();
-
-    for (const spec of candidates) {
-      gl.bindTexture(gl.TEXTURE_2D, probeTex);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.texImage2D(gl.TEXTURE_2D, 0, spec.internalFormat, 4, 4, 0, spec.format, spec.type, null);
-
-      gl.bindFramebuffer(gl.FRAMEBUFFER, probeFbo);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, probeTex, 0);
-      const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
-
-      if (status === gl.FRAMEBUFFER_COMPLETE) {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.deleteTexture(probeTex);
-        gl.deleteFramebuffer(probeFbo);
-        this.hdrFormat = spec.name;
-        return spec;
-      }
-    }
-
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.deleteTexture(probeTex);
-    gl.deleteFramebuffer(probeFbo);
-    const fallback = candidates[candidates.length - 1];
-    this.hdrFormat = fallback.name;
-    return fallback;
+    const { hdrSpec, taaSpec } = detectWebGLHdrFormats(
+      this.gl,
+      this.extColorBufferFloat,
+      this.extColorBufferHalfFloat
+    );
+    this._taaSpec = taaSpec;
+    this.hdrFormat = hdrSpec.name;
+    return hdrSpec;
   }
 
   _compileShader(name, type, source) {
@@ -375,11 +337,36 @@ export class WebGLRenderer {
       this.skyDimensions = [width || 4096, height || 2048];
       this.resetAccumulation(true);
     } else {
-      if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
+      if (texture && !this._procSkyBaked) {
+        const oldPlaceholder = this.procSkyTex;
+        this.procSkyTex = texture;
+        if (!this.skyMapLoaded) {
+          this.skyTex = texture;
+        }
+        if (oldPlaceholder && oldPlaceholder !== texture && oldPlaceholder !== this.skyTex) {
+          gl.deleteTexture(oldPlaceholder);
+        }
+        this._procSkyBaked = true;
+        this.resetAccumulation(true);
+      } else if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
         gl.deleteTexture(texture);
       }
       this.skyMapLoaded = false;
     }
+  }
+
+  _ensureProceduralSky() {
+    if (this._procSkyBaked || this._disposed || this.gl.isContextLost()) return;
+    const oldPlaceholder = this.procSkyTex;
+    const baked = createProceduralSkyTextureWebGL(this.gl, 2048, 1024);
+    this.procSkyTex = baked;
+    if (!this.skyMapLoaded && (!this.skyTex || this.skyTex === oldPlaceholder)) {
+      this.skyTex = baked;
+    }
+    if (oldPlaceholder && oldPlaceholder !== baked && oldPlaceholder !== this.skyTex) {
+      this.gl.deleteTexture(oldPlaceholder);
+    }
+    this._procSkyBaked = true;
   }
 
   resetTidalField() {
@@ -401,6 +388,31 @@ export class WebGLRenderer {
   getAllShadersCompiled() {
     const entries = Object.values(this.shaderStatus);
     return entries.length > 0 && entries.every((s) => s.ok);
+  }
+
+  _set1f(prog, name, v) {
+    const loc = this._getUniform(prog, name);
+    if (loc) this.gl.uniform1f(loc, v);
+  }
+
+  _set2f(prog, name, x, y) {
+    const loc = this._getUniform(prog, name);
+    if (loc) this.gl.uniform2f(loc, x, y);
+  }
+
+  _set3f(prog, name, x, y, z) {
+    const loc = this._getUniform(prog, name);
+    if (loc) this.gl.uniform3f(loc, x, y, z);
+  }
+
+  _set4f(prog, name, x, y, z, w) {
+    const loc = this._getUniform(prog, name);
+    if (loc) this.gl.uniform4f(loc, x, y, z, w);
+  }
+
+  _set1i(prog, name, v) {
+    const loc = this._getUniform(prog, name);
+    if (loc) this.gl.uniform1i(loc, v);
   }
 
   _runTidalPass(state, binState, fieldHalfSize, simTime, dtSec, forceReset) {
@@ -444,6 +456,9 @@ export class WebGLRenderer {
   }
 
   _runBinaryPass(state, camData, simTime, binState, fieldHalfSize, jitterX, jitterY) {
+    if ((state?.skyMode | 0) === 2 && !this._procSkyBaked) {
+      this._ensureProceduralSky();
+    }
     const gl = this.gl;
     const prog = this.programs.binary;
     if (!prog) return;
@@ -476,84 +491,109 @@ export class WebGLRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.tidalFbos[this.tidalReadIdx].texture);
     gl.uniform1i(this._getUniform(prog, 'uTidalField'), 5);
 
-    const set1f = (name, v) => {
-      const loc = this._getUniform(prog, name);
-      if (loc) gl.uniform1f(loc, v);
-    };
-    const set2f = (name, x, y) => {
-      const loc = this._getUniform(prog, name);
-      if (loc) gl.uniform2f(loc, x, y);
-    };
-    const set3f = (name, x, y, z) => {
-      const loc = this._getUniform(prog, name);
-      if (loc) gl.uniform3f(loc, x, y, z);
-    };
-    const set1i = (name, v) => {
-      const loc = this._getUniform(prog, name);
-      if (loc) gl.uniform1i(loc, v);
-    };
+    this._set2f(prog, 'uResolution', this.width, this.height);
+    this._set1f(prog, 'uTime', simTime);
+    this._set1i(prog, 'uFrameIndex', this.frameIndex);
+    this._set2f(prog, 'uJitter', jitterX, jitterY);
 
-    set2f('uResolution', this.width, this.height);
-    set1f('uTime', simTime);
-    set1i('uFrameIndex', this.frameIndex);
-    set2f('uJitter', jitterX, jitterY);
-
-    set3f('uCamPos', camData.pos[0], camData.pos[1], camData.pos[2]);
+    this._set3f(prog, 'uCamPos', camData.pos[0], camData.pos[1], camData.pos[2]);
     const uCamBasis = this._getUniform(prog, 'uCamBasis');
     if (uCamBasis) gl.uniformMatrix3fv(uCamBasis, false, camData.basis);
-    set1f('uFovY', camData.fovY);
+    this._set1f(prog, 'uFovY', camData.fovY);
 
-    set1f('uMass1', binState.m1);
-    set1f('uMass2', binState.m2);
-    set1f('uSeparation', binState.d);
-    set1f('uEta', binState.eta);
-    set1f('uPhase', binState.phaseRad);
-    set1f('uOmega', binState.omega);
-    set1f('uGwWaveOmega', binState.gwWaveOmega);
-    set3f('uBh1Pos', binState.c1[0], binState.c1[1], binState.c1[2]);
-    set3f('uBh2Pos', binState.c2[0], binState.c2[1], binState.c2[2]);
-    set3f('uBh1Vel', binState.v1[0], binState.v1[1], binState.v1[2]);
-    set3f('uBh2Vel', binState.v2[0], binState.v2[1], binState.v2[2]);
+    this._set1f(prog, 'uMass1', binState.m1);
+    this._set1f(prog, 'uMass2', binState.m2);
+    this._set1f(prog, 'uSeparation', binState.d);
+    this._set1f(prog, 'uEta', binState.eta);
+    this._set1f(prog, 'uPhase', binState.phaseRad);
+    this._set1f(prog, 'uOmega', binState.omega);
+    this._set1f(prog, 'uGwWaveOmega', binState.gwWaveOmega);
+    this._set3f(prog, 'uBh1Pos', binState.c1[0], binState.c1[1], binState.c1[2]);
+    this._set3f(prog, 'uBh2Pos', binState.c2[0], binState.c2[1], binState.c2[2]);
+    this._set3f(prog, 'uBh1Vel', binState.v1[0], binState.v1[1], binState.v1[2]);
+    this._set3f(prog, 'uBh2Vel', binState.v2[0], binState.v2[1], binState.v2[2]);
 
-    set1f('uGwAmplitude', state.gwAmplitude);
-    set1f('uLensingStrength', state.lensingStrength);
-    set1f('uRelativisticMode', state.relativisticMode);
+    this._set1f(prog, 'uGwAmplitude', state.gwAmplitude);
+    this._set1f(prog, 'uLensingStrength', state.lensingStrength);
+    this._set1f(prog, 'uRelativisticMode', state.relativisticMode);
 
-    set1f('uDiskTemp', state.diskTemp);
-    set1f('uDiskDensity', state.diskDensity);
-    set1f('uBridgeIntensity', state.bridgeIntensity);
-    set1f('uDiskThickness', state.diskThickness);
-    set1f('uDiskOuterRadius', state.diskOuterRadius);
-    set1f('uTurbulence', state.turbulence);
-    set1f('uFieldHalfSize', fieldHalfSize);
-    set1f('uRCavity', binState.rCavity);
-    set1f('uRingdown', binState.ringdownFactor || 0.0);
+    this._set1f(prog, 'uDiskTemp', state.diskTemp);
+    this._set1f(prog, 'uDiskDensity', state.diskDensity);
+    this._set1f(prog, 'uBridgeIntensity', state.bridgeIntensity);
+    this._set1f(prog, 'uDiskThickness', state.diskThickness);
+    this._set1f(prog, 'uDiskOuterRadius', state.diskOuterRadius);
+    this._set1f(prog, 'uTurbulence', state.turbulence);
+    this._set1f(prog, 'uFieldHalfSize', fieldHalfSize);
+    this._set1f(prog, 'uRCavity', binState.rCavity);
+    this._set1f(prog, 'uRingdown', binState.ringdownFactor || 0.0);
 
-    set1f('uSkyIntensity', state.skyIntensity);
-    set1i('uSkyMode', state.skyMode | 0);
+    this._set1f(prog, 'uSkyIntensity', state.skyIntensity);
+    this._set1i(prog, 'uSkyMode', state.skyMode | 0);
     const skyRot = state.skyRotation || [0.42, 0.22];
-    set2f('uSkyRotation', skyRot[0] || 0, skyRot[1] || 0);
-    set1i('uQuality', state.quality | 0);
+    const skyRotX = skyRot[0] || 0;
+    const skyRotY = skyRot[1] || 0;
+    this._set2f(prog, 'uSkyRotation', skyRotX, skyRotY);
+    this._set1i(prog, 'uQuality', state.quality | 0);
+
+    const rOuter = Math.max(state.diskOuterRadius, binState.rCavity + 4.0);
+    const camR = Math.hypot(camData.pos[0], camData.pos[1], camData.pos[2]);
+    const escapeR = Math.max(Math.max(rOuter * 1.85, camR * 1.65), 62.0);
+    const clampedFov = camData.fovY < 0.1 ? 0.1 : camData.fovY > 2.8 ? 2.8 : camData.fovY;
+    const tanHalfFov = Math.tan(clampedFov * 0.5);
+    const maxDiskSlabY = (0.054 + 0.033 * rOuter * 1.30) * Math.max(state.diskThickness, 0.15) * 2.75;
+
+    const flowCycle = 15.0;
+    const tNorm0 = simTime / flowCycle;
+    const phase0 = tNorm0 - Math.floor(tNorm0);
+    const tNorm1 = tNorm0 + 0.5;
+    const phase1 = tNorm1 - Math.floor(tNorm1);
+
+    this._set1f(prog, 'uTanHalfFov', tanHalfFov);
+    this._set1f(prog, 'uEscapeR', escapeR);
+    this._set1f(prog, 'uMaxDiskSlabY', maxDiskSlabY);
+    this._set4f(
+      prog,
+      'uFlowConsts',
+      0.5 - 0.5 * Math.cos(Math.PI * 2.0 * phase0),
+      (phase0 - 0.5) * flowCycle,
+      (phase1 - 0.5) * flowCycle,
+      simTime * 0.038
+    );
+    this._set2f(prog, 'uOrbTrig', Math.cos(binState.phaseRad), Math.sin(binState.phaseRad));
+    this._set4f(
+      prog,
+      'uSkyTrig',
+      Math.cos(skyRotX),
+      Math.sin(skyRotX),
+      Math.cos(skyRotY),
+      Math.sin(skyRotY)
+    );
 
     this._drawFullscreen();
   }
 
   _maybeUpdateTidal(state, binState, fieldHalfSize, simTime, dtSec, isProgressive) {
-    const sig = [
-      binState.q,
-      state.diskDensity,
-      state.bridgeIntensity,
-      state.diskOuterRadius,
-      binState.d,
-    ];
+    if (state.diskDensity <= 0.001 && state.bridgeIntensity <= 0.001) {
+      this._tidalReset = true;
+      this._lastTidalSig = null;
+      return;
+    }
+
+    const q = binState.q;
+    const dens = state.diskDensity;
+    const bridge = state.bridgeIntensity;
+    const outer = state.diskOuterRadius;
+    const d = binState.d;
+
     let needReset = this._tidalReset || !this._lastTidalSig;
     if (!needReset) {
+      const prev = this._lastTidalSig;
       if (
-        Math.abs(sig[0] - this._lastTidalSig[0]) > 1e-4 ||
-        Math.abs(sig[1] - this._lastTidalSig[1]) > 1e-3 ||
-        Math.abs(sig[2] - this._lastTidalSig[2]) > 1e-3 ||
-        Math.abs(sig[3] - this._lastTidalSig[3]) > 0.1 ||
-        Math.abs(sig[4] - this._lastTidalSig[4]) > 0.35
+        Math.abs(q - prev[0]) > 1e-4 ||
+        Math.abs(dens - prev[1]) > 1e-3 ||
+        Math.abs(bridge - prev[2]) > 1e-3 ||
+        Math.abs(outer - prev[3]) > 0.1 ||
+        Math.abs(d - prev[4]) > 0.35
       ) {
         needReset = true;
       }
@@ -562,16 +602,24 @@ export class WebGLRenderer {
     if (needReset || (!isProgressive && dtSec > 0.0)) {
       this._runTidalPass(state, binState, fieldHalfSize, simTime, isProgressive ? 0.0 : dtSec, needReset);
       this._tidalReset = false;
-      this._lastTidalSig = sig;
+      this._tidalSigStore[0] = q;
+      this._tidalSigStore[1] = dens;
+      this._tidalSigStore[2] = bridge;
+      this._tidalSigStore[3] = outer;
+      this._tidalSigStore[4] = d;
+      this._lastTidalSig = this._tidalSigStore;
     }
   }
 
   render(state, camData, simTime, binState = null, options = {}) {
     if (this._disposed || this.gl.isContextLost() || !this.getAllShadersCompiled()) return false;
 
-    this.resize(state.resolutionScale);
+    const targetScale = Number(options?.effectiveResolutionScale ?? state?.resolutionScale ?? this.resolutionScale) || 1.0;
+    if (this.width === 0 || this.height === 0 || Math.abs(targetScale - this.resolutionScale) > 1e-4) {
+      this.resize(targetScale);
+    }
 
-    const activeBin = binState || computeBinaryState(state, simTime * 0.25);
+    const activeBin = binState || computeBinaryState(state, simTime * 0.25, this._fallbackBinOpts);
     const fieldHalfSize = Math.max(Math.max(state.diskOuterRadius, activeBin.rCavity + 4.0) * 1.15, activeBin.d * 3.8);
     const dtSec = Math.max(0.0, Math.min(0.05, Number(options.dt ?? 0.016)));
 

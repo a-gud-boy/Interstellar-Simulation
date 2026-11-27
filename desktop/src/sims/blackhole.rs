@@ -1,9 +1,10 @@
 use std::f32::consts::{PI, TAU};
+use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::renderer::SharedGpuAssets;
-use crate::renderer::post::{PostFrameParams, PostTuning, make_fs_pipe, run_fs_pass};
+use crate::renderer::post::{PostFrameParams, PostTuning, run_fs_pass};
+use crate::renderer::{SharedGpuAssets, SimBglKind};
 use crate::shaders;
 use crate::sims::{
     ControlItem, ControlKind, ControlSection, HudMetadata, PresetMeta, SimId, SimInput, Simulation,
@@ -742,7 +743,7 @@ pub struct BlackholeSim {
 
     camera: OrbitCamera,
 
-    pipeline: wgpu::RenderPipeline,
+    pipeline: Arc<wgpu::RenderPipeline>,
     ubo: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
 }
@@ -750,18 +751,11 @@ pub struct BlackholeSim {
 impl BlackholeSim {
     pub fn new(assets: &mut SharedGpuAssets) -> Self {
         let p = &PRESETS[0];
-        let shader = assets
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("blackhole-wgsl"),
-                source: wgpu::ShaderSource::Wgsl(shaders::BLACKHOLE.into()),
-            });
-        let pipeline = make_fs_pipe(
-            &assets.device,
-            "blackhole-pipe",
-            &assets.standard_sim_bgl,
-            &shader,
-            wgpu::TextureFormat::Rgba16Float,
+        let pipeline = assets.get_or_create_sim_pipeline(
+            SimId::Blackhole,
+            "blackhole",
+            SimBglKind::Standard,
+            shaders::BLACKHOLE,
         );
         let ubo = assets.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("blackhole-ubo"),
@@ -977,8 +971,16 @@ impl Simulation for BlackholeSim {
         }
     }
 
-    fn presets(&self) -> Vec<PresetMeta> {
-        PRESETS.iter().map(|p| p.meta).collect()
+    fn presets(&self) -> &'static [PresetMeta] {
+        const METAS: [PresetMeta; 6] = [
+            PRESETS[0].meta,
+            PRESETS[1].meta,
+            PRESETS[2].meta,
+            PRESETS[3].meta,
+            PRESETS[4].meta,
+            PRESETS[5].meta,
+        ];
+        &METAS
     }
 
     fn active_preset_index(&self) -> Option<usize> {
@@ -1008,13 +1010,13 @@ impl Simulation for BlackholeSim {
         }
     }
 
-    fn control_sections(&self) -> Vec<ControlSection> {
-        vec![
+    fn control_sections(&self) -> &'static [ControlSection] {
+        const SECTIONS: &[ControlSection] = &[
             ControlSection {
                 id: "spacetime",
-                title: "Spacetime Physics",
+                title: "SPACETIME PHYSICS",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "spin",
                         label: "Kerr Spin (a/M)",
@@ -1049,9 +1051,9 @@ impl Simulation for BlackholeSim {
             },
             ControlSection {
                 id: "accretion",
-                title: "Accretion Disk & Corona",
+                title: "ACCRETION DISK & CORONA",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "diskTemp",
                         label: "Inner Temperature",
@@ -1126,9 +1128,9 @@ impl Simulation for BlackholeSim {
             },
             ControlSection {
                 id: "optics",
-                title: "Optics, Sky & Quality",
+                title: "OPTICS, SKY & QUALITY",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "exposure",
                         label: "Exposure",
@@ -1173,7 +1175,7 @@ impl Simulation for BlackholeSim {
                         key: "skyMode",
                         label: "Background Sky Source",
                         kind: ControlKind::Select {
-                            options: vec![
+                            options: &[
                                 (0, "Hybrid 4K + Micro-Stars"),
                                 (1, "4K NASA/ESO Map"),
                                 (2, "Procedural Deep Field"),
@@ -1184,19 +1186,20 @@ impl Simulation for BlackholeSim {
                         key: "quality",
                         label: "Ray-Trace Quality",
                         kind: ControlKind::Segmented {
-                            options: vec![(0, "Medium"), (1, "High"), (2, "Ultra Cinema")],
+                            options: &[(0, "Medium"), (1, "High"), (2, "Ultra Cinema")],
                         },
                     },
                     ControlItem {
                         key: "resolutionScale",
                         label: "Render Resolution",
                         kind: ControlKind::Segmented {
-                            options: vec![(50, "0.5×"), (75, "0.75×"), (100, "1.0×")],
+                            options: &[(50, "0.5×"), (75, "0.75×"), (100, "1.0×")],
                         },
                     },
                 ],
             },
-        ]
+        ];
+        SECTIONS
     }
 
     fn get_f32(&self, key: &str) -> f32 {
@@ -1341,7 +1344,7 @@ impl Simulation for BlackholeSim {
             preset_badge,
             secondary_badge,
             secondary_badge_warm: false,
-            drawer_title: "Physics & Optics",
+            drawer_title: "PHYSICS & OPTICS",
             drawer_subtitle: format!(
                 "r+ {:.2} M · θsh {:.1}°",
                 kerr.horizon_r, kerr.shadow_angular_deg

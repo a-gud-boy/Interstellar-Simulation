@@ -267,29 +267,16 @@ fn encode_accum_to_rgba8(accum: &[f32], total_pixels: usize, shoulder: f64) -> V
     pixels
 }
 
-pub fn get_procedural_sky_a() -> &'static RgbaImageData {
-    static SKY_A: OnceLock<RgbaImageData> = OnceLock::new();
-    SKY_A.get_or_init(|| synthesize_procedural_sky_a(2048, 1024))
-}
-
-pub fn get_exotic_nebula_b() -> &'static RgbaImageData {
-    static SKY_B: OnceLock<RgbaImageData> = OnceLock::new();
-    SKY_B.get_or_init(|| synthesize_exotic_nebula_b(2048, 1024))
-}
-
-pub fn get_real_milkyway_4k() -> &'static RgbaImageData {
-    static REAL_SKY: OnceLock<RgbaImageData> = OnceLock::new();
-    REAL_SKY.get_or_init(|| {
-        let img = image::load_from_memory_with_format(MILKYWAY_4K_JPEG, image::ImageFormat::Jpeg)
-            .expect("Embedded milkyway_4k.jpg must decode")
-            .to_rgba8();
-        let (width, height) = img.dimensions();
-        RgbaImageData {
-            width,
-            height,
-            pixels: img.into_raw(),
-        }
-    })
+pub fn decode_real_milkyway_4k() -> RgbaImageData {
+    let img = image::load_from_memory_with_format(MILKYWAY_4K_JPEG, image::ImageFormat::Jpeg)
+        .expect("Embedded milkyway_4k.jpg must decode")
+        .to_rgba8();
+    let (width, height) = img.dimensions();
+    RgbaImageData {
+        width,
+        height,
+        pixels: img.into_raw(),
+    }
 }
 
 pub fn synthesize_procedural_sky_a(width: usize, height: usize) -> RgbaImageData {

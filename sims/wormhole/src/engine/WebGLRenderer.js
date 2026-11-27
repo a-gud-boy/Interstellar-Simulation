@@ -12,11 +12,13 @@ import { FULLSCREEN_VERT, NOISE_BAKE_FRAG } from '../../../../shared/shaders/com
 import { WORMHOLE_FRAG } from '../shaders/wormhole.frag.js';
 import {
   SharedWebGLPostPipeline,
+  detectWebGLHdrFormats,
   MAX_PROGRESSIVE_SAMPLES,
   halton,
   formatShaderError,
 } from '../../../../shared/engine/SharedWebGLPostPipeline.js';
 import {
+  createPlaceholderSkyTextureWebGL,
   createProceduralSkyTextureAWebGL,
   createExoticNebulaTextureBWebGL,
 } from '../../../../shared/assets/skyLoader.js';
@@ -24,6 +26,18 @@ import { createBlueNoiseLUTWebGL } from '../../../../shared/assets/physicalLuts.
 
 const VOLUME_SIZE = 128;
 const MAX_DPR = 1.5;
+
+function evalWormholeR(l, metricType, rho, a, M) {
+  if (metricType === 1) {
+    return Math.sqrt(rho * rho + l * l);
+  }
+  const absL = Math.abs(l);
+  if (absL <= a) {
+    return rho;
+  }
+  const x = (2.0 * (absL - a)) / (Math.PI * Math.max(M, 1e-6));
+  return rho + M * (x * Math.atan(x) - 0.5 * Math.log(1.0 + x * x));
+}
 
 export class WebGLRenderer {
   /**
@@ -104,12 +118,12 @@ export class WebGLRenderer {
       wormhole: this._createProgram('wormhole', FULLSCREEN_VERT, WORMHOLE_FRAG),
     };
 
-    // Static blue-noise LUT + procedural Universe A sky fallback + Universe B exotic nebula
+    // Static blue-noise LUT + instant 1x1 Universe A sky placeholder + GPU-baked Universe B exotic nebula
     const blueRes = createBlueNoiseLUTWebGL(gl, 128);
     this.blueNoiseTex = blueRes?.texture || blueRes;
 
-    const procSkyRes = createProceduralSkyTextureAWebGL(gl, 2048, 1024);
-    this.procSkyTexA = procSkyRes?.texture || procSkyRes;
+    this.procSkyTexA = createPlaceholderSkyTextureWebGL(gl);
+    this._procSkyBakedA = false;
     this.skyTexA = this.procSkyTexA;
 
     const skyBRes = createExoticNebulaTextureBWebGL(gl, 2048, 1024);
@@ -123,6 +137,7 @@ export class WebGLRenderer {
       gl,
       emptyVao: this.emptyVao,
       hdrSpec: this._hdrSpec,
+      taaSpec: this._taaSpec,
       opticsProfile: 'default',
       vertSrc: FULLSCREEN_VERT,
       compileProgram: (name, vs, fs) => this._createProgram(name, vs, fs),
@@ -134,62 +149,14 @@ export class WebGLRenderer {
   }
 
   _detectHdrFboFormat() {
-    const gl = this.gl;
-    const candidates = [];
-
-    if (this.extColorBufferFloat || this.extColorBufferHalfFloat) {
-      candidates.push({
-        name: 'RGBA16F',
-        internalFormat: gl.RGBA16F,
-        format: gl.RGBA,
-        type: gl.HALF_FLOAT,
-      });
-    }
-    if (this.extColorBufferFloat) {
-      candidates.push({
-        name: 'R11F_G11F_B10F',
-        internalFormat: gl.R11F_G11F_B10F,
-        format: gl.RGB,
-        type: gl.HALF_FLOAT,
-      });
-    }
-    candidates.push({
-      name: 'RGBA8',
-      internalFormat: gl.RGBA8,
-      format: gl.RGBA,
-      type: gl.UNSIGNED_BYTE,
-    });
-
-    const probeFbo = gl.createFramebuffer();
-    const probeTex = gl.createTexture();
-
-    for (const spec of candidates) {
-      gl.bindTexture(gl.TEXTURE_2D, probeTex);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.texImage2D(gl.TEXTURE_2D, 0, spec.internalFormat, 4, 4, 0, spec.format, spec.type, null);
-
-      gl.bindFramebuffer(gl.FRAMEBUFFER, probeFbo);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, probeTex, 0);
-      const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
-
-      if (status === gl.FRAMEBUFFER_COMPLETE) {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.deleteTexture(probeTex);
-        gl.deleteFramebuffer(probeFbo);
-        this.hdrFormat = spec.name;
-        return spec;
-      }
-    }
-
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.deleteTexture(probeTex);
-    gl.deleteFramebuffer(probeFbo);
-    const fallback = candidates[candidates.length - 1];
-    this.hdrFormat = fallback.name;
-    return fallback;
+    const { hdrSpec, taaSpec } = detectWebGLHdrFormats(
+      this.gl,
+      this.extColorBufferFloat,
+      this.extColorBufferHalfFloat
+    );
+    this._taaSpec = taaSpec;
+    this.hdrFormat = hdrSpec.name;
+    return hdrSpec;
   }
 
   _compileShader(name, type, source) {
@@ -395,7 +362,18 @@ export class WebGLRenderer {
       this.skyDimensions = [width || 4096, height || 2048];
       this.resetAccumulation(true);
     } else {
-      if (texture && texture !== this.procSkyTexA && texture !== this.skyTexA) {
+      if (texture && !this._procSkyBakedA) {
+        const oldPlaceholder = this.procSkyTexA;
+        this.procSkyTexA = texture;
+        if (!this.skyMapLoaded) {
+          this.skyTexA = texture;
+        }
+        if (oldPlaceholder && oldPlaceholder !== texture && oldPlaceholder !== this.skyTexA) {
+          gl.deleteTexture(oldPlaceholder);
+        }
+        this._procSkyBakedA = true;
+        this.resetAccumulation(true);
+      } else if (texture && texture !== this.procSkyTexA && texture !== this.skyTexA) {
         gl.deleteTexture(texture);
       }
       this.skyMapLoaded = false;
@@ -471,6 +449,28 @@ export class WebGLRenderer {
       const loc = this._getUniform(prog, name);
       if (loc) gl.uniform1i(loc, v);
     };
+    const set4f = (name, x, y, z, w) => {
+      const loc = this._getUniform(prog, name);
+      if (loc) gl.uniform4f(loc, x, y, z, w);
+    };
+
+    const camL = Number.isFinite(camData.l) ? camData.l : 0.0;
+    const metricType = (state.metricType | 0) === 1 ? 1 : 0;
+    const rho = Math.max(0.25, Number.isFinite(Number(state.throatRadius)) ? Number(state.throatRadius) : 2.0);
+    const throatLen = Math.max(0.0, Number.isFinite(Number(state.throatLength)) ? Number(state.throatLength) : 0.25);
+    const lensingW = Math.max(0.05, Number.isFinite(Number(state.lensingWidth)) ? Number(state.lensingWidth) : 0.32);
+
+    const rotA = state.skyRotationA || [0.4, 0.2];
+    const rotB = state.skyRotationB || [1.1, -0.15];
+    const rotAx = rotA[0] ?? 0;
+    const rotAy = rotA[1] ?? 0;
+    const rotBx = rotB[0] ?? 0;
+    const rotBy = rotB[1] ?? 0;
+
+    const clampedFov = Math.max(0.1, Math.min(2.8, camData.fovY));
+    const tanHalfFov = Math.tan(clampedFov * 0.5);
+    const camR = evalWormholeR(camL, metricType, rho, throatLen, lensingW);
+    const escapeL = Math.max(Math.abs(camL) * 3.0 + 40.0, throatLen + 4.0 * Math.max(lensingW, 0.35) + 80.0);
 
     set2f('uResolution', this.width, this.height);
     set1f('uTime', simTime);
@@ -478,13 +478,13 @@ export class WebGLRenderer {
     set2f('uJitter', jitterX, jitterY);
 
     set3f('uCamN0', camData.n0[0], camData.n0[1], camData.n0[2]);
-    set1f('uCamL', camData.l);
+    set1f('uCamL', camL);
     const uCamBasis = this._getUniform(prog, 'uCamBasis');
     if (uCamBasis) gl.uniformMatrix3fv(uCamBasis, false, camData.basis);
     set1f('uFovY', camData.fovY);
 
-    // Wormhole metric, throat matter, dual-universe skies & quality (exact 21-uniform contract)
-    set1i('uMetricType', state.metricType | 0);
+    // Wormhole metric, throat matter, dual-universe skies & quality (exact 21-uniform contract + hoisted extras)
+    set1i('uMetricType', metricType);
     set1f('uThroatRadius', state.throatRadius ?? 2.0);
     set1f('uThroatLength', state.throatLength ?? 0.25);
     set1f('uLensingWidth', state.lensingWidth ?? 0.32);
@@ -495,11 +495,15 @@ export class WebGLRenderer {
     set1f('uSkyIntensityB', state.skyIntensityB ?? 1.15);
     set1i('uPlanetVisible', state.planetVisible | 0);
 
-    const rotA = state.skyRotationA || [0.4, 0.2];
-    const rotB = state.skyRotationB || [1.1, -0.15];
-    set2f('uSkyRotationA', rotA[0] ?? 0, rotA[1] ?? 0);
-    set2f('uSkyRotationB', rotB[0] ?? 0, rotB[1] ?? 0);
+    set2f('uSkyRotationA', rotAx, rotAy);
+    set2f('uSkyRotationB', rotBx, rotBy);
     set1i('uQuality', state.quality | 0);
+
+    set1f('uTanHalfFov', tanHalfFov);
+    set1f('uCamR', camR);
+    set1f('uEscapeL', escapeL);
+    set4f('uSkyTrigA', Math.cos(rotAx), Math.sin(rotAx), Math.cos(rotAy), Math.sin(rotAy));
+    set4f('uSkyTrigB', Math.cos(rotBx), Math.sin(rotBx), Math.cos(rotBy), Math.sin(rotBy));
 
     this._drawFullscreen();
   }
@@ -511,7 +515,10 @@ export class WebGLRenderer {
   render(state, camData, simTime, options = {}) {
     if (this._disposed || this.gl.isContextLost() || !this.getAllShadersCompiled()) return false;
 
-    this.resize(state.resolutionScale);
+    const targetScale = Number(options?.effectiveResolutionScale ?? state?.resolutionScale ?? this.resolutionScale) || 1.0;
+    if (this.width === 0 || this.height === 0 || Math.abs(targetScale - this.resolutionScale) > 1e-4) {
+      this.resize(targetScale);
+    }
 
     const isProgressive = Boolean(state.paused && !camData.moved);
 

@@ -13,17 +13,6 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
   out.uv = vec2f(x * 0.5 + 0.5, 0.5 - y * 0.5);
   return out;
 }
-fn isBadFloat(x: f32) -> bool {
-  return (bitcast<u32>(x) & 0x7f800000u) == 0x7f800000u;
-}
-
-fn sanitizeVec3Zero(v: vec3f) -> vec3f {
-  return vec3f(
-    select(v.x, 0.0, isBadFloat(v.x)),
-    select(v.y, 0.0, isBadFloat(v.y)),
-    select(v.z, 0.0, isBadFloat(v.z))
-  );
-}
 
 // xy=texelSize, z=useKaris (0.0 or 1.0), w=0.0
 @group(0) @binding(0) var<uniform> u: vec4f;
@@ -40,8 +29,7 @@ fn karisWeight(c: vec3f) -> f32 {
 
 fn sampleSafe(baseUv: vec2f, offset: vec2f, texelSize: vec2f) -> vec3f {
   let uv = clamp(baseUv + offset * texelSize, vec2f(0.0), vec2f(1.0));
-  let c = textureSampleLevel(uSrcTex, sLinear, uv, 0.0).rgb;
-  return max(sanitizeVec3Zero(c), vec3f(0.0));
+  return textureSampleLevel(uSrcTex, sLinear, uv, 0.0).rgb;
 }
 
 @fragment

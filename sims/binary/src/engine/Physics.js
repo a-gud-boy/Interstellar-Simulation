@@ -47,6 +47,14 @@ export function petersMathewsTimeToMerger(d, eta) {
 }
 
 /**
+ * 1PN Padé orbital angular frequency Omega(d, eta).
+ */
+export function computeOrbitalOmega(d, eta) {
+  const sqrtD = Math.sqrt(d);
+  return 1.0 / (d * sqrtD + 0.5 * (3.0 - eta) * sqrtD);
+}
+
+/**
  * Computes instantaneous binary black hole kinematic, horizon, and GW telemetry state.
  */
 export function computeBinaryState(params = {}, phaseRad = 0.0, options = {}) {
@@ -60,8 +68,7 @@ export function computeBinaryState(params = {}, phaseRad = 0.0, options = {}) {
   const chirpMass = Math.pow(Math.max(eta, 0.0), 0.6);
 
   // Positive-definite 1PN Padé orbital frequency: exact 1PN expansion & monotonic to plunge
-  const sqrtD = Math.sqrt(d);
-  const omega = 1.0 / (d * sqrtD + 0.5 * (3.0 - eta) * sqrtD);
+  const omega = computeOrbitalOmega(d, eta);
   const vOrbitalC = Math.min(0.99, Math.cbrt(omega));
 
   // Gravitational wave frequency & chirp phase
@@ -76,10 +83,14 @@ export function computeBinaryState(params = {}, phaseRad = 0.0, options = {}) {
   const cPhi = Math.cos(phaseRad);
   const sPhi = Math.sin(phaseRad);
 
-  const c1 = [-r1 * cPhi, 0.0, +r1 * sPhi];
-  const c2 = [+r2 * cPhi, 0.0, -r2 * sPhi];
-  const v1 = [+omega * c1[2], 0.0, -omega * c1[0]];
-  const v2 = [+omega * c2[2], 0.0, -omega * c2[0]];
+  const c1x = -r1 * cPhi;
+  const c1z = +r1 * sPhi;
+  const c2x = +r2 * cPhi;
+  const c2z = -r2 * sPhi;
+  const v1x = +omega * c1z;
+  const v1z = -omega * c1x;
+  const v2x = +omega * c2z;
+  const v2z = -omega * c2x;
 
   // Isotropic horizons & saddle potential
   const rH1 = 0.5 * m1;
@@ -90,6 +101,36 @@ export function computeBinaryState(params = {}, phaseRad = 0.0, options = {}) {
   const rocheL1 = eggletonRocheRadius(d, m1, m2);
   const rocheL2 = eggletonRocheRadius(d, m2, m1);
   const rCavity = d * (1.65 + 0.55 * Math.sqrt(Math.max(4.0 * eta, 0.0)));
+  const timeToMergerM = petersMathewsTimeToMerger(d, Math.max(eta, 1e-4));
+
+  const out = options.out;
+  if (out) {
+    out.q = q;
+    out.d = d;
+    out.m1 = m1;
+    out.m2 = m2;
+    out.eta = eta;
+    out.chirpMass = chirpMass;
+    out.omega = omega;
+    out.gwWaveOmega = gwWaveOmega;
+    out.vOrbitalC = vOrbitalC;
+    out.fGwDimless = fGwDimless;
+    out.fGwHz = fGwHz;
+    out.phaseRad = phaseRad;
+    out.gwPhaseRad = gwPhaseRad;
+    if (out.c1) { out.c1[0] = c1x; out.c1[1] = 0.0; out.c1[2] = c1z; } else { out.c1 = [c1x, 0.0, c1z]; }
+    if (out.c2) { out.c2[0] = c2x; out.c2[1] = 0.0; out.c2[2] = c2z; } else { out.c2 = [c2x, 0.0, c2z]; }
+    if (out.v1) { out.v1[0] = v1x; out.v1[1] = 0.0; out.v1[2] = v1z; } else { out.v1 = [v1x, 0.0, v1z]; }
+    if (out.v2) { out.v2[0] = v2x; out.v2[1] = 0.0; out.v2[2] = v2z; } else { out.v2 = [v2x, 0.0, v2z]; }
+    out.rH1 = rH1;
+    out.rH2 = rH2;
+    out.phiSaddle = phiSaddle;
+    out.rocheL1 = rocheL1;
+    out.rocheL2 = rocheL2;
+    out.rCavity = rCavity;
+    out.timeToMergerM = timeToMergerM;
+    return out;
+  }
 
   return {
     q,
@@ -105,17 +146,17 @@ export function computeBinaryState(params = {}, phaseRad = 0.0, options = {}) {
     fGwHz,
     phaseRad,
     gwPhaseRad,
-    c1,
-    c2,
-    v1,
-    v2,
+    c1: [c1x, 0.0, c1z],
+    c2: [c2x, 0.0, c2z],
+    v1: [v1x, 0.0, v1z],
+    v2: [v2x, 0.0, v2z],
     rH1,
     rH2,
     phiSaddle,
     rocheL1,
     rocheL2,
     rCavity,
-    timeToMergerM: petersMathewsTimeToMerger(d, Math.max(eta, 1e-4)),
+    timeToMergerM,
   };
 }
 
@@ -154,8 +195,8 @@ export function stepBinaryOrbit(orbitState, params, dtSec) {
       orbitState.ringdownTimer += dt * timeWarp;
       const u = clamp(orbitState.ringdownTimer / RINGDOWN_DURATION_SEC, 0.0, 1.0);
       orbitState.ringdownFactor = Math.sin(Math.PI * u);
-      const bin = computeBinaryState({ massRatio: q, separation: PLUNGE_SEP_THRESHOLD }, orbitState.phase);
-      orbitState.phase = (orbitState.phase + bin.omega * geoDt) % (2.0 * Math.PI);
+      const omega = computeOrbitalOmega(PLUNGE_SEP_THRESHOLD, eta);
+      orbitState.phase = (orbitState.phase + omega * geoDt) % (2.0 * Math.PI);
 
       if (orbitState.ringdownTimer >= RINGDOWN_DURATION_SEC) {
         orbitState.inRingdown = false;
@@ -170,8 +211,8 @@ export function stepBinaryOrbit(orbitState, params, dtSec) {
       const k2 = petersMathewsRate(dMid, eta) * 0.35;
       const dNext = d0 + geoDt * k2;
 
-      const binMid = computeBinaryState({ massRatio: q, separation: dMid }, orbitState.phase);
-      orbitState.phase = (orbitState.phase + binMid.omega * geoDt) % (2.0 * Math.PI);
+      const omegaMid = computeOrbitalOmega(clamp(dMid, CLAMP_MIN_SEP, CLAMP_MAX_SEP), eta);
+      orbitState.phase = (orbitState.phase + omegaMid * geoDt) % (2.0 * Math.PI);
 
       if (dNext < PLUNGE_SEP_THRESHOLD) {
         orbitState.currentSep = PLUNGE_SEP_THRESHOLD;
@@ -187,8 +228,8 @@ export function stepBinaryOrbit(orbitState, params, dtSec) {
     orbitState.ringdownTimer = 0.0;
     orbitState.ringdownFactor = 0.0;
     orbitState.currentSep = targetSep;
-    const bin = computeBinaryState({ massRatio: q, separation: targetSep }, orbitState.phase);
-    orbitState.phase = (orbitState.phase + bin.omega * geoDt) % (2.0 * Math.PI);
+    const omega = computeOrbitalOmega(targetSep, eta);
+    orbitState.phase = (orbitState.phase + omega * geoDt) % (2.0 * Math.PI);
   }
 
   return orbitState;

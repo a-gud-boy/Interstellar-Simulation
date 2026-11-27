@@ -15,6 +15,7 @@ import {
   easeInOutCubic,
   stepCriticallyDamped,
   isEditableElement,
+  createCanvasRectCache,
 } from '../../../../shared/engine/BaseCamera.js';
 export { computeWormholeTelemetry };
 
@@ -93,7 +94,8 @@ export class WormholeCamera {
     this._n0 = [0, 0, 1];
     this._basis = new Float32Array(9);
     this._moved = true;
-    this._prevSignature = null;
+    this._hasPrevSignature = false;
+    this._prevSignature = new Float64Array(14);
 
     // Active input tracking
     this._pointers = new Map();
@@ -102,6 +104,7 @@ export class WormholeCamera {
     this._keys = new Set();
     this._windowBound = false;
     this._canvasBoundTo = null;
+    this._rectCache = createCanvasRectCache(() => this.canvas);
 
     this._recomputeBasis();
     this._bindEvents();
@@ -322,9 +325,7 @@ export class WormholeCamera {
         return;
       }
 
-      const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
-      const vh = typeof window !== 'undefined' ? window.innerHeight : 720;
-      const rect = this.canvas ? this.canvas.getBoundingClientRect() : { width: vw, height: vh };
+      const rect = this._rectCache.getRect();
       const scale = 1.0 / Math.max(Math.min(rect.width, rect.height), 320);
 
       if (this._dragMode === 'roll') {
@@ -463,6 +464,7 @@ export class WormholeCamera {
     if (this.canvas) {
       this._bindCanvasEvents(this.canvas);
     }
+    this._rectCache?.invalidate();
     this._moved = true;
   }
 
@@ -704,19 +706,39 @@ export class WormholeCamera {
     b[7] = fy;
     b[8] = fz;
 
-    const sig = [this.l, nx, ny, nz, rx, ry, rz, ux, uy, uz, fx, fy, fz, this.fov];
-    if (!this._prevSignature) {
+    const prev = this._prevSignature;
+    if (!this._hasPrevSignature) {
       this._moved = true;
-      this._prevSignature = sig;
+      this._hasPrevSignature = true;
+      prev[0] = this.l; prev[1] = nx; prev[2] = ny; prev[3] = nz;
+      prev[4] = rx; prev[5] = ry; prev[6] = rz;
+      prev[7] = ux; prev[8] = uy; prev[9] = uz;
+      prev[10] = fx; prev[11] = fy; prev[12] = fz;
+      prev[13] = this.fov;
     } else {
-      let maxDiff = 0;
-      for (let i = 0; i < sig.length; i++) {
-        const d = Math.abs(sig[i] - this._prevSignature[i]);
-        if (d > maxDiff) maxDiff = d;
-      }
+      const maxDiff = Math.max(
+        Math.abs(this.l - prev[0]),
+        Math.abs(nx - prev[1]),
+        Math.abs(ny - prev[2]),
+        Math.abs(nz - prev[3]),
+        Math.abs(rx - prev[4]),
+        Math.abs(ry - prev[5]),
+        Math.abs(rz - prev[6]),
+        Math.abs(ux - prev[7]),
+        Math.abs(uy - prev[8]),
+        Math.abs(uz - prev[9]),
+        Math.abs(fx - prev[10]),
+        Math.abs(fy - prev[11]),
+        Math.abs(fz - prev[12]),
+        Math.abs(this.fov - prev[13])
+      );
       this._moved = maxDiff > 1e-6;
       if (this._moved) {
-        this._prevSignature = sig;
+        prev[0] = this.l; prev[1] = nx; prev[2] = ny; prev[3] = nz;
+        prev[4] = rx; prev[5] = ry; prev[6] = rz;
+        prev[7] = ux; prev[8] = uy; prev[9] = uz;
+        prev[10] = fx; prev[11] = fy; prev[12] = fz;
+        prev[13] = this.fov;
       }
     }
   }
@@ -736,6 +758,7 @@ export class WormholeCamera {
   }
 
   dispose() {
+    this._rectCache?.dispose();
     if (this.canvas) {
       this._unbindCanvasEvents(this.canvas);
     }

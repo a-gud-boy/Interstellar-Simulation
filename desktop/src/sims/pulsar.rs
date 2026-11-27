@@ -1,9 +1,10 @@
 use std::f64::consts::{PI, TAU};
+use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::renderer::SharedGpuAssets;
-use crate::renderer::post::{PostFrameParams, PostTuning, make_fs_pipe, run_fs_pass};
+use crate::renderer::post::{PostFrameParams, PostTuning, run_fs_pass};
+use crate::renderer::{SharedGpuAssets, SimBglKind};
 use crate::shaders;
 use crate::sims::{
     ControlItem, ControlKind, ControlSection, HudMetadata, PresetMeta, SimId, SimInput, Simulation,
@@ -997,7 +998,7 @@ pub struct PulsarSim {
     sim_time: f32,
     camera: PulsarCamera,
 
-    pipeline: wgpu::RenderPipeline,
+    pipeline: Arc<wgpu::RenderPipeline>,
     ubo: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
 }
@@ -1005,18 +1006,11 @@ pub struct PulsarSim {
 impl PulsarSim {
     pub fn new(assets: &mut SharedGpuAssets) -> Self {
         let p = &PRESETS[0];
-        let shader = assets
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("pulsar-shader"),
-                source: wgpu::ShaderSource::Wgsl(shaders::PULSAR.into()),
-            });
-        let pipeline = make_fs_pipe(
-            &assets.device,
-            "pulsar-pipeline",
-            &assets.standard_sim_bgl,
-            &shader,
-            wgpu::TextureFormat::Rgba16Float,
+        let pipeline = assets.get_or_create_sim_pipeline(
+            SimId::Pulsar,
+            "pulsar",
+            SimBglKind::Standard,
+            shaders::PULSAR,
         );
         let ubo = assets.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pulsar-ubo"),
@@ -1175,8 +1169,16 @@ impl Simulation for PulsarSim {
         }
     }
 
-    fn presets(&self) -> Vec<PresetMeta> {
-        PRESETS.iter().map(|p| p.meta).collect()
+    fn presets(&self) -> &'static [PresetMeta] {
+        const METAS: [PresetMeta; 6] = [
+            PRESETS[0].meta,
+            PRESETS[1].meta,
+            PRESETS[2].meta,
+            PRESETS[3].meta,
+            PRESETS[4].meta,
+            PRESETS[5].meta,
+        ];
+        &METAS
     }
 
     fn active_preset_index(&self) -> Option<usize> {
@@ -1211,18 +1213,18 @@ impl Simulation for PulsarSim {
         }
     }
 
-    fn control_sections(&self) -> Vec<ControlSection> {
-        vec![
+    fn control_sections(&self) -> &'static [ControlSection] {
+        const SECTIONS: &[ControlSection] = &[
             ControlSection {
                 id: "spacetime",
-                title: "Spacetime & Spin",
+                title: "SPACETIME & SPIN",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "lensingMode",
                         label: "Spacetime Curvature",
                         kind: ControlKind::Segmented {
-                            options: vec![(1, "GR Curved"), (0, "Flat Space")],
+                            options: &[(1, "GR Curved"), (0, "Flat Space")],
                         },
                     },
                     ControlItem {
@@ -1259,9 +1261,9 @@ impl Simulation for PulsarSim {
             },
             ControlSection {
                 id: "magnetosphere",
-                title: "Magnetosphere & PWN",
+                title: "MAGNETOSPHERE & PWN",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "obliquityDeg",
                         label: "Magnetic Obliquity (α)",
@@ -1326,9 +1328,9 @@ impl Simulation for PulsarSim {
             },
             ControlSection {
                 id: "optics",
-                title: "Optics, Sky & Quality",
+                title: "OPTICS, SKY & QUALITY",
                 default_open: true,
-                items: vec![
+                items: &[
                     ControlItem {
                         key: "exposure",
                         label: "Exposure",
@@ -1373,26 +1375,27 @@ impl Simulation for PulsarSim {
                         key: "skyMode",
                         label: "Background Sky Source",
                         kind: ControlKind::Select {
-                            options: vec![(0, "4K Milky Way"), (1, "Procedural")],
+                            options: &[(0, "4K Milky Way"), (1, "Procedural")],
                         },
                     },
                     ControlItem {
                         key: "quality",
                         label: "Ray-Trace Quality",
                         kind: ControlKind::Segmented {
-                            options: vec![(0, "Performance"), (1, "Balanced"), (2, "Cinema")],
+                            options: &[(0, "Performance"), (1, "Balanced"), (2, "Cinema")],
                         },
                     },
                     ControlItem {
                         key: "resolutionScale",
                         label: "Render Resolution",
                         kind: ControlKind::Segmented {
-                            options: vec![(50, "0.5×"), (75, "0.75×"), (100, "1.0×")],
+                            options: &[(50, "0.5×"), (75, "0.75×"), (100, "1.0×")],
                         },
                     },
                 ],
             },
-        ]
+        ];
+        SECTIONS
     }
 
     fn get_f32(&self, key: &str) -> f32 {
@@ -1563,7 +1566,7 @@ impl Simulation for PulsarSim {
             preset_badge,
             secondary_badge,
             secondary_badge_warm: true,
-            drawer_title: "Magnetosphere & GR Optics",
+            drawer_title: "MAGNETOSPHERE & GR OPTICS",
             drawer_subtitle: format!(
                 "{} · M/R {:.3} · z {:.3}",
                 curv_label, tel.compactness, tel.surface_redshift_z

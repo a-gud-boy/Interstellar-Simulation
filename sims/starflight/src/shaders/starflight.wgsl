@@ -174,6 +174,7 @@ fn hash33f(pIn: vec3f) -> vec3f {
 
 fn evalSpectralStarLayer(
   dir: vec3f,
+  galWeight: f32,
   scale: f32,
   densityThresh: f32,
   boost: f32,
@@ -196,7 +197,6 @@ fn evalSpectralStarLayer(
   let rnd = hash33f(cell);
 
   // Weight star density toward the Milky Way galactic plane plus isotropic halo stars
-  let galWeight = exp(-dir.y * dir.y * 16.0);
   let effThresh = clamp(densityThresh - galWeight * 0.088, 0.58, 0.985);
   if (rnd.x < effThresh) {
     return vec3f(0.0);
@@ -284,7 +284,7 @@ fn evalSpectralStarLayer(
 }
 
 fn evalCmbShell(rdRest: vec3f, doppler: f32, cmbVisibility: f32, cmbTempScale: f32) -> vec3f {
-  if (cmbVisibility <= 0.001) {
+  if (cmbVisibility <= 0.001 || 2.7255 * max(cmbTempScale, 0.0) * doppler * 1.07 < 45.0) {
     return vec3f(0.0);
   }
 
@@ -327,49 +327,21 @@ fn evalCmbShell(rdRest: vec3f, doppler: f32, cmbVisibility: f32, cmbTempScale: f
 
 fn sampleSkyBackground(
   rdRest: vec3f,
+  dir: vec3f,
+  sampleUv: vec2f,
+  dUVdx: vec2f,
+  dUVdy: vec2f,
   pixelFwRest: f32,
   doppler: f32,
-  dopplerStrength: f32,
+  dColor: f32,
   beamingGain: f32,
   skyIntensity: f32,
   skyMode: i32,
-  skyRot: vec2f,
   starDensity: f32,
   uvIrGain: f32,
   cmbVisibility: f32,
   cmbTempScale: f32
 ) -> vec3f {
-  let dir = normalize(rotateSkyDir(rdRest, skyRot));
-
-  // Seam-safe & pole-safe equirectangular derivatives strictly in uniform control flow
-  let azim = select(0.0, atan2(dir.z, dir.x), abs(dir.x) + abs(dir.z) > 1e-6);
-  let u1 = azim * INV_TAU + 0.5;
-  let v = acos(clamp(dir.y, -1.0, 1.0)) * INV_PI;
-  let uv1 = vec2f(u1, v);
-  let uv2 = vec2f(fract(u1 + 0.5), v);
-
-  let dx1 = dpdx(uv1);
-  let dy1 = dpdy(uv1);
-  let dx2 = dpdx(uv2);
-  let dy2 = dpdy(uv2);
-
-  var dUVdx = vec2f(select(dx2.x, dx1.x, abs(dx1.x) < abs(dx2.x)), dx1.y);
-  var dUVdy = vec2f(select(dy2.x, dy1.x, abs(dy1.x) < abs(dy2.x)), dy1.y);
-
-  // Smooth magnification mip-gradient floor when doppler < 0.72 so magnified mip-0 JPEG stars
-  // smooth into velvety crimson continuum (zero effect for doppler >= 0.72: crisp 4K forward sky)
-  let magSmooth = 1.0 - smoothstep(0.14, 0.72, doppler);
-  let minGrad = magSmooth * 0.0065;
-  if (minGrad > 1e-6) {
-    let lenX = length(vec2f(dUVdx.x, dUVdx.y * 0.5));
-    let lenY = length(vec2f(dUVdy.x, dUVdy.y * 0.5));
-    dUVdx = select(vec2f(minGrad, 0.0), dUVdx * max(1.0, minGrad / max(lenX, 1e-6)), lenX > 1e-5);
-    dUVdy = select(vec2f(0.0, minGrad * 2.0), dUVdy * max(1.0, minGrad / max(lenY, 1e-6)), lenY > 1e-5);
-  }
-  dUVdx = clamp(dUVdx, vec2f(-0.25), vec2f(0.25));
-  dUVdy = clamp(dUVdy, vec2f(-0.25), vec2f(0.25));
-
-  let sampleUv = vec2f(uv1.x, clamp(uv1.y, 0.002, 0.998));
   var mapSrgb : vec3f;
   if (skyMode >= 1) {
     mapSrgb = textureSampleGrad(uProcSkyMap, sSky, sampleUv, dUVdx, dUVdy).rgb;
@@ -385,8 +357,6 @@ fn sampleSkyBackground(
   skyLin *= blackFloorGate;
   let coreBoost = max(rawSkyLuma - 0.14, 0.0);
   skyLin *= (1.0 + coreBoost * 1.65);
-
-  let dColor = pow(max(doppler, 1e-4), clamp(dopplerStrength, 0.0, 2.0));
 
   // Reconstruct rest-frame effective temperature (~3200K warm bulge -> ~5800K disk -> ~10500K OB clouds)
   let rgbSum = max(skyLin.r + skyLin.g + skyLin.b, 1e-5);
@@ -428,20 +398,25 @@ fn sampleSkyBackground(
 
   if (starDensity > 0.001) {
     let starGain = select(0.92, 1.15, skyMode >= 1) * starDensity;
+    let galWeight = exp(-dir.y * dir.y * 16.0);
     var stars = vec3f(0.0);
     // Main sequence octaves (2800K..22000K)
-    stars += evalSpectralStarLayer(dir,  18.0, 0.800, 0.82 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 0, 1.85);
-    stars += evalSpectralStarLayer(dir,  46.0, 0.882, 1.00 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 0, 1.35);
-    stars += evalSpectralStarLayer(dir, 115.0, 0.902, 0.96 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 0, 1.20);
-    stars += evalSpectralStarLayer(dir, 240.0, 0.892, 0.52 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 0, 1.15);
+    stars += evalSpectralStarLayer(dir, galWeight,  18.0, 0.800, 0.82 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 0, 1.85);
+    stars += evalSpectralStarLayer(dir, galWeight,  46.0, 0.882, 1.00 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 0, 1.35);
+    stars += evalSpectralStarLayer(dir, galWeight, 115.0, 0.902, 0.96 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 0, 1.20);
+    stars += evalSpectralStarLayer(dir, galWeight, 240.0, 0.892, 0.52 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 0, 1.15);
     // Cool L/T Brown Dwarfs (750K..1900K, forward headlight ignition D > 1.3)
-    stars += evalSpectralStarLayer(dir,  22.0, 0.825, 0.95 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 1, 1.75);
-    stars += evalSpectralStarLayer(dir,  64.0, 0.880, 1.22 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 1, 1.30);
-    stars += evalSpectralStarLayer(dir, 150.0, 0.895, 1.00 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 1, 1.20);
+    if (uvIrGain > 0.001 && doppler > 1.30) {
+      stars += evalSpectralStarLayer(dir, galWeight,  22.0, 0.825, 0.95 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 1, 1.75);
+      stars += evalSpectralStarLayer(dir, galWeight,  64.0, 0.880, 1.22 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 1, 1.30);
+      stars += evalSpectralStarLayer(dir, galWeight, 150.0, 0.895, 1.00 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 1, 1.20);
+    }
     // Hot UV O/B stars & White Dwarfs (14000K..95000K, crisp warm-to-sapphire aft pinpoints)
-    stars += evalSpectralStarLayer(dir,  38.0, 0.805, 1.35 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 2, 1.50);
-    stars += evalSpectralStarLayer(dir,  96.0, 0.828, 1.65 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 2, 1.25);
-    stars += evalSpectralStarLayer(dir, 210.0, 0.838, 1.30 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 2, 1.15);
+    if (doppler > 0.018 && doppler < 2.80) {
+      stars += evalSpectralStarLayer(dir, galWeight,  38.0, 0.805, 1.35 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 2, 1.50);
+      stars += evalSpectralStarLayer(dir, galWeight,  96.0, 0.828, 1.65 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 2, 1.25);
+      stars += evalSpectralStarLayer(dir, galWeight, 210.0, 0.838, 1.30 * starGain, pixelFwRest, doppler, dColor, beamingGain, uvIrGain, 2, 1.15);
+    }
     skyLin += stars;
   }
 
@@ -489,14 +464,17 @@ fn sdRingGate(p: vec3f) -> f32 {
 
   let qFlange = vec2f(abs(abs(dr) - 0.118) - 0.026, az - 0.245);
   let dFlange = length(max(qFlange, vec2f(0.0))) + min(max(qFlange.x, qFlange.y), 0.0) - 0.012;
-  let dRing = min(dWeb, dFlange);
+  var dMin = min(dWeb, dFlange);
 
-  // 24 sculpted radial bulkhead stiffening ribs (exact Euclidean angular sector fold)
-  let angle = select(0.0, atan2(p.y, p.x), rXY > 1e-6);
-  const SEC_24 : f32 = TAU / 24.0;
-  let aRib = ((angle + 0.5 * SEC_24) - floor((angle + 0.5 * SEC_24) / SEC_24) * SEC_24) - 0.5 * SEC_24;
-  let pRib = vec3f(rXY * cos(aRib) - 6.35, rXY * sin(aRib), p.z);
-  let dRib = sdBox(pRib, vec3f(0.140, 0.032, 0.220)) - 0.008;
+  // 24 sculpted radial bulkhead stiffening ribs (gated strictly inside ring radial annulus)
+  if (abs(dr) <= 0.85) {
+    let angle = select(0.0, atan2(p.y, p.x), rXY > 1e-6);
+    const SEC_24 : f32 = TAU / 24.0;
+    let aRib = ((angle + 0.5 * SEC_24) - floor((angle + 0.5 * SEC_24) / SEC_24) * SEC_24) - 0.5 * SEC_24;
+    let pRib = vec3f(rXY * cos(aRib) - 6.35, rXY * sin(aRib), p.z);
+    let dRib = sdBox(pRib, vec3f(0.140, 0.032, 0.220)) - 0.008;
+    dMin = min(dMin, dRib);
+  }
 
   // 4 sleek chamfered octagonal optical-interferometer nodes at cardinal points
   let ap = abs(p.xy);
@@ -512,7 +490,7 @@ fn sdRingGate(p: vec3f) -> f32 {
   let dFin = sdBox(pNode - vec3f(0.42, 0.0, 0.0), vec3f(0.30, 0.026, 0.155)) - 0.008;
 
   let dNode = min(min(dNodeBody, dLens), dFin);
-  return min(min(dRing, dRib), dNode);
+  return min(dMin, dNode);
 }
 
 // Object 1: Deep-Space Relativistic Interferometer Probe (NASA / Voyager / JWST silhouette)
@@ -569,8 +547,30 @@ fn sdBeaconStation(p: vec3f) -> f32 {
   return min(min(dCore, dAnt), min(dWings, dNav));
 }
 
-// Per-cell deterministic 3D orientation & triaxial axes for zero cloned asteroids
-fn asteroidLocalPoint(p: vec3f, cellMod: i32) -> vec3f {
+struct AsteroidParams {
+  rot      : mat3x3f,
+  invAxes  : vec3f,
+  invAxes2 : vec3f,
+  minAxis  : f32,
+  seedOff  : vec3f,
+};
+
+fn defaultAsteroidParams() -> AsteroidParams {
+  var ap: AsteroidParams;
+  ap.rot = mat3x3f(
+    vec3f(1.0, 0.0, 0.0),
+    vec3f(0.0, 1.0, 0.0),
+    vec3f(0.0, 0.0, 1.0)
+  );
+  ap.invAxes = vec3f(1.0);
+  ap.invAxes2 = vec3f(1.0);
+  ap.minAxis = 1.0;
+  ap.seedOff = vec3f(0.0);
+  return ap;
+}
+
+// Per-cell deterministic 3D orientation, triaxial axes & regolith seed precomputed once per march/shade
+fn makeAsteroidParams(cellMod: i32) -> AsteroidParams {
   let fm = f32(cellMod);
   let h = hash33f(vec3f(fm * 1.73 + 5.1, fm * 2.91 + 13.7, fm * 4.19 + 29.3));
   let yaw = h.x * TAU;
@@ -581,19 +581,24 @@ fn asteroidLocalPoint(p: vec3f, cellMod: i32) -> vec3f {
   let cp = cos(pitch); let sp = sin(pitch);
   let cr = cos(roll); let sr = sin(roll);
 
-  let r1 = vec3f(cy * p.x + sy * p.z, p.y, -sy * p.x + cy * p.z);
-  let r2 = vec3f(r1.x, cp * r1.y - sp * r1.z, sp * r1.y + cp * r1.z);
-  return vec3f(cr * r2.x - sr * r2.y, sr * r2.x + cr * r2.y, r2.z);
-}
-
-fn asteroidAxes(cellMod: i32) -> vec3f {
-  let fm = f32(cellMod);
-  let h = hash33f(vec3f(fm * 5.31 + 2.7, fm * 1.17 + 17.9, fm * 3.83 + 41.1));
-  return vec3f(
-    mix(0.96, 1.44, h.x),
-    mix(0.78, 1.16, h.y),
-    mix(1.02, 1.50, h.z)
+  let ha = hash33f(vec3f(fm * 5.31 + 2.7, fm * 1.17 + 17.9, fm * 3.83 + 41.1));
+  let axes = vec3f(
+    mix(0.96, 1.44, ha.x),
+    mix(0.78, 1.16, ha.y),
+    mix(1.02, 1.50, ha.z)
   );
+
+  var ap: AsteroidParams;
+  ap.rot = mat3x3f(
+    vec3f(cr * cy - sr * sp * sy, sr * cy + cr * sp * sy, -cp * sy),
+    vec3f(-sr * cp, cr * cp, sp),
+    vec3f(cr * sy + sr * sp * cy, sr * sy - cr * sp * cy, cp * cy)
+  );
+  ap.invAxes = vec3f(1.0) / axes;
+  ap.invAxes2 = ap.invAxes * ap.invAxes;
+  ap.minAxis = min(axes.x, min(axes.y, axes.z));
+  ap.seedOff = hash33f(vec3f(fm * 2.13 + 9.4, fm * 3.67 + 1.9, fm * 1.41 + 27.5)) * 0.77;
+  return ap;
 }
 
 fn evalHeroCrater(uDir: vec3f, axis: vec3f, angRad: f32, depth: f32) -> f32 {
@@ -607,22 +612,26 @@ fn evalHeroCrater(uDir: vec3f, axis: vec3f, angRad: f32, depth: f32) -> f32 {
   return bowl + rim;
 }
 
+const CRATER_AXIS_0 : vec3f = vec3f( 0.619845,  0.439890, -0.649838);
+const CRATER_AXIS_1 : vec3f = vec3f(-0.699127,  0.299626,  0.649189);
+const CRATER_AXIS_2 : vec3f = vec3f(-0.219813, -0.819304, -0.529550);
+const CRATER_AXIS_3 : vec3f = vec3f( 0.349215, -0.419058,  0.838116);
+const CRATER_AXIS_4 : vec3f = vec3f(-0.540324,  0.760456, -0.360216);
+
 // Object 2: Pure Cratered Carbonaceous/Silicate Rubble-Pile Asteroid (ZERO glued pods!)
-fn sdFacetedAsteroid(p: vec3f, cellMod: i32) -> f32 {
-  let pa = asteroidLocalPoint(p, cellMod);
-  let axes = asteroidAxes(cellMod);
+fn sdFacetedAsteroid(p: vec3f, ap: AsteroidParams) -> f32 {
+  let pa = ap.rot * p;
 
-  let k0 = length(pa / axes);
-  let k1 = length(pa / (axes * axes));
-  let minAxis = min(axes.x, min(axes.y, axes.z));
-  let dEllip = select(-minAxis, k0 * (k0 - 1.0) / max(k1, 1e-5), k0 > 1e-4);
-
-  let fm = f32(cellMod);
-  let seedOff = hash33f(vec3f(fm * 2.13 + 9.4, fm * 3.67 + 1.9, fm * 1.41 + 27.5)) * 0.77;
+  let k0 = length(pa * ap.invAxes);
+  let k1 = length(pa * ap.invAxes2);
+  let dEllip = select(-ap.minAxis, k0 * (k0 - 1.0) / max(k1, 1e-5), k0 > 1e-4);
+  if (dEllip > 0.42) {
+    return dEllip - 0.38;
+  }
 
   // Broad geological facets & ridges from 128^3 3D Perlin + ridged multifractal
-  let nMacro = textureSampleLevel(uVolumeNoise, sVolume, pa * 0.25 + seedOff, 0.0);
-  let nCell = textureSampleLevel(uVolumeNoise, sVolume, pa * 0.62 + seedOff * 1.63, 0.0);
+  let nMacro = textureSampleLevel(uVolumeNoise, sVolume, pa * 0.25 + ap.seedOff, 0.0);
+  let nCell = textureSampleLevel(uVolumeNoise, sVolume, pa * 0.62 + ap.seedOff * 1.63, 0.0);
 
   let broadDisp = (nMacro.r - 0.5) * 0.30 + (nMacro.g - 0.45) * 0.22;
 
@@ -636,31 +645,31 @@ fn sdFacetedAsteroid(p: vec3f, cellMod: i32) -> f32 {
   let paLen = length(pa);
   let uDir = select(vec3f(0.0, 0.0, 1.0), pa / max(paLen, 1e-5), paLen > 1e-5);
   var heroCraters : f32 = 0.0;
-  heroCraters += evalHeroCrater(uDir, normalize(vec3f( 0.62,  0.44, -0.65)), 0.48, 0.135);
-  heroCraters += evalHeroCrater(uDir, normalize(vec3f(-0.70,  0.30,  0.65)), 0.42, 0.115);
-  heroCraters += evalHeroCrater(uDir, normalize(vec3f(-0.22, -0.82, -0.53)), 0.38, 0.105);
-  heroCraters += evalHeroCrater(uDir, normalize(vec3f( 0.35, -0.42,  0.84)), 0.34, 0.092);
-  heroCraters += evalHeroCrater(uDir, normalize(vec3f(-0.54,  0.76, -0.36)), 0.30, 0.082);
+  heroCraters += evalHeroCrater(uDir, CRATER_AXIS_0, 0.48, 0.135);
+  heroCraters += evalHeroCrater(uDir, CRATER_AXIS_1, 0.42, 0.115);
+  heroCraters += evalHeroCrater(uDir, CRATER_AXIS_2, 0.38, 0.105);
+  heroCraters += evalHeroCrater(uDir, CRATER_AXIS_3, 0.34, 0.092);
+  heroCraters += evalHeroCrater(uDir, CRATER_AXIS_4, 0.30, 0.082);
 
   return (dEllip - broadDisp - smallBowl - smallRim - heroCraters) * 0.68;
 }
 
-fn evalObjSdf(pLocal: vec3f, objId: i32, cellMod: i32) -> f32 {
+fn evalObjSdf(pLocal: vec3f, objId: i32, astP: AsteroidParams) -> f32 {
   if (objId == 0) {
     return sdRingGate(pLocal);
   }
   if (objId == 1) {
     return sdBeaconStation(pLocal);
   }
-  return sdFacetedAsteroid(pLocal, cellMod);
+  return sdFacetedAsteroid(pLocal, astP);
 }
 
-fn calcObjNormal(pLocal: vec3f, objId: i32, cellMod: i32) -> vec3f {
+fn calcObjNormal(pLocal: vec3f, objId: i32, astP: AsteroidParams) -> vec3f {
   const eps : f32 = 0.0032;
-  let n = vec3f( 1.0, -1.0, -1.0) * evalObjSdf(pLocal + vec3f( 1.0, -1.0, -1.0) * eps, objId, cellMod)
-        + vec3f(-1.0, -1.0,  1.0) * evalObjSdf(pLocal + vec3f(-1.0, -1.0,  1.0) * eps, objId, cellMod)
-        + vec3f(-1.0,  1.0, -1.0) * evalObjSdf(pLocal + vec3f(-1.0,  1.0, -1.0) * eps, objId, cellMod)
-        + vec3f( 1.0,  1.0,  1.0) * evalObjSdf(pLocal + vec3f( 1.0,  1.0,  1.0) * eps, objId, cellMod);
+  let n = vec3f( 1.0, -1.0, -1.0) * evalObjSdf(pLocal + vec3f( 1.0, -1.0, -1.0) * eps, objId, astP)
+        + vec3f(-1.0, -1.0,  1.0) * evalObjSdf(pLocal + vec3f(-1.0, -1.0,  1.0) * eps, objId, astP)
+        + vec3f(-1.0,  1.0, -1.0) * evalObjSdf(pLocal + vec3f(-1.0,  1.0, -1.0) * eps, objId, astP)
+        + vec3f( 1.0,  1.0,  1.0) * evalObjSdf(pLocal + vec3f( 1.0,  1.0,  1.0) * eps, objId, astP);
   let len = length(n);
   return select(vec3f(0.0, 0.0, 1.0), n / max(len, 1e-6), len > 1e-6);
 }
@@ -722,11 +731,16 @@ fn marchObject(
     return res;
   }
 
+  var astP = defaultAsteroidParams();
+  if (objId == 2) {
+    astP = makeAsteroidParams(cellMod);
+  }
+
   var t = t0;
   let stepFactor = select(0.76, 0.90, objId == 0);
   for (var i: i32 = 0; i < 46; i++) {
     let pLocal = (ro + t * rd) - center;
-    let d = evalObjSdf(pLocal, objId, cellMod);
+    let d = evalObjSdf(pLocal, objId, astP);
     if (d < 0.0020 * max(1.0, t * 0.035)) {
       res.hit = true;
       res.t = t;
@@ -824,23 +838,23 @@ fn fresnelSchlick(cosTheta: f32, f0: vec3f) -> vec3f {
   return f0 + (vec3f(1.0) - f0) * (m2 * m2 * m);
 }
 
-fn calcSoftShadow(p: vec3f, lDir: vec3f, objId: i32, cellMod: i32) -> f32 {
+fn calcSoftShadow(p: vec3f, lDir: vec3f, objId: i32, astP: AsteroidParams) -> f32 {
   var sh : f32 = 1.0;
   var t : f32 = 0.045;
   for (var i: i32 = 0; i < 4; i++) {
-    let h = evalObjSdf(p + lDir * t, objId, cellMod);
+    let h = evalObjSdf(p + lDir * t, objId, astP);
     sh = min(sh, clamp(10.0 * h / max(t, 0.02), 0.0, 1.0));
     t += clamp(h, 0.07, 0.38);
   }
   return clamp(sh, 0.0, 1.0);
 }
 
-fn calcObjAO(p: vec3f, n: vec3f, objId: i32, cellMod: i32) -> f32 {
+fn calcObjAO(p: vec3f, n: vec3f, objId: i32, astP: AsteroidParams) -> f32 {
   var occ : f32 = 0.0;
   var sca : f32 = 1.0;
   for (var i: i32 = 1; i <= 3; i++) {
     let h = 0.05 + 0.11 * f32(i);
-    let d = evalObjSdf(p + n * h, objId, cellMod);
+    let d = evalObjSdf(p + n * h, objId, astP);
     occ += max(h - d, 0.0) * sca;
     sca *= 0.65;
   }
@@ -865,13 +879,16 @@ fn evalVolumeBump(p: vec3f, freq: f32, amp: f32) -> vec3f {
 fn shadeForegroundHit(
   h: HitInfo,
   rdRest: vec3f,
-  doppler: f32,
-  dopplerStrength: f32,
+  dColor: f32,
   beamingGain: f32,
   geometryVisibility: f32
 ) -> vec3f {
   let p = h.localPos;
-  let nGeo = calcObjNormal(p, h.objId, h.cellMod);
+  var astP = defaultAsteroidParams();
+  if (h.objId == 2) {
+    astP = makeAsteroidParams(h.cellMod);
+  }
+  let nGeo = calcObjNormal(p, h.objId, astP);
   let v = -rdRest;
 
   var albedo = vec3f(0.20, 0.22, 0.26);
@@ -1046,12 +1063,10 @@ fn shadeForegroundHit(
     }
   } else {
     // Object 2: Pure Cratered Carbonaceous/Silicate Asteroid (albedo ~ 0.07..0.18, roughness ~ 0.92)
-    let pa = asteroidLocalPoint(p, h.cellMod);
-    let fm = f32(h.cellMod);
-    let seedOff = hash33f(vec3f(fm * 2.13 + 9.4, fm * 3.67 + 1.9, fm * 1.41 + 27.5)) * 0.77;
+    let pa = astP.rot * p;
 
-    let nMacro = textureSampleLevel(uVolumeNoise, sVolume, pa * 0.35 + seedOff, 0.0);
-    let nFine = textureSampleLevel(uVolumeNoise, sVolume, pa * 2.60 + seedOff * 2.1, 0.0);
+    let nMacro = textureSampleLevel(uVolumeNoise, sVolume, pa * 0.35 + astP.seedOff, 0.0);
+    let nFine = textureSampleLevel(uVolumeNoise, sVolume, pa * 2.60 + astP.seedOff * 2.1, 0.0);
     let mineral = clamp(nMacro.r * 0.52 + nMacro.g * 0.28 + nFine.a * 0.20, 0.0, 1.0);
     let ejectaTint = smoothstep(0.55, 0.88, nMacro.b);
 
@@ -1060,7 +1075,7 @@ fn shadeForegroundHit(
     metallic = 0.02;
     roughness = 0.92;
     // High-frequency dusty regolith micro-bump normal perturbation
-    nBump = evalVolumeBump(pa + seedOff, 2.5, 0.036) + evalVolumeBump(pa + seedOff * 1.7, 6.2, 0.016);
+    nBump = evalVolumeBump(pa + astP.seedOff, 2.5, 0.036) + evalVolumeBump(pa + astP.seedOff * 1.7, 6.2, 0.016);
   }
 
   let n = normalize(nGeo + nBump - nGeo * dot(nBump, nGeo));
@@ -1075,9 +1090,9 @@ fn shadeForegroundHit(
 
   var shadow : f32 = 0.0;
   if (ndl > 0.002) {
-    shadow = calcSoftShadow(p + nGeo * 0.015, keyDir, h.objId, h.cellMod);
+    shadow = calcSoftShadow(p + nGeo * 0.015, keyDir, h.objId, astP);
   }
-  let ao = calcObjAO(p, nGeo, h.objId, h.cellMod);
+  let ao = calcObjAO(p, nGeo, h.objId, astP);
 
   // Cook-Torrance GGX direct solar BRDF
   let f0 = mix(vec3f(0.04), albedo, metallic);
@@ -1099,7 +1114,6 @@ fn shadeForegroundHit(
 
   let litSurface = directLight + ambFill + envSpec;
 
-  let dColor = pow(max(doppler, 1e-4), clamp(dopplerStrength, 0.0, 2.0));
   let shiftedLit = applyRelativisticShift(litSurface, 5800.0, dColor, dColor, beamingGain, 0.72);
   let emGain = 0.72 + 0.28 * clamp(geometryVisibility, 0.0, 1.8);
   let shiftedEm = applyRelativisticShift(emissive * emGain, emTemp, dColor, dColor, beamingGain, 0.76);
@@ -1115,7 +1129,8 @@ fn shadeForegroundHit(
 fn henyeyGreenstein(cosTheta: f32, g: f32) -> f32 {
   let g2 = g * g;
   let denom = max(1.0 + g2 - 2.0 * g * cosTheta, 1e-3);
-  return (1.0 - g2) / (4.0 * PI * denom * sqrt(denom));
+  let invS = inverseSqrt(denom);
+  return ((1.0 - g2) / (4.0 * PI)) * (invS * invS * invS);
 }
 
 fn integrateCorridorVolume(
@@ -1128,13 +1143,13 @@ fn integrateCorridorVolume(
   quality: i32,
   simTime: f32,
   doppler: f32,
-  dopplerStrength: f32,
+  dColor: f32,
   beamingGain: f32,
   dustDensity: f32,
   dustStreakScale: f32,
   starDensity: f32
 ) -> vec4f {
-  const tStart : f32 = 0.8;
+  const tStart : f32 = 4.2;
   if (tEnd <= tStart) {
     return vec4f(0.0, 0.0, 0.0, 1.0);
   }
@@ -1149,7 +1164,6 @@ fn integrateCorridorVolume(
     nSteps = 28;
   }
 
-  let dColor = pow(max(doppler, 1e-4), clamp(dopplerStrength, 0.0, 2.0));
   let invStreakZ = 0.038 / max(dustStreakScale, 0.25);
   let invStreakFineZ = 0.082 / max(dustStreakScale, 0.25);
   let fSteps = f32(nSteps);
@@ -1165,6 +1179,7 @@ fn integrateCorridorVolume(
   let paCol = wavelengthToRgb(1875.0 / dColor) * 0.45;
   let contCol = applyRelativisticShift(vec3f(0.56, 0.68, 0.88), 6600.0, dColor, dColor, beamingGain, 0.55);
   let lineBeam = evalPlanckBeam(5800.0, dColor, beamingGain);
+  let glintAftFade = smoothstep(0.08, 0.38, doppler);
 
   var volRad = vec3f(0.0);
   var trans : f32 = 1.0;
@@ -1211,7 +1226,6 @@ fn integrateCorridorVolume(
       }
 
       // Crisp sparse sub-pixel 3D parallax dust/starlight glints strictly outside r_xy > 2.2
-      let glintAftFade = smoothstep(0.08, 0.38, doppler);
       let glintRange = smoothstep(6.0, 14.0, tMid) * (1.0 - smoothstep(54.0, VOL_MAX_DIST, tMid)) * glintAftFade;
       if (starDensity > 0.001 && glintRange > 0.001 && rXY > 2.2) {
         const knotScale : f32 = 0.20;
@@ -1323,22 +1337,35 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   }
 
   let pixelFwRest = clamp(pixelFwShip * doppler, 1e-6, 0.45);
+  let dColor = pow(max(doppler, 1e-4), dopplerStrength);
 
-  // Sample sky & CMB unconditionally in uniform control flow (wrap- & seam-safe!)
-  let skyColor = sampleSkyBackground(
-    rdRest,
-    pixelFwRest,
-    doppler,
-    dopplerStrength,
-    beamingGain,
-    skyIntensity,
-    skyMode,
-    skyRot,
-    starDensity,
-    uvIrGain,
-    cmbVisibility,
-    cmbTempScale
-  );
+  // Seam-safe & pole-safe equirectangular derivatives computed unconditionally in uniform control flow
+  let dir = normalize(rotateSkyDir(rdRest, skyRot));
+  let azim = select(0.0, atan2(dir.z, dir.x), abs(dir.x) + abs(dir.z) > 1e-6);
+  let u1 = azim * INV_TAU + 0.5;
+  let vCoord = acos(clamp(dir.y, -1.0, 1.0)) * INV_PI;
+  let uv1 = vec2f(u1, vCoord);
+  let uv2 = vec2f(fract(u1 + 0.5), vCoord);
+
+  let dx1 = dpdx(uv1);
+  let dy1 = dpdy(uv1);
+  let dx2 = dpdx(uv2);
+  let dy2 = dpdy(uv2);
+
+  var dUVdx = vec2f(select(dx2.x, dx1.x, abs(dx1.x) < abs(dx2.x)), dx1.y);
+  var dUVdy = vec2f(select(dy2.x, dy1.x, abs(dy1.x) < abs(dy2.x)), dy1.y);
+
+  let magSmooth = 1.0 - smoothstep(0.14, 0.72, doppler);
+  let minGrad = magSmooth * 0.0065;
+  if (minGrad > 1e-6) {
+    let lenX = length(vec2f(dUVdx.x, dUVdx.y * 0.5));
+    let lenY = length(vec2f(dUVdy.x, dUVdy.y * 0.5));
+    dUVdx = select(vec2f(minGrad, 0.0), dUVdx * max(1.0, minGrad / max(lenX, 1e-6)), lenX > 1e-5);
+    dUVdy = select(vec2f(0.0, minGrad * 2.0), dUVdy * max(1.0, minGrad / max(lenY, 1e-6)), lenY > 1e-5);
+  }
+  dUVdx = clamp(dUVdx, vec2f(-0.25), vec2f(0.25));
+  dUVdy = clamp(dUVdy, vec2f(-0.25), vec2f(0.25));
+  let sampleUv = vec2f(uv1.x, clamp(uv1.y, 0.002, 0.998));
 
   let bnCoord = vec2i(in.pos.xy) & vec2i(127);
   let bnRaw = textureLoad(uBlueNoise, bnCoord, 0);
@@ -1358,7 +1385,29 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   }
 
   let geomAlpha = select(0.0, smoothstep(0.0, 0.18, geometryVisibility), hitInfo.hit);
+  let opaqueHit = hitInfo.hit && (geomAlpha >= 0.999);
   let volMaxDist = select(VOL_MAX_DIST, hitInfo.t, hitInfo.hit && geomAlpha >= 0.99);
+
+  var skyColor = vec3f(0.0);
+  if (!opaqueHit) {
+    skyColor = sampleSkyBackground(
+      rdRest,
+      dir,
+      sampleUv,
+      dUVdx,
+      dUVdy,
+      pixelFwRest,
+      doppler,
+      dColor,
+      beamingGain,
+      skyIntensity,
+      skyMode,
+      starDensity,
+      uvIrGain,
+      cmbVisibility,
+      cmbTempScale
+    );
+  }
 
   let volSample = integrateCorridorVolume(
     origin,
@@ -1370,7 +1419,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
     quality,
     simTime,
     doppler,
-    dopplerStrength,
+    dColor,
     beamingGain,
     dustDensity,
     dustStreakScale,
@@ -1379,7 +1428,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
 
   var radiance = skyColor;
   if (hitInfo.hit && geomAlpha > 0.001) {
-    let hitColor = shadeForegroundHit(hitInfo, rdRest, doppler, dopplerStrength, beamingGain, geometryVisibility);
+    let hitColor = shadeForegroundHit(hitInfo, rdRest, dColor, beamingGain, geometryVisibility);
     radiance = mix(radiance, hitColor, geomAlpha);
   }
   radiance = radiance * volSample.w + volSample.xyz;

@@ -10,6 +10,7 @@
 
 import { MIPMAP_WGSL, NOISE_BAKE_COMPUTE_WGSL } from '../../../../shared/shaders/common.wgsl.js';
 import { BLACKHOLE_WGSL } from '../shaders/blackhole.wgsl.js';
+import { writeBlackholeFrameConstants } from './Physics.js';
 import {
   SharedWebGPUPostPipeline,
   MAX_PROGRESSIVE_SAMPLES,
@@ -18,7 +19,10 @@ import {
   formatAdapterName,
   formatWgslMessages,
 } from '../../../../shared/engine/SharedWebGPUPostPipeline.js';
-import { createProceduralSkyTextureWebGPU } from '../../../../shared/assets/skyLoader.js';
+import {
+  createProceduralSkyTextureWebGPU,
+  createPlaceholderSkyTextureWebGPU,
+} from '../../../../shared/assets/skyLoader.js';
 import { createBlackbodyLUTWebGPU, createBlueNoiseLUTWebGPU } from '../../../../shared/assets/physicalLuts.js';
 
 const VOLUME_SIZE = 128;
@@ -308,12 +312,8 @@ export class WebGPURenderer {
     this.blueNoiseTex = createBlueNoiseLUTWebGPU(device, 128);
     this.blueNoiseView = this.blueNoiseTex.createView();
 
-    this.procSkyTex = createProceduralSkyTextureWebGPU(
-      device,
-      (t, w, h, m) => this.generateMipmaps(t, w, h, m),
-      2048,
-      1024
-    );
+    this.procSkyTex = createPlaceholderSkyTextureWebGPU(device);
+    this._procSkyBaked = false;
     this.procSkyView = this.procSkyTex.createView();
     this.skyTex = this.procSkyTex;
     this.skyView = this.procSkyView;
@@ -472,10 +472,46 @@ export class WebGPURenderer {
       this._rebuildBlackholeBindGroup();
       this.resetAccumulation(true);
     } else {
-      if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
+      if (texture && !this._procSkyBaked) {
+        const oldPlaceholder = this.procSkyTex;
+        this.procSkyTex = texture;
+        this.procSkyView = texture.createView();
+        if (!this.skyMapLoaded) {
+          this.skyTex = texture;
+          this.skyView = this.procSkyView;
+        }
+        this._procSkyBaked = true;
+        this._rebuildBlackholeBindGroup();
+        if (oldPlaceholder && oldPlaceholder !== texture && oldPlaceholder !== this.skyTex) {
+          oldPlaceholder.destroy();
+        }
+        this.resetAccumulation(true);
+      } else if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
         texture.destroy();
       }
       this.skyMapLoaded = false;
+    }
+  }
+
+  _ensureProceduralSky() {
+    if (this._procSkyBaked || this._disposed) return;
+    const oldPlaceholder = this.procSkyTex;
+    const baked = createProceduralSkyTextureWebGPU(
+      this.device,
+      (t, w, h, m) => this.generateMipmaps(t, w, h, m),
+      2048,
+      1024
+    );
+    this.procSkyTex = baked;
+    this.procSkyView = baked.createView();
+    if (!this.skyMapLoaded && (!this.skyTex || this.skyTex === oldPlaceholder)) {
+      this.skyTex = baked;
+      this.skyView = this.procSkyView;
+    }
+    this._procSkyBaked = true;
+    this._rebuildBlackholeBindGroup();
+    if (oldPlaceholder && oldPlaceholder !== baked && oldPlaceholder !== this.skyTex) {
+      oldPlaceholder.destroy();
     }
   }
 
@@ -548,113 +584,15 @@ export class WebGPURenderer {
     i[35] = 0;
 
     // Precompute frame-invariant ZAMO tetrad, Kerr constants & disk flow offsets once per frame on CPU
-    const clampVal = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
-    const a = clampVal(state.spin, 0.0, 0.998);
-    const a2 = a * a;
-    const lensing = clampVal(state.lensingStrength, 0.0, 1.0);
-    const rPlus = 1.0 + Math.sqrt(Math.max(1.0 - a2, 1e-6));
-
-    const c1 = Math.pow(Math.max(1.0 - a2, 1e-7), 1.0 / 3.0);
-    const c2 = Math.pow(1.0 + a, 1.0 / 3.0) + Math.pow(Math.max(1.0 - a, 1e-7), 1.0 / 3.0);
-    const Z1 = 1.0 + c1 * c2;
-    const Z2 = Math.sqrt(3.0 * a2 + Z1 * Z1);
-    const rIsco = 3.0 + Z2 - Math.sqrt(Math.max((3.0 - Z1) * (3.0 + Z1 + 2.0 * Z2), 0.0));
-    const rOuter = Math.max(state.diskOuterRadius, rIsco + 2.5);
-    const tanHalfFov = Math.tan(clampVal(camData.fovY, 0.1, 2.8) * 0.5);
-
-    const px = camData.pos[0];
-    const py = camData.pos[1];
-    const pz = camData.pos[2];
-    const uVal = px * px + py * py + pz * pz - a2;
-    const disc = Math.sqrt(Math.max(uVal * uVal + 4.0 * a2 * py * py, 1e-12));
-    const cr2 = Math.max(0.5 * (uVal + disc), 1e-8);
-    const cr = Math.sqrt(cr2);
-    const cD = cr2 * cr2 + a2 * py * py;
-    const cH = (lensing * (cr * cr2)) / Math.max(cD, 1e-10);
-    const cR2 = cr2 + a2;
-    const cinvR2 = 1.0 / Math.max(cR2, 1e-8);
-    const lx = (cr * px + a * pz) * cinvR2;
-    const ly = py / Math.max(cr, 1e-5);
-    const lz = (cr * pz - a * px) * cinvR2;
-
-    const ksDot = (A, B) => {
-      const lA = -A[0] + lx * A[1] + ly * A[2] + lz * A[3];
-      const lB = -B[0] + lx * B[1] + ly * B[2] + lz * B[3];
-      return -A[0] * B[0] + A[1] * B[1] + A[2] * B[2] + A[3] * B[3] + 2.0 * cH * lA * lB;
-    };
-
-    const rho2 = px * px + pz * pz;
-    const omega = (2.0 * cH * a * cR2) / Math.max(cR2 * cR2 + 2.0 * cH * a2 * rho2, 1e-8);
-    const vzx = omega * pz;
-    const vzz = -omega * px;
-    const lPhi = (a * rho2) / Math.max(cR2, 1e-8);
-    const oneMinusWl = 1.0 - omega * lPhi;
-    const normSq = Math.max(1.0 - (vzx * vzx + vzz * vzz) - 2.0 * cH * oneMinusWl * oneMinusWl, 1e-5);
-    const ut = 1.0 / Math.sqrt(normSq);
-    const e0 = [ut, ut * vzx, 0.0, ut * vzz];
-
-    const f4 = [0.0, basis[6], basis[7], basis[8]];
-    const df0 = ksDot(f4, e0);
-    for (let k = 0; k < 4; k++) f4[k] += df0 * e0[k];
-    const f4InvLen = 1.0 / Math.sqrt(Math.max(ksDot(f4, f4), 1e-8));
-    const e3 = [f4[0] * f4InvLen, f4[1] * f4InvLen, f4[2] * f4InvLen, f4[3] * f4InvLen];
-
-    const r4 = [0.0, basis[0], basis[1], basis[2]];
-    const dr0 = ksDot(r4, e0);
-    const dr3 = ksDot(r4, e3);
-    for (let k = 0; k < 4; k++) r4[k] += dr0 * e0[k] - dr3 * e3[k];
-    const r4InvLen = 1.0 / Math.sqrt(Math.max(ksDot(r4, r4), 1e-8));
-    const e1 = [r4[0] * r4InvLen, r4[1] * r4InvLen, r4[2] * r4InvLen, r4[3] * r4InvLen];
-
-    const u4 = [0.0, basis[3], basis[4], basis[5]];
-    const du0 = ksDot(u4, e0);
-    const du3 = ksDot(u4, e3);
-    const du1 = ksDot(u4, e1);
-    for (let k = 0; k < 4; k++) u4[k] += du0 * e0[k] - du3 * e3[k] - du1 * e1[k];
-    const u4InvLen = 1.0 / Math.sqrt(Math.max(ksDot(u4, u4), 1e-8));
-    const e2 = [u4[0] * u4InvLen, u4[1] * u4InvLen, u4[2] * u4InvLen, u4[3] * u4InvLen];
-
-    f[36] = e0[0]; f[37] = e0[1]; f[38] = e0[2]; f[39] = e0[3];
-    f[40] = e1[0]; f[41] = e1[1]; f[42] = e1[2]; f[43] = e1[3];
-    f[44] = e2[0]; f[45] = e2[1]; f[46] = e2[2]; f[47] = e2[3];
-    f[48] = e3[0]; f[49] = e3[1]; f[50] = e3[2]; f[51] = e3[3];
-    f[52] = lx;    f[53] = ly;    f[54] = lz;    f[55] = 2.0 * cH;
-
-    f[56] = rPlus; f[57] = rIsco; f[58] = rOuter; f[59] = tanHalfFov;
-
-    const camR = Math.hypot(px, py, pz);
-    const escapeR = Math.max(Math.max(rOuter * 1.55, camR * 1.45), 48.0);
-    const captureR = rPlus * 1.022;
-    const outerH = (0.048 + 0.036 * rOuter * 1.30) * Math.max(state.diskThickness, 0.15);
-    const maxDiskSlabY = outerH * 2.6;
-    const rPeak = Math.max(rIsco * 1.55, rPlus * 1.45);
-    f[60] = escapeR; f[61] = captureR; f[62] = maxDiskSlabY; f[63] = rPeak;
-
-    const flowCycle = 15.0;
-    const tNorm0 = simTime / flowCycle;
-    const phase0 = tNorm0 - Math.floor(tNorm0);
-    const tNorm1 = tNorm0 + 0.5;
-    const phase1 = tNorm1 - Math.floor(tNorm1);
-    f[64] = 0.5 - 0.5 * Math.cos(Math.PI * 2.0 * phase0);
-    f[65] = (phase0 - 0.5) * flowCycle;
-    f[66] = (phase1 - 0.5) * flowCycle;
-    f[67] = simTime * state.orbitSpeed * 0.045;
-
-    const rPeakBase = 2.2 / Math.max(rPeak, 1.5);
-    f[68] = Math.pow(rPeakBase, 0.28);
-    f[69] = Math.pow(rPeakBase, 0.18);
-    f[70] = Math.cos(skyRot[0] || 0);
-    f[71] = Math.sin(skyRot[0] || 0);
-
-    f[72] = Math.cos(skyRot[1] || 0);
-    f[73] = Math.sin(skyRot[1] || 0);
-    f[74] = 0.0;
-    f[75] = 0.0;
+    writeBlackholeFrameConstants(f, 36, state, camData, simTime);
 
     this.device.queue.writeBuffer(this.bhUniformBuf, 0, this._bhBufData);
   }
 
   _encodeBlackholeAndTaa(encoder, state, camData, simTime, jitterX, jitterY, blendFactor, isProgressive) {
+    if ((state?.skyMode | 0) === 2 && !this._procSkyBaked) {
+      this._ensureProceduralSky();
+    }
     this._writeBlackholeUniforms(state, camData, simTime, jitterX, jitterY);
 
     const sceneView = this.post?.getSceneView();
@@ -700,7 +638,10 @@ export class WebGPURenderer {
   render(state, camData, simTime, options = {}) {
     if (this._disposed || !this.getAllShadersCompiled()) return false;
 
-    this.resize(state.resolutionScale);
+    const targetScale = Number(options?.effectiveResolutionScale ?? state?.resolutionScale ?? this.resolutionScale) || 1.0;
+    if (this.width === 0 || this.height === 0 || Math.abs(targetScale - this.resolutionScale) > 1e-4) {
+      this.resize(targetScale);
+    }
 
     // Prevent unthrottled rAF loops on Chrome Dawn without hitting Firefox 100ms polling cap
     if (

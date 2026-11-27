@@ -18,30 +18,12 @@ fn hash33u(cell: vec3u, seed: u32) -> vec3f {
   return vec3f(h) * (1.0 / 4294967295.0);
 }
 
-// 12-edge Perlin gradient lookup from integer hash (isotropic, unit-sphere balanced)
+// 12-edge Perlin gradient lookup from integer hash (branchless bit-packed vectors)
 fn gradFromHash(cell: vec3u, seed: u32) -> vec3f {
   let h = pcg3d(cell ^ vec3u(seed * 747796405u + 2891336453u, seed * 277803737u, seed * 1597334677u)).x;
-  let idx = h & 15u;
-  var g: vec3f;
-  switch (idx) {
-    case 0u:  { g = vec3f( 1.0,  1.0,  0.0); }
-    case 1u:  { g = vec3f(-1.0,  1.0,  0.0); }
-    case 2u:  { g = vec3f( 1.0, -1.0,  0.0); }
-    case 3u:  { g = vec3f(-1.0, -1.0,  0.0); }
-    case 4u:  { g = vec3f( 1.0,  0.0,  1.0); }
-    case 5u:  { g = vec3f(-1.0,  0.0,  1.0); }
-    case 6u:  { g = vec3f( 1.0,  0.0, -1.0); }
-    case 7u:  { g = vec3f(-1.0,  0.0, -1.0); }
-    case 8u:  { g = vec3f( 0.0,  1.0,  1.0); }
-    case 9u:  { g = vec3f( 0.0, -1.0,  1.0); }
-    case 10u: { g = vec3f( 0.0,  1.0, -1.0); }
-    case 11u: { g = vec3f( 0.0, -1.0, -1.0); }
-    case 12u: { g = vec3f( 1.0,  1.0,  0.0); }
-    case 13u: { g = vec3f(-1.0,  1.0,  0.0); }
-    case 14u: { g = vec3f( 0.0, -1.0,  1.0); }
-    default:  { g = vec3f( 0.0, -1.0, -1.0); }
-  }
-  return g * 0.70710678;
+  let shift = (h & 15u) << 1u;
+  let bits = (vec3u(0x52552222u, 0x0a22550au, 0x250a0a55u) >> vec3u(shift)) & vec3u(3u);
+  return (vec3f(bits) - vec3f(1.0)) * 0.70710678;
 }
 
 // Wrap signed integer lattice coordinate into [0, period - 1]

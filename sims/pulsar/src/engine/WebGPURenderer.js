@@ -20,7 +20,10 @@ import {
   formatWgslMessages,
 } from '../../../../shared/engine/SharedWebGPUPostPipeline.js';
 import { computePulsarTelemetry } from './Physics.js';
-import { createProceduralSkyTextureWebGPU } from '../../../../shared/assets/skyLoader.js';
+import {
+  createProceduralSkyTextureWebGPU,
+  createPlaceholderSkyTextureWebGPU,
+} from '../../../../shared/assets/skyLoader.js';
 import { createBlackbodyLUTWebGPU, createBlueNoiseLUTWebGPU } from '../../../../shared/assets/physicalLuts.js';
 
 const VOLUME_SIZE = 128;
@@ -45,29 +48,27 @@ function extractCamVectors(camMatrices) {
   return { pos, right, up, forward, fovY };
 }
 
-function buildPhysicsStateSignature(state) {
-  const skyRot = Array.isArray(state?.skyRotation) ? state.skyRotation : [0.40, 0.14];
-  return [
-    Number(state?.lensingMode ?? 1) ? 1 : 0,
-    Number.isFinite(Number(state?.compactness)) ? Number(state.compactness) : 0.21,
-    Number.isFinite(Number(state?.spinPeriodMs)) ? Number(state.spinPeriodMs) : 33.0,
-    Number.isFinite(Number(state?.spinVisualSpeed)) ? Number(state.spinVisualSpeed) : 1.0,
-    Number.isFinite(Number(state?.obliquityDeg)) ? Number(state.obliquityDeg) : 45.0,
-    Number.isFinite(Number(state?.twistShear)) ? Number(state.twistShear) : 0.45,
-    Number.isFinite(Number(state?.plasmaDensity)) ? Number(state.plasmaDensity) : 1.15,
-    Number.isFinite(Number(state?.beamIntensity)) ? Number(state.beamIntensity) : 1.35,
-    Number.isFinite(Number(state?.pwnVisibility)) ? Number(state.pwnVisibility) : 1.10,
-    Number.isFinite(Number(state?.polarCapTempK)) ? Number(state.polarCapTempK) : 6.5e6,
-    Number.isFinite(Number(state?.crustTempK)) ? Number(state.crustTempK) : 1.4e6,
-    Number.isFinite(Number(state?.skyIntensity)) ? Number(state.skyIntensity) : 0.90,
-    Number.isFinite(Number(state?.skyMode)) ? (Number(state.skyMode) | 0) : 0,
-    Number.isFinite(Number(skyRot[0])) ? Number(skyRot[0]) : 0.40,
-    Number.isFinite(Number(skyRot[1])) ? Number(skyRot[1]) : 0.14,
-    Number.isFinite(Number(state?.quality)) ? (Number(state.quality) | 0) : 1,
-    Number.isFinite(Number(state?.beamConeHalfAngle)) ? Number(state.beamConeHalfAngle) : 0.30,
-    Number.isFinite(Number(state?.magnetarCrackGlow)) ? Number(state.magnetarCrackGlow) : 0.25,
-    Number.isFinite(Number(state?.pwnJetPower)) ? Number(state.pwnJetPower) : 1.15,
-  ];
+function fillPhysicsStateSignature(state, out) {
+  const skyRot = Array.isArray(state?.skyRotation) ? state.skyRotation : null;
+  out[0] = Number(state?.lensingMode ?? 1) ? 1 : 0;
+  out[1] = Number.isFinite(Number(state?.compactness)) ? Number(state.compactness) : 0.21;
+  out[2] = Number.isFinite(Number(state?.spinPeriodMs)) ? Number(state.spinPeriodMs) : 33.0;
+  out[3] = Number.isFinite(Number(state?.spinVisualSpeed)) ? Number(state.spinVisualSpeed) : 1.0;
+  out[4] = Number.isFinite(Number(state?.obliquityDeg)) ? Number(state.obliquityDeg) : 45.0;
+  out[5] = Number.isFinite(Number(state?.twistShear)) ? Number(state.twistShear) : 0.45;
+  out[6] = Number.isFinite(Number(state?.plasmaDensity)) ? Number(state.plasmaDensity) : 1.15;
+  out[7] = Number.isFinite(Number(state?.beamIntensity)) ? Number(state.beamIntensity) : 1.35;
+  out[8] = Number.isFinite(Number(state?.pwnVisibility)) ? Number(state.pwnVisibility) : 1.10;
+  out[9] = Number.isFinite(Number(state?.polarCapTempK)) ? Number(state.polarCapTempK) : 6.5e6;
+  out[10] = Number.isFinite(Number(state?.crustTempK)) ? Number(state.crustTempK) : 1.4e6;
+  out[11] = Number.isFinite(Number(state?.skyIntensity)) ? Number(state.skyIntensity) : 0.90;
+  out[12] = Number.isFinite(Number(state?.skyMode)) ? (Number(state.skyMode) | 0) : 0;
+  out[13] = skyRot && Number.isFinite(Number(skyRot[0])) ? Number(skyRot[0]) : 0.40;
+  out[14] = skyRot && Number.isFinite(Number(skyRot[1])) ? Number(skyRot[1]) : 0.14;
+  out[15] = Number.isFinite(Number(state?.quality)) ? (Number(state.quality) | 0) : 1;
+  out[16] = Number.isFinite(Number(state?.beamConeHalfAngle)) ? Number(state.beamConeHalfAngle) : 0.30;
+  out[17] = Number.isFinite(Number(state?.magnetarCrackGlow)) ? Number(state.magnetarCrackGlow) : 0.25;
+  out[18] = Number.isFinite(Number(state?.pwnJetPower)) ? Number(state.pwnJetPower) : 1.15;
 }
 
 export class WebGPURenderer {
@@ -103,8 +104,12 @@ export class WebGPURenderer {
     this._deviceLost = false;
     this._inFlight = 0;
     this._useQueueBackpressure = true;
-    this._prevCamSig = null;
-    this._prevStateSig = null;
+    this._prevCamSig = new Float64Array(13);
+    this._currCamSig = new Float64Array(13);
+    this._hasPrevCamSig = false;
+    this._prevStateSig = new Float64Array(19);
+    this._currStateSig = new Float64Array(19);
+    this._hasPrevStateSig = false;
     this._prevSpinPhase = null;
 
     this.pulsarBindGroup = null;
@@ -361,12 +366,8 @@ export class WebGPURenderer {
     this.blueNoiseTex = createBlueNoiseLUTWebGPU(device, 128);
     this.blueNoiseView = this.blueNoiseTex.createView();
 
-    this.procSkyTex = createProceduralSkyTextureWebGPU(
-      device,
-      (t, w, h, m) => this.generateMipmaps(t, w, h, m),
-      2048,
-      1024
-    );
+    this.procSkyTex = createPlaceholderSkyTextureWebGPU(device);
+    this._procSkyBaked = false;
     this.procSkyView = this.procSkyTex.createView();
     this.skyTex = this.procSkyTex;
     this.skyView = this.procSkyView;
@@ -523,10 +524,46 @@ export class WebGPURenderer {
       this._rebuildPulsarBindGroup();
       this.resetAccumulation(true);
     } else {
-      if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
+      if (texture && !this._procSkyBaked) {
+        const oldPlaceholder = this.procSkyTex;
+        this.procSkyTex = texture;
+        this.procSkyView = texture.createView();
+        if (!this.skyMapLoaded) {
+          this.skyTex = texture;
+          this.skyView = this.procSkyView;
+        }
+        this._procSkyBaked = true;
+        this._rebuildPulsarBindGroup();
+        if (oldPlaceholder && oldPlaceholder !== texture && oldPlaceholder !== this.skyTex) {
+          oldPlaceholder.destroy();
+        }
+        this.resetAccumulation(true);
+      } else if (texture && texture !== this.procSkyTex && texture !== this.skyTex) {
         texture.destroy();
       }
       this.skyMapLoaded = false;
+    }
+  }
+
+  _ensureProceduralSky() {
+    if (this._procSkyBaked || this._disposed || this._deviceLost) return;
+    const oldPlaceholder = this.procSkyTex;
+    const baked = createProceduralSkyTextureWebGPU(
+      this.device,
+      (t, w, h, m) => this.generateMipmaps(t, w, h, m),
+      2048,
+      1024
+    );
+    this.procSkyTex = baked;
+    this.procSkyView = baked.createView();
+    if (!this.skyMapLoaded && (!this.skyTex || this.skyTex === oldPlaceholder)) {
+      this.skyTex = baked;
+      this.skyView = this.procSkyView;
+    }
+    this._procSkyBaked = true;
+    this._rebuildPulsarBindGroup();
+    if (oldPlaceholder && oldPlaceholder !== baked && oldPlaceholder !== this.skyTex) {
+      oldPlaceholder.destroy();
     }
   }
 
@@ -571,17 +608,26 @@ export class WebGPURenderer {
   }
 
   _didCameraMove(camMatrices, cam) {
-    const sig = [
-      cam.pos[0], cam.pos[1], cam.pos[2],
-      cam.right[0], cam.right[1], cam.right[2],
-      cam.up[0], cam.up[1], cam.up[2],
-      cam.forward[0], cam.forward[1], cam.forward[2],
-      cam.fovY,
-    ];
+    const sig = this._currCamSig;
+    sig[0] = cam.pos[0];
+    sig[1] = cam.pos[1];
+    sig[2] = cam.pos[2];
+    sig[3] = cam.right[0];
+    sig[4] = cam.right[1];
+    sig[5] = cam.right[2];
+    sig[6] = cam.up[0];
+    sig[7] = cam.up[1];
+    sig[8] = cam.up[2];
+    sig[9] = cam.forward[0];
+    sig[10] = cam.forward[1];
+    sig[11] = cam.forward[2];
+    sig[12] = cam.fovY;
+
     let sigChanged = false;
-    if (!this._prevCamSig) {
+    if (!this._hasPrevCamSig) {
       sigChanged = true;
-      this._prevCamSig = sig;
+      this._hasPrevCamSig = true;
+      this._prevCamSig.set(sig);
     } else {
       for (let i = 0; i < sig.length; i++) {
         if (Math.abs(sig[i] - this._prevCamSig[i]) > 1e-6) {
@@ -589,16 +635,18 @@ export class WebGPURenderer {
           break;
         }
       }
-      if (sigChanged) this._prevCamSig = sig;
+      if (sigChanged) this._prevCamSig.set(sig);
     }
     return typeof camMatrices?.moved === 'boolean' ? (camMatrices.moved || sigChanged) : sigChanged;
   }
 
   _syncStateChangeTracking(state, opts) {
-    const sig = buildPhysicsStateSignature(state);
+    const sig = this._currStateSig;
+    fillPhysicsStateSignature(state, sig);
     let paramsChanged = false;
-    if (!this._prevStateSig) {
-      this._prevStateSig = sig;
+    if (!this._hasPrevStateSig) {
+      this._hasPrevStateSig = true;
+      this._prevStateSig.set(sig);
     } else {
       for (let i = 0; i < sig.length; i++) {
         const a = sig[i];
@@ -610,7 +658,7 @@ export class WebGPURenderer {
         }
       }
       if (paramsChanged) {
-        this._prevStateSig = sig;
+        this._prevStateSig.set(sig);
       }
     }
 
@@ -644,9 +692,9 @@ export class WebGPURenderer {
     return { paramsChanged, spinPhaseChanged };
   }
 
-  _writePulsarUniforms(state, cam, simTime, jitterX, jitterY, isProgressive) {
+  _writePulsarUniforms(state, cam, simTime, jitterX, jitterY, isProgressive, telemetry = null) {
     const f = this._pulsarF32;
-    const tel = computePulsarTelemetry(state);
+    const tel = telemetry || computePulsarTelemetry(state);
     const skyRot = Array.isArray(state?.skyRotation) ? state.skyRotation : [0.40, 0.14];
 
     f[0] = this.width;
@@ -709,8 +757,11 @@ export class WebGPURenderer {
     this.device.queue.writeBuffer(this.pulsarUniformBuf, 0, this._pulsarBufData);
   }
 
-  _encodePulsarAndTaa(encoder, state, cam, simTime, jitterX, jitterY, blendFactor, isProgressive) {
-    this._writePulsarUniforms(state, cam, simTime, jitterX, jitterY, isProgressive);
+  _encodePulsarAndTaa(encoder, state, cam, simTime, jitterX, jitterY, blendFactor, isProgressive, telemetry = null) {
+    if ((state?.skyMode | 0) === 2 && !this._procSkyBaked) {
+      this._ensureProceduralSky();
+    }
+    this._writePulsarUniforms(state, cam, simTime, jitterX, jitterY, isProgressive, telemetry);
 
     const sceneView = this.post.getSceneView();
     if (this.pulsarPipeline && this.pulsarBindGroup && sceneView) {
@@ -752,7 +803,10 @@ export class WebGPURenderer {
     if (this._disposed || this._deviceLost || !this.getAllShadersCompiled()) return false;
 
     const opts = options || {};
-    this.resize(state?.resolutionScale ?? this.resolutionScale);
+    const targetScale = Number(opts.effectiveResolutionScale ?? state?.resolutionScale ?? this.resolutionScale) || 1.0;
+    if (this.width === 0 || this.height === 0 || Math.abs(targetScale - this.resolutionScale) > 1e-4) {
+      this.resize(targetScale);
+    }
 
     if (
       this._useQueueBackpressure &&
@@ -792,7 +846,7 @@ export class WebGPURenderer {
         this._hardReset = false;
 
         const encoder = this.device.createCommandEncoder({ label: 'frame-progressive' });
-        this._encodePulsarAndTaa(encoder, state, cam, simTime, jitterX, jitterY, blendFactor, true);
+        this._encodePulsarAndTaa(encoder, state, cam, simTime, jitterX, jitterY, blendFactor, true, opts.telemetry || null);
         this.post.encodeBloomAndAnamorphic(encoder, state);
         this.post.encodeComposite(encoder, state, this.width, this.height, simTime, this.frameIndex);
         this._submitFrame(encoder.finish());
@@ -828,7 +882,7 @@ export class WebGPURenderer {
     const jitterY = blendFactor >= 0.999 ? 0.0 : halton(jitterIdx, 3) - 0.5;
 
     const encoder = this.device.createCommandEncoder({ label: 'frame-taa' });
-    this._encodePulsarAndTaa(encoder, state, cam, simTime, jitterX, jitterY, blendFactor, false);
+    this._encodePulsarAndTaa(encoder, state, cam, simTime, jitterX, jitterY, blendFactor, false, opts.telemetry || null);
     this.post.encodeBloomAndAnamorphic(encoder, state);
     this.post.encodeComposite(encoder, state, this.width, this.height, simTime, this.frameIndex);
     this._submitFrame(encoder.finish());

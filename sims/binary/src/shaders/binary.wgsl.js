@@ -75,6 +75,7 @@ fn sanitizeVec3Zero(v: vec3f) -> vec3f {
 
 struct GwConsts {
   r0         : f32,
+  r0Sq       : f32,
   invSpan    : f32,
   A0         : f32,
   twoPhase   : f32,
@@ -121,14 +122,14 @@ fn evalGeodesicFull(pos: vec3f, dir: vec3f) -> GeodesicFull {
   let gradPhi = k1 * d1 + k2 * d2;
 
   let phiC = min(phi, 0.95);
-  let opPhi = 1.0 + phiC;
-  let invN = min(max(1.0 - phiC, 0.05) / (opPhi * opPhi * opPhi), 1.0);
   let blFactor = lensing * ((4.0 - 2.0 * phiC) / max(1.0 - phiC * phiC, 0.05));
   let gradTot = blFactor * gradPhi;
 
   var dv = gradTot - dot(gradTot, dir) * dir;
 
-  if (lensing > 1e-6) {
+  if (lensing > 1e-6 && phi > 0.012) {
+    let opPhi = 1.0 + phiC;
+    let invN = min(max(1.0 - phiC, 0.05) / (opPhi * opPhi * opPhi), 1.0);
     let Bg = 8.0 * (k1 * cross(d1, u.binaryV1_rH1.xyz) + k2 * cross(d2, u.binaryV2_rH2.xyz));
     dv += (lensing * invN) * cross(dir, Bg);
   }
@@ -392,7 +393,7 @@ fn evalDiskVolume(
   let bbColor = sampleBlackbody(T_obs);
 
   let tr = clamp(T_local / 4900.0, 0.15, 4.0);
-  let thermalPower = pow(tr, 1.85);
+  let thermalPower = (tr * tr) * inverseSqrt(sqrt(sqrt(tr)));
   let heightComp = 1.0 / pow(max(H * 2.8, 0.28), 0.36);
 
   let emitStrength = localDensity * thermalPower * beaming * heightComp * 1.18;
@@ -575,13 +576,17 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
 
   let hasDisk = (u.camForward_diskDens.w > 0.001 || u.diskParams.w > 0.001);
   let hasGw   = (abs(u.gw_skyParams.x) > 0.01 && eta > 1e-6);
-  let gwBaseStep = select(100.0, PI / (5.2 * max(u.binaryC2_gwOmega.w, 0.05)), hasGw);
+  var gwBaseStep : f32 = 100.0;
+  if (hasGw) {
+    gwBaseStep = PI / (5.2 * max(u.binaryC2_gwOmega.w, 0.05));
+  }
   let lowDetailBase = (quality <= 0);
 
   let r0Gw = 0.8 * d;
   let r1Gw = 2.2 * d;
   var gwc: GwConsts;
   gwc.r0 = r0Gw;
+  gwc.r0Sq = r0Gw * r0Gw;
   gwc.invSpan = 1.0 / max(r1Gw - r0Gw, 1e-5);
   gwc.A0 = u.gw_skyParams.x * (4.0 * eta) * 0.035;
   gwc.twoPhase = 2.0 * u.jitter_fov_phase.w;
@@ -597,6 +602,10 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   var deltaISW : f32 = 0.0;
   var captured = false;
   var escaped = false;
+  var hasPrevRot = false;
+  var prevRotXZ = vec2f(0.0);
+  var hasPrevSig = false;
+  var prevSig : f32 = 0.0;
 
   for (var step: i32 = 0; step < 400; step++) {
     if (step >= maxSteps) { break; }
@@ -614,6 +623,13 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
       break;
     }
 
+    var hasCurRot = hasPrevRot;
+    var curRotXZ = prevRotXZ;
+    var hasCurSig = hasPrevSig;
+    var curSig = prevSig;
+    hasPrevRot = false;
+    hasPrevSig = false;
+
     let clear1 = select(1e6, k1.r1 - 0.82 * rH1, m1 > 0.0);
     let clear2 = select(1e6, k1.r2 - 0.82 * rH2, m2 > 0.0);
     let minClear = min(clear1, clear2);
@@ -622,7 +638,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
     let farOut = outbound && rCom > max(rOuter * 1.15, d * 2.5) && k1.phi < 0.02;
     var h = clamp(select(0.15, 0.36, farOut) * max(minClear, 0.005) * qualScale, minH, select(5.2, 13.0, farOut));
 
-    if (hasGw) {
+    if (hasGw && rCom > gwc.r0) {
       let gwLim = gwBaseStep * (1.0 + 0.022 * max(rCom - 2.4 * d, 0.0));
       h = min(h, gwLim);
     }
@@ -639,17 +655,29 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
       if (absY < localH * 2.90) {
         var skipCavRefine = false;
         if (rCom < rCav * 0.80) {
-          let uv0 = rotOrbXZ(pos.xz, cosOrb, sinOrb) * invFieldSpan + 0.5;
-          let uv1 = rotOrbXZ(pos.xz + dir.xz * min(h, 1.2), cosOrb, sinOrb) * invFieldSpan + 0.5;
-          let sig0 = textureSampleLevel(uTidalField, sLut, clamp(uv0, vec2f(0.002), vec2f(0.998)), 0.0).r;
-          let sig1 = textureSampleLevel(uTidalField, sLut, clamp(uv1, vec2f(0.002), vec2f(0.998)), 0.0).r;
-          if (max(sig0, sig1) < 1e-4) {
-            h = min(h, 0.85 * qualScale);
-            skipCavRefine = true;
+          if (!hasCurRot) {
+            curRotXZ = rotOrbXZ(pos.xz, cosOrb, sinOrb);
+            hasCurRot = true;
+          }
+          if (!hasCurSig) {
+            let uv0 = curRotXZ * invFieldSpan + 0.5;
+            curSig = textureSampleLevel(uTidalField, sLut, clamp(uv0, vec2f(0.002), vec2f(0.998)), 0.0).r;
+            hasCurSig = true;
+          }
+          if (curSig < 1e-4) {
+            let uv1 = rotOrbXZ(pos.xz + dir.xz * min(h, 1.2), cosOrb, sinOrb) * invFieldSpan + 0.5;
+            let sig1 = textureSampleLevel(uTidalField, sLut, clamp(uv1, vec2f(0.002), vec2f(0.998)), 0.0).r;
+            if (sig1 < 1e-4) {
+              h = min(h, 0.85 * qualScale);
+              skipCavRefine = true;
+            }
           }
         }
         if (!skipCavRefine) {
-          let anisoScale = select(1.0, min(1.0 / max(abs(dir.y), 0.36), 2.15), rCom > rCav * 0.85);
+          var anisoScale : f32 = 1.0;
+          if (rCom > rCav * 0.85) {
+            anisoScale = min(1.0 / max(abs(dir.y), 0.36), 2.15);
+          }
           let diskHStep = max(localH * 1.05 * anisoScale, 0.048) * qualScale;
           let prox = smoothstep(localH * 2.90, localH * 1.05, absY);
           h = min(h, mix(h, diskHStep, prox));
@@ -704,11 +732,13 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
     var iswMid : f32 = 0.0;
     if (hasGw) {
       let midPosGw = 0.5 * (pos + posNext);
-      let midDirGw = normalize(dir + dirNext);
-      let gwKick = evalGwKick(midPosGw, midDirGw, gwc);
-      posNext += (0.5 * h * h) * gwKick.xyz;
-      dirNext = normalize(dirNext + h * gwKick.xyz);
-      iswMid = gwKick.w;
+      if (dot(midPosGw, midPosGw) > gwc.r0Sq) {
+        let midDirGw = normalize(dir + dirNext);
+        let gwKick = evalGwKick(midPosGw, midDirGw, gwc);
+        posNext += (0.5 * h * h) * gwKick.xyz;
+        dirNext = normalize(dirNext + h * gwKick.xyz);
+        iswMid = gwKick.w;
+      }
     }
 
     let segLen = length(posNext - pos);
@@ -735,31 +765,50 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
           );
 
           if (crossesPlane || abs(midPos.y) < hMid * 2.65 || abs(pos.y) < hMid * 2.65 || abs(posNext.y) < hMid * 2.65) {
-            let midDirY = abs(dir.y + dirNext.y) * 0.5;
-            let anisoSub = select(1.0, min(1.0 / max(midDirY, 0.36), 2.15), rMidCom > rCav * 0.85);
+            var anisoSub : f32 = 1.0;
+            if (rMidCom > rCav * 0.85) {
+              let midDirY = abs(dir.y + dirNext.y) * 0.5;
+              anisoSub = min(1.0 / max(midDirY, 0.36), 2.15);
+            }
             let targetDs = max(hMid * 1.15 * anisoSub, 0.055) * qualScale;
             let needCrossSub = crossesPlane && (segLen > targetDs * 0.72);
             var nSub : i32 = 1;
             if (needCrossSub || segLen > targetDs) {
               nSub = clamp(i32(ceil(segLen / targetDs)), select(1, 2, needCrossSub), select(2, 3, quality >= 2));
             }
-            let p0Rot = rotOrbXZ(pos.xz, cosOrb, sinOrb);
+            var p0Rot : vec2f;
+            if (hasCurRot) {
+              p0Rot = curRotXZ;
+            } else {
+              p0Rot = rotOrbXZ(pos.xz, cosOrb, sinOrb);
+            }
             let p1Rot = rotOrbXZ(posNext.xz, cosOrb, sinOrb);
+            prevRotXZ = p1Rot;
+            hasPrevRot = true;
 
             var skipSub = false;
             if (nSub > 1 && rMidCom < rCav * 0.82) {
-              let p0Uv = clamp(p0Rot * invFieldSpan + 0.5, vec2f(0.002), vec2f(0.998));
-              let pmUv = clamp((0.5 * (p0Rot + p1Rot)) * invFieldSpan + 0.5, vec2f(0.002), vec2f(0.998));
-              let p1Uv = clamp(p1Rot * invFieldSpan + 0.5, vec2f(0.002), vec2f(0.998));
-              let s0 = textureSampleLevel(uTidalField, sLut, p0Uv, 0.0).r;
-              let s1 = textureSampleLevel(uTidalField, sLut, pmUv, 0.0).r;
-              let s2 = textureSampleLevel(uTidalField, sLut, p1Uv, 0.0).r;
-              skipSub = (max(s0, max(s1, s2)) < 1e-4);
+              var s0 : f32;
+              if (hasCurSig) {
+                s0 = curSig;
+              } else {
+                let p0Uv = clamp(p0Rot * invFieldSpan + 0.5, vec2f(0.002), vec2f(0.998));
+                s0 = textureSampleLevel(uTidalField, sLut, p0Uv, 0.0).r;
+              }
+              if (s0 < 1e-4) {
+                let p1Uv = clamp(p1Rot * invFieldSpan + 0.5, vec2f(0.002), vec2f(0.998));
+                let s2 = textureSampleLevel(uTidalField, sLut, p1Uv, 0.0).r;
+                prevSig = s2;
+                hasPrevSig = true;
+                if (s2 < 1e-4) {
+                  let pmUv = clamp((0.5 * (p0Rot + p1Rot)) * invFieldSpan + 0.5, vec2f(0.002), vec2f(0.998));
+                  let s1 = textureSampleLevel(uTidalField, sLut, pmUv, 0.0).r;
+                  skipSub = (s1 < 1e-4);
+                }
+              }
             }
 
             if (!skipSub) {
-              let d1Mid = length(midPos - u.binaryC1_omega.xyz);
-              let d2Mid = length(midPos - u.binaryC2_gwOmega.xyz);
               let dsSub = segLen / f32(nSub);
               let jitterBase = fract(bn.y + f32(step) * 0.61803399);
               let lowDet = lowDetailBase || (transmittance < 0.14);
@@ -770,10 +819,18 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
                 let sPos = mix(pos, posNext, frac);
                 let sRotXZ = mix(p0Rot, p1Rot, frac);
                 let sDir = normalize(mix(dir, dirNext, frac));
-                let sr1 = select(length(sPos - u.binaryC1_omega.xyz), d1Mid, nSub == 1);
-                let sr2 = select(length(sPos - u.binaryC2_gwOmega.xyz), d2Mid, nSub == 1);
-                let sPhi = select(0.0, 0.5 * m1 / max(sr1, 1e-4), m1 > 0.0)
-                         + select(0.0, 0.5 * m2 / max(sr2, 1e-4), m2 > 0.0);
+                var sr1 : f32;
+                var sr2 : f32;
+                if (nSub == 1) {
+                  sr1 = length(midPos - u.binaryC1_omega.xyz);
+                  sr2 = length(midPos - u.binaryC2_gwOmega.xyz);
+                } else {
+                  sr1 = length(sPos - u.binaryC1_omega.xyz);
+                  sr2 = length(sPos - u.binaryC2_gwOmega.xyz);
+                }
+                var sPhi : f32 = 0.0;
+                if (m1 > 0.0) { sPhi += 0.5 * m1 / max(sr1, 1e-4); }
+                if (m2 > 0.0) { sPhi += 0.5 * m2 / max(sr2, 1e-4); }
 
                 let ds = evalDiskVolume(sPos.y, sRotXZ, sDir, sPhi, cosOrb, sinOrb, camDistFade, lowDet);
                 if (ds.extinction > 1e-6 || dot(ds.emission, ds.emission) > 1e-10) {
@@ -820,7 +877,10 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
 
   let escFlag = select(0.0, 1.0, escaped && !captured && transmittance > 0.008);
   let edgeMask = fwidth(escFlag);
-  let safeSkyDir = select(localRay, normalize(dir), dot(dir, dir) > 1e-10);
+  var safeSkyDir = localRay;
+  if (dot(dir, dir) > 1e-10) {
+    safeSkyDir = normalize(dir);
+  }
   let skyColor = sampleSkyBackground(safeSkyDir, escFlag > 0.5, edgeMask, deltaISW);
 
   if (escFlag > 0.5) {
