@@ -106,6 +106,10 @@ fn warp_drive_metric_parity() {
 
 #[test]
 fn supernova_sedov_and_hg_parity() {
+    let e_breakout = eval_sedov_taylor(0.002);
+    assert_eq!(e_breakout.regime_label, "Shock Breakout");
+    assert!(e_breakout.shock_radius_ly > 0.0 && e_breakout.shock_radius_ly < 0.01);
+
     let e_early = eval_sedov_taylor(20_000.0);
     let e_late = eval_sedov_taylor(640_000.0);
     // Deep in Sedov-Taylor regime, R ~ t^(2/5), so 32^(2/5) = 4.0
@@ -119,7 +123,8 @@ fn supernova_sedov_and_hg_parity() {
     assert!(eval_hg(1.0, 0.65) > eval_hg(-1.0, 0.65));
     assert!(eval_dual_hg(1.0, 0.65) > eval_dual_hg(0.0, 0.65));
 
-    let tel = compute_supernova_telemetry(972.0, 1.0, 1.0, 1.0, 1.0, 1.2, 1.0, 0);
+    let tel = compute_supernova_telemetry(972.0, 1.0, 1.0, 1.0, 1.0, 1.2, 1.0, 2);
+    assert_eq!(tel.palette_label, "Chandra / JWST");
     assert!(tel.optical_depth > 0.0);
     assert!(tel.central_temp_k > 1000.0);
 }

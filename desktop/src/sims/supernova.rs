@@ -9,7 +9,8 @@ use crate::shaders;
 use crate::sims::blackhole::format_thousands;
 use crate::sims::{
     ControlItem, ControlKind, ControlSection, HudMetadata, PresetMeta, SimId, SimInput, Simulation,
-    StepOutcome, TelemetryCell, ease_out_cubic, step_critically_damped, wrap_angle_delta,
+    SpecialActionUi, StepOutcome, TelemetryCell, ease_out_cubic, step_critically_damped,
+    wrap_angle_delta,
 };
 
 const DEG2RAD: f32 = PI / 180.0;
@@ -39,9 +40,15 @@ const MU_IONIZED: f64 = 0.61;
 const RHO0_CGS: f64 = 1.0 * 1.4 * 1.6735575e-24;
 const M_EJ_G: f64 = 3.0 * 1.98847e33;
 const LY_CM: f64 = 9.4607304725808e17;
+const LY_TO_AU: f64 = 63241.077;
 const YR_S: f64 = 31557600.0;
 const K_B: f64 = 1.380649e-16;
 const INV_4_PI: f64 = 1.0 / (4.0 * std::f64::consts::PI);
+
+pub const AGE_MIN_YR: f64 = 0.0005;
+pub const AGE_MAX_YR: f64 = 18000.0;
+const EVOLVE_DURATION_SEC: f32 = 22.0;
+const EVOLVE_END_AGE_YR: f64 = 12000.0;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -56,12 +63,17 @@ struct SupernovaUniforms {
     sky_params: [f32; 4],
     quality_params: [f32; 4],
     zone_params: [f32; 4],
+    morph_params: [f32; 4],
 }
 
 #[derive(Clone, Copy)]
 struct SupernovaPreset {
     meta: PresetMeta,
     shock_age: f32,
+    bipolar_power: f32,
+    jet_power: f32,
+    ring_strength: f32,
+    curtain_weight: f32,
     rt_turbulence: f32,
     dust_opacity: f32,
     hg_anisotropy: f32,
@@ -93,68 +105,115 @@ struct SupernovaPreset {
 const PRESETS: [SupernovaPreset; 6] = [
     SupernovaPreset {
         meta: PresetMeta {
-            id: "crab",
-            full_name: "Crab Filament Shell",
-            short_label: "Crab Shell",
+            id: "breakout",
+            full_name: "Shock Breakout",
+            short_label: "Breakout",
             hotkey: "1",
         },
-        shock_age: 970.0,
-        rt_turbulence: 1.25,
-        dust_opacity: 0.72,
-        hg_anisotropy: 0.58,
-        star_luminosity: 1.40,
+        shock_age: 0.002,
+        bipolar_power: 0.45,
+        jet_power: 1.55,
+        ring_strength: 1.15,
+        curtain_weight: 0.0,
+        rt_turbulence: 1.45,
+        dust_opacity: 0.45,
+        hg_anisotropy: 0.62,
+        star_luminosity: 2.35,
         palette_mode: 1,
-        filament_contrast: 1.15,
-        cavity_glow: 1.25,
-        bok_density: 0.55,
-        shell_thickness: 1.00,
+        filament_contrast: 1.45,
+        cavity_glow: 1.15,
+        bok_density: 0.35,
+        shell_thickness: 0.92,
         emission_gain: 1.15,
-        expansion_speed: 1.00,
-        exposure: 1.05,
-        bloom: 0.62,
-        anamorphic: 0.34,
+        expansion_speed: 1.25,
+        exposure: 0.98,
+        bloom: 0.72,
+        anamorphic: 0.52,
         sky_intensity: 0.95,
         sky_mode: 0,
-        sky_rot: [0.42, 0.16],
-        distance: 10.6,
+        sky_rot: [0.38, 0.14],
+        distance: 11.4,
         pivot: [0.0, 0.0, 0.0],
-        azimuth_deg: 28.0,
-        elevation_deg: 14.0,
-        roll_deg: -3.0,
-        fov_deg: 48.0,
+        azimuth_deg: 24.0,
+        elevation_deg: 18.0,
+        roll_deg: -8.0,
+        fov_deg: 46.0,
         look_yaw_deg: 0.0,
         look_pitch_deg: 0.0,
         auto_orbit: true,
     },
     SupernovaPreset {
         meta: PresetMeta {
-            id: "veil",
-            full_name: "Veil Shock Front",
-            short_label: "Veil Shock",
+            id: "sn1987a",
+            full_name: "SN 1987A Ring",
+            short_label: "SN 1987A",
             hotkey: "2",
         },
-        shock_age: 10500.0,
-        rt_turbulence: 1.48,
-        dust_opacity: 0.35,
-        hg_anisotropy: 0.44,
-        star_luminosity: 0.75,
+        shock_age: 35.0,
+        bipolar_power: 1.35,
+        jet_power: 0.45,
+        ring_strength: 1.75,
+        curtain_weight: 0.15,
+        rt_turbulence: 1.35,
+        dust_opacity: 0.52,
+        hg_anisotropy: 0.64,
+        star_luminosity: 1.50,
         palette_mode: 1,
-        filament_contrast: 1.38,
-        cavity_glow: 0.45,
-        bok_density: 0.22,
-        shell_thickness: 0.62,
-        emission_gain: 1.28,
-        expansion_speed: 0.85,
-        exposure: 1.08,
+        filament_contrast: 1.52,
+        cavity_glow: 0.75,
+        bok_density: 0.42,
+        shell_thickness: 0.82,
+        emission_gain: 1.12,
+        expansion_speed: 1.00,
+        exposure: 1.02,
+        bloom: 0.62,
+        anamorphic: 0.34,
+        sky_intensity: 0.95,
+        sky_mode: 0,
+        sky_rot: [-0.22, 0.18],
+        distance: 11.8,
+        pivot: [0.0, 0.0, 0.0],
+        azimuth_deg: -28.0,
+        elevation_deg: 34.0,
+        roll_deg: 6.0,
+        fov_deg: 46.0,
+        look_yaw_deg: 0.0,
+        look_pitch_deg: 0.0,
+        auto_orbit: true,
+    },
+    SupernovaPreset {
+        meta: PresetMeta {
+            id: "crab",
+            full_name: "Crab Filament Shell",
+            short_label: "Crab Shell",
+            hotkey: "3",
+        },
+        shock_age: 970.0,
+        bipolar_power: 0.50,
+        jet_power: 0.85,
+        ring_strength: 0.15,
+        curtain_weight: 0.12,
+        rt_turbulence: 1.42,
+        dust_opacity: 0.55,
+        hg_anisotropy: 0.60,
+        star_luminosity: 1.65,
+        palette_mode: 1,
+        filament_contrast: 1.58,
+        cavity_glow: 1.25,
+        bok_density: 0.48,
+        shell_thickness: 0.84,
+        emission_gain: 1.15,
+        expansion_speed: 0.95,
+        exposure: 1.05,
         bloom: 0.56,
         anamorphic: 0.28,
-        sky_intensity: 0.90,
+        sky_intensity: 0.95,
         sky_mode: 0,
-        sky_rot: [0.65, -0.10],
-        distance: 10.4,
-        pivot: [2.4, 0.4, 0.0],
-        azimuth_deg: 18.0,
-        elevation_deg: 8.0,
+        sky_rot: [0.42, 0.16],
+        distance: 13.4,
+        pivot: [0.0, 0.0, 0.0],
+        azimuth_deg: 32.0,
+        elevation_deg: 14.0,
         roll_deg: -4.0,
         fov_deg: 46.0,
         look_yaw_deg: 0.0,
@@ -163,69 +222,38 @@ const PRESETS: [SupernovaPreset; 6] = [
     },
     SupernovaPreset {
         meta: PresetMeta {
-            id: "hubble_sho",
-            full_name: "Hubble SHO Narrowband",
-            short_label: "Hubble SHO",
-            hotkey: "3",
-        },
-        shock_age: 2800.0,
-        rt_turbulence: 1.32,
-        dust_opacity: 0.92,
-        hg_anisotropy: 0.64,
-        star_luminosity: 1.30,
-        palette_mode: 0,
-        filament_contrast: 1.24,
-        cavity_glow: 0.95,
-        bok_density: 0.78,
-        shell_thickness: 1.05,
-        emission_gain: 1.22,
-        expansion_speed: 0.95,
-        exposure: 1.04,
-        bloom: 0.60,
-        anamorphic: 0.30,
-        sky_intensity: 0.90,
-        sky_mode: 0,
-        sky_rot: [-0.28, 0.20],
-        distance: 11.4,
-        pivot: [0.0, 0.0, 0.0],
-        azimuth_deg: -34.0,
-        elevation_deg: 18.0,
-        roll_deg: 2.0,
-        fov_deg: 48.0,
-        look_yaw_deg: 0.0,
-        look_pitch_deg: 0.0,
-        auto_orbit: true,
-    },
-    SupernovaPreset {
-        meta: PresetMeta {
-            id: "bok_globules",
-            full_name: "Dark Bok Globules",
-            short_label: "Bok Globules",
+            id: "veil",
+            full_name: "Veil Shock Curtains",
+            short_label: "Veil Shock",
             hotkey: "4",
         },
-        shock_age: 4200.0,
-        rt_turbulence: 1.12,
-        dust_opacity: 1.85,
-        hg_anisotropy: 0.78,
-        star_luminosity: 1.65,
-        palette_mode: 0,
-        filament_contrast: 1.20,
-        cavity_glow: 0.90,
-        bok_density: 1.65,
-        shell_thickness: 1.15,
-        emission_gain: 1.15,
-        expansion_speed: 0.75,
-        exposure: 1.06,
-        bloom: 0.64,
-        anamorphic: 0.36,
-        sky_intensity: 0.85,
+        shock_age: 10500.0,
+        bipolar_power: 0.30,
+        jet_power: 0.0,
+        ring_strength: 0.0,
+        curtain_weight: 1.0,
+        rt_turbulence: 1.58,
+        dust_opacity: 0.22,
+        hg_anisotropy: 0.48,
+        star_luminosity: 0.65,
+        palette_mode: 1,
+        filament_contrast: 1.65,
+        cavity_glow: 0.22,
+        bok_density: 0.12,
+        shell_thickness: 0.55,
+        emission_gain: 1.25,
+        expansion_speed: 0.80,
+        exposure: 1.08,
+        bloom: 0.48,
+        anamorphic: 0.22,
+        sky_intensity: 0.92,
         sky_mode: 0,
-        sky_rot: [0.15, -0.22],
-        distance: 8.6,
-        pivot: [0.0, 0.0, 0.0],
-        azimuth_deg: 62.0,
-        elevation_deg: -6.0,
-        roll_deg: 0.0,
+        sky_rot: [0.65, -0.10],
+        distance: 11.4,
+        pivot: [2.4, 0.3, 0.0],
+        azimuth_deg: 16.0,
+        elevation_deg: 8.0,
+        roll_deg: -5.0,
         fov_deg: 46.0,
         look_yaw_deg: 0.0,
         look_pitch_deg: 0.0,
@@ -233,75 +261,93 @@ const PRESETS: [SupernovaPreset; 6] = [
     },
     SupernovaPreset {
         meta: PresetMeta {
-            id: "pulsar_cavity",
-            full_name: "Central Pulsar Cavity",
-            short_label: "Pulsar Cavity",
+            id: "hubble_sho",
+            full_name: "Hubble SHO Pillars",
+            short_label: "SHO Pillars",
             hotkey: "5",
         },
-        shock_age: 650.0,
-        rt_turbulence: 0.95,
-        dust_opacity: 0.50,
-        hg_anisotropy: 0.68,
-        star_luminosity: 2.20,
-        palette_mode: 1,
-        filament_contrast: 1.10,
-        cavity_glow: 1.95,
-        bok_density: 0.35,
-        shell_thickness: 0.90,
-        emission_gain: 1.18,
-        expansion_speed: 1.10,
-        exposure: 1.00,
-        bloom: 0.72,
-        anamorphic: 0.52,
-        sky_intensity: 0.95,
+        shock_age: 2800.0,
+        bipolar_power: 0.42,
+        jet_power: 0.30,
+        ring_strength: 0.20,
+        curtain_weight: 0.22,
+        rt_turbulence: 1.38,
+        dust_opacity: 1.75,
+        hg_anisotropy: 0.76,
+        star_luminosity: 2.10,
+        palette_mode: 0,
+        filament_contrast: 1.55,
+        cavity_glow: 0.90,
+        bok_density: 1.65,
+        shell_thickness: 0.98,
+        emission_gain: 1.32,
+        expansion_speed: 0.85,
+        exposure: 1.08,
+        bloom: 0.58,
+        anamorphic: 0.30,
+        sky_intensity: 0.90,
         sky_mode: 0,
-        sky_rot: [0.52, 0.12],
-        distance: 2.2,
+        sky_rot: [-0.28, 0.20],
+        distance: 12.2,
         pivot: [0.0, 0.0, 0.0],
-        azimuth_deg: 16.0,
+        azimuth_deg: -38.0,
         elevation_deg: 10.0,
-        roll_deg: 0.0,
-        fov_deg: 58.0,
+        roll_deg: 2.0,
+        fov_deg: 46.0,
         look_yaw_deg: 0.0,
         look_pitch_deg: 0.0,
         auto_orbit: true,
     },
     SupernovaPreset {
         meta: PresetMeta {
-            id: "flythrough",
-            full_name: "Deep Interior Flythrough",
-            short_label: "Flythrough",
+            id: "pulsar_cathedral",
+            full_name: "Pulsar Cathedral",
+            short_label: "Pulsar Core",
             hotkey: "6",
         },
-        shock_age: 1800.0,
-        rt_turbulence: 1.38,
-        dust_opacity: 1.05,
-        hg_anisotropy: 0.70,
-        star_luminosity: 1.50,
-        palette_mode: 0,
-        filament_contrast: 1.25,
-        cavity_glow: 1.20,
-        bok_density: 0.95,
-        shell_thickness: 1.05,
-        emission_gain: 1.22,
+        shock_age: 650.0,
+        bipolar_power: 0.65,
+        jet_power: 1.45,
+        ring_strength: 0.35,
+        curtain_weight: 0.12,
+        rt_turbulence: 1.25,
+        dust_opacity: 0.45,
+        hg_anisotropy: 0.68,
+        star_luminosity: 2.15,
+        palette_mode: 2,
+        filament_contrast: 1.65,
+        cavity_glow: 1.75,
+        bok_density: 0.40,
+        shell_thickness: 0.82,
+        emission_gain: 0.95,
         expansion_speed: 1.05,
-        exposure: 1.06,
-        bloom: 0.65,
+        exposure: 0.94,
+        bloom: 0.56,
         anamorphic: 0.42,
         sky_intensity: 0.95,
         sky_mode: 0,
-        sky_rot: [-0.55, 0.18],
-        distance: 3.4,
-        pivot: [0.35, -0.15, 0.25],
-        azimuth_deg: -22.0,
-        elevation_deg: 6.0,
-        roll_deg: 0.0,
-        fov_deg: 62.0,
+        sky_rot: [0.52, 0.12],
+        distance: 2.85,
+        pivot: [0.0, 0.0, 0.0],
+        azimuth_deg: 22.0,
+        elevation_deg: 38.0,
+        roll_deg: -4.0,
+        fov_deg: 58.0,
         look_yaw_deg: 0.0,
         look_pitch_deg: 0.0,
-        auto_orbit: false,
+        auto_orbit: true,
     },
 ];
+
+pub fn age_to_norm(age_years: f64) -> f64 {
+    let age = age_years.clamp(AGE_MIN_YR, AGE_MAX_YR);
+    ((age / AGE_MIN_YR).ln() / (AGE_MAX_YR / AGE_MIN_YR).ln()).clamp(0.0, 1.0)
+}
+
+pub fn norm_to_age(norm: f64) -> f64 {
+    let t = norm.clamp(0.0, 1.0);
+    AGE_MIN_YR * (AGE_MAX_YR / AGE_MIN_YR).powf(t)
+}
 
 pub struct SedovTaylorEval {
     pub age_years: f64,
@@ -314,7 +360,7 @@ pub struct SedovTaylorEval {
 }
 
 pub fn eval_sedov_taylor(age_years: f64) -> SedovTaylorEval {
-    let age_yr = age_years.max(1.0);
+    let age_yr = age_years.max(1e-4);
     let t_sec = age_yr * YR_S;
     let v_ej = ((2.0 * E0_ERG) / M_EJ_G).sqrt();
     let r_free = v_ej * t_sec;
@@ -329,11 +375,13 @@ pub fn eval_sedov_taylor(age_years: f64) -> SedovTaylorEval {
     let shock_radius_ly = r_shock_cm / LY_CM;
     let expansion_velocity_kms = v_shock_cms / 1.0e5;
     let shock_temp_k = (3.0 / 16.0) * ((MU_IONIZED * M_H_G) / K_B) * v_shock_cms * v_shock_cms;
-    let world_shock_radius = (1.42 * shock_radius_ly.max(0.05).powf(0.34)).clamp(2.2, 5.4);
-    let shock_age_norm = ((age_yr / 150.0).ln() / (18000.0_f64 / 150.0).ln()).clamp(0.0, 1.0);
+    let shock_age_norm = age_to_norm(age_yr);
+    let world_shock_radius = (1.55 + 3.05 * shock_age_norm.powf(0.72)).clamp(1.55, 4.65);
 
     let ratio = r_free / r_st.max(1.0);
-    let regime_label = if ratio < 0.65 {
+    let regime_label = if age_yr < 0.05 {
+        "Shock Breakout"
+    } else if ratio < 0.65 {
         "Free Expansion"
     } else if ratio < 1.65 {
         "Transition"
@@ -411,21 +459,27 @@ pub fn compute_supernova_telemetry(
     for i in 0..steps {
         let r = (i as f64 + 0.5) * dr;
         let u = (r / st.world_shock_radius.max(1e-4)).max(0.0);
-        let pwn_cavity = smoothstep(0.03, 0.14, u) * (1.0 - smoothstep(0.36, 0.64, u)) * cav;
-        let oiii = gaussian(u, 0.72, 0.21 * thick);
-        let h_alpha = gaussian(u, 0.96, 0.15 * thick);
-        let sii = gaussian(u, 1.09, 0.11 * thick);
-        let dust_env = smoothstep(0.76, 1.04, u) * (1.0 - smoothstep(1.34, 1.66, u)) * dust_op;
-        let bok_env = smoothstep(0.86, 1.06, u) * (1.0 - smoothstep(1.32, 1.58, u)) * dust_op * bok;
-        let gas = (0.18 * pwn_cavity + 0.55 * oiii + 0.95 * h_alpha + 0.65 * sii) * gain;
-        let sigma_scat = 0.08 * gas + 0.52 * dust_env + 0.42 * bok_env;
-        let sigma_abs = 0.02 * gas + 0.26 * dust_env + 0.48 * bok_env;
+        let pwn_cavity = smoothstep(0.04, 0.16, u) * (1.0 - smoothstep(0.32, 0.58, u)) * cav;
+        let oiii = gaussian(u, 0.68, 0.16 * thick);
+        let h_alpha = gaussian(u, 0.92, 0.14 * thick);
+        let sii = gaussian(u, 1.04, 0.10 * thick);
+        let dust_env = smoothstep(0.76, 1.00, u) * (1.0 - smoothstep(1.22, 1.44, u)) * dust_op;
+        let bok_env = smoothstep(0.82, 1.02, u) * (1.0 - smoothstep(1.18, 1.38, u)) * dust_op * bok;
+        let gas = (0.14 * pwn_cavity + 0.45 * oiii + 0.85 * h_alpha + 0.58 * sii) * gain;
+        let sigma_scat = 0.06 * gas + 0.36 * dust_env + 0.38 * bok_env;
+        let sigma_abs = 0.02 * gas + 0.24 * dust_env + 0.52 * bok_env;
         optical_depth += (sigma_scat + sigma_abs) * dr;
     }
 
     let star_lum = star_luminosity.clamp(0.05, 5.0);
     let central_temp_k =
-        125000.0 * (1000.0 / st.age_years.max(50.0)).powf(0.28) * star_lum.powf(0.25);
+        125000.0 * (1000.0 / st.age_years.max(0.002)).powf(0.14) * star_lum.powf(0.25);
+
+    let palette_label = match palette_mode {
+        0 => "Hubble SHO",
+        2 => "Chandra / JWST",
+        _ => "True Color",
+    };
 
     SupernovaTelemetry {
         shock_radius_ly: st.shock_radius_ly,
@@ -435,11 +489,68 @@ pub fn compute_supernova_telemetry(
         world_shock_radius: st.world_shock_radius,
         shock_age_norm: st.shock_age_norm,
         regime_label: st.regime_label,
-        palette_label: if palette_mode == 1 {
-            "True Color"
-        } else {
-            "Hubble SHO"
-        },
+        palette_label,
+    }
+}
+
+struct LifecycleMorphology {
+    bipolar_power: f32,
+    jet_power: f32,
+    ring_strength: f32,
+    curtain_weight: f32,
+    dust_opacity: f32,
+    bok_density: f32,
+    star_luminosity: f32,
+    cavity_glow: f32,
+    filament_contrast: f32,
+    shell_thickness: f32,
+    emission_gain: f32,
+}
+
+fn eval_lifecycle_morphology(age_years: f64) -> LifecycleMorphology {
+    let n = age_to_norm(age_years);
+    let w_break = 1.0 - smoothstep(0.08, 0.34, n);
+    let w_ring = smoothstep(0.18, 0.52, n) * (1.0 - smoothstep(0.66, 0.80, n));
+    let w_crab = smoothstep(0.68, 0.82, n) * (1.0 - smoothstep(0.88, 0.95, n));
+    let w_veil = smoothstep(0.88, 0.97, n);
+    let w_rem = 1.0 - w_break - w_ring - w_crab - w_veil;
+
+    let bipolar_power =
+        (0.95 * w_break + 1.35 * w_ring + 0.55 * w_crab + 0.35 * w_veil + 0.65 * w_rem)
+            .clamp(0.25, 1.6) as f32;
+    let jet_power = (1.65 * w_break
+        + 0.55 * smoothstep(0.28, 0.60, n) * (1.0 - smoothstep(0.68, 0.88, n))
+        + 0.85 * w_crab)
+        .clamp(0.0, 1.8) as f32;
+    let ring_strength = (1.30 * w_break + 1.85 * w_ring + 0.20 * w_crab).clamp(0.0, 2.0) as f32;
+    let curtain_weight = (0.15 * w_ring + 0.15 * w_crab + 1.0 * w_veil).clamp(0.0, 1.0) as f32;
+
+    let star_luminosity =
+        (2.35 + (0.65 - 2.35) * smoothstep(0.10, 0.96, n) + 0.55 * w_crab).clamp(0.5, 2.5) as f32;
+    let cavity_glow = (1.15 * w_break + 0.85 * w_ring + 1.35 * w_crab + 0.25 * w_veil + 0.7 * w_rem)
+        .clamp(0.2, 1.8) as f32;
+    let dust_opacity =
+        (0.45 * w_break + 0.58 * w_ring + 0.55 * w_crab + 0.25 * w_veil + 0.50 * w_rem)
+            .clamp(0.2, 1.2) as f32;
+    let bok_density =
+        (0.35 * w_break + 0.45 * w_ring + 0.48 * w_crab + 0.15 * w_veil + 0.40 * w_rem)
+            .clamp(0.1, 1.0) as f32;
+    let filament_contrast = (1.35 + 0.28 * smoothstep(0.45, 0.96, n)).clamp(1.1, 1.7) as f32;
+    let shell_thickness = (0.95 + (0.58 - 0.95) * smoothstep(0.70, 0.97, n)).clamp(0.5, 1.2) as f32;
+    let emission_gain = (1.20 + 0.15 * smoothstep(0.75, 0.97, n)).clamp(1.0, 1.5) as f32;
+
+    LifecycleMorphology {
+        bipolar_power,
+        jet_power,
+        ring_strength,
+        curtain_weight,
+        dust_opacity,
+        bok_density,
+        star_luminosity,
+        cavity_glow,
+        filament_contrast,
+        shell_thickness,
+        emission_gain,
     }
 }
 
@@ -958,6 +1069,10 @@ pub struct SupernovaSim {
     active_preset: Option<usize>,
 
     shock_age: f32,
+    bipolar_power: f32,
+    jet_power: f32,
+    ring_strength: f32,
+    curtain_weight: f32,
     rt_turbulence: f32,
     dust_opacity: f32,
     hg_anisotropy: f32,
@@ -981,6 +1096,7 @@ pub struct SupernovaSim {
 
     paused: bool,
     auto_orbit: bool,
+    evolving: bool,
     sim_time: f32,
 
     camera: SupernovaCamera,
@@ -1009,6 +1125,10 @@ impl SupernovaSim {
         Self {
             active_preset: Some(0),
             shock_age: p.shock_age,
+            bipolar_power: p.bipolar_power,
+            jet_power: p.jet_power,
+            ring_strength: p.ring_strength,
+            curtain_weight: p.curtain_weight,
             rt_turbulence: p.rt_turbulence,
             dust_opacity: p.dust_opacity,
             hg_anisotropy: p.hg_anisotropy,
@@ -1030,12 +1150,28 @@ impl SupernovaSim {
             resolution_scale: 1.0,
             paused: false,
             auto_orbit: p.auto_orbit,
+            evolving: false,
             sim_time: 0.0,
             camera: SupernovaCamera::from_preset(p),
             pipeline,
             ubo,
             bind_group,
         }
+    }
+
+    fn apply_morphology_for_age(&mut self, age_years: f64) {
+        let m = eval_lifecycle_morphology(age_years);
+        self.bipolar_power = m.bipolar_power;
+        self.jet_power = m.jet_power;
+        self.ring_strength = m.ring_strength;
+        self.curtain_weight = m.curtain_weight;
+        self.dust_opacity = m.dust_opacity;
+        self.bok_density = m.bok_density;
+        self.star_luminosity = m.star_luminosity;
+        self.cavity_glow = m.cavity_glow;
+        self.filament_contrast = m.filament_contrast;
+        self.shell_thickness = m.shell_thickness;
+        self.emission_gain = m.emission_gain;
     }
 
     fn telemetry(&self) -> SupernovaTelemetry {
@@ -1121,6 +1257,12 @@ impl SupernovaSim {
                 self.emission_gain,
                 0.0,
             ],
+            morph_params: [
+                self.bipolar_power,
+                self.jet_power,
+                self.ring_strength,
+                self.curtain_weight,
+            ],
         }
     }
 }
@@ -1162,7 +1304,12 @@ impl Simulation for SupernovaSim {
     fn apply_preset(&mut self, index: usize) {
         if let Some(p) = PRESETS.get(index) {
             self.active_preset = Some(index);
+            self.evolving = false;
             self.shock_age = p.shock_age;
+            self.bipolar_power = p.bipolar_power;
+            self.jet_power = p.jet_power;
+            self.ring_strength = p.ring_strength;
+            self.curtain_weight = p.curtain_weight;
             self.rt_turbulence = p.rt_turbulence;
             self.dust_opacity = p.dust_opacity;
             self.hg_anisotropy = p.hg_anisotropy;
@@ -1196,17 +1343,37 @@ impl Simulation for SupernovaSim {
                         key: "paletteMode",
                         label: "Emission Palette",
                         kind: ControlKind::Segmented {
-                            options: &[(0, "Hubble SHO"), (1, "True Color")],
+                            options: &[(0, "Hubble SHO"), (1, "True Color"), (2, "Chandra / JWST")],
                         },
                     },
                     ControlItem {
-                        key: "shockAge",
+                        key: "shockAgeLog",
                         label: "Shock Expansion Age",
                         kind: ControlKind::Range {
-                            min: 150.0,
-                            max: 18000.0,
-                            step: 25.0,
-                            hints: Some(["150 yr (Young)", "18 kyr (Veil)"]),
+                            min: -3.30103,
+                            max: 4.25527,
+                            step: 0.01,
+                            hints: Some(["4.4 hr (Breakout)", "18 kyr (Veil)"]),
+                        },
+                    },
+                    ControlItem {
+                        key: "bipolarPower",
+                        label: "Bipolar Asymmetry",
+                        kind: ControlKind::Range {
+                            min: 0.0,
+                            max: 2.0,
+                            step: 0.05,
+                            hints: None,
+                        },
+                    },
+                    ControlItem {
+                        key: "jetPower",
+                        label: "Relativistic Jets",
+                        kind: ControlKind::Range {
+                            min: 0.0,
+                            max: 2.0,
+                            step: 0.05,
+                            hints: None,
                         },
                     },
                     ControlItem {
@@ -1376,7 +1543,9 @@ impl Simulation for SupernovaSim {
 
     fn get_f32(&self, key: &str) -> f32 {
         match key {
-            "shockAge" => self.shock_age,
+            "shockAgeLog" => self.shock_age.max(AGE_MIN_YR as f32).log10(),
+            "bipolarPower" => self.bipolar_power,
+            "jetPower" => self.jet_power,
             "rtTurbulence" => self.rt_turbulence,
             "expansionSpeed" => self.expansion_speed,
             "dustOpacity" => self.dust_opacity,
@@ -1396,7 +1565,14 @@ impl Simulation for SupernovaSim {
     fn set_f32(&mut self, key: &str, val: f32) -> bool {
         let mut reset_primary = true;
         match key {
-            "shockAge" => self.shock_age = val,
+            "shockAgeLog" => {
+                self.shock_age = 10.0_f32
+                    .powf(val)
+                    .clamp(AGE_MIN_YR as f32, AGE_MAX_YR as f32);
+                self.evolving = false;
+            }
+            "bipolarPower" => self.bipolar_power = val,
+            "jetPower" => self.jet_power = val,
             "rtTurbulence" => self.rt_turbulence = val,
             "expansionSpeed" => self.expansion_speed = val,
             "dustOpacity" => self.dust_opacity = val,
@@ -1452,13 +1628,21 @@ impl Simulation for SupernovaSim {
 
     fn format_value(&self, key: &str) -> String {
         match key {
-            "shockAge" => {
-                if self.shock_age >= 1000.0 {
+            "shockAgeLog" => {
+                if self.shock_age < 0.005 {
+                    format!("{:.1} hr", self.shock_age * 8766.0)
+                } else if self.shock_age < 0.25 {
+                    format!("{} d", (self.shock_age * 365.25).round().max(1.0) as i32)
+                } else if self.shock_age < 2.0 {
+                    format!("{:.2} yr", self.shock_age)
+                } else if self.shock_age >= 1000.0 {
                     format!("{:.2} kyr", self.shock_age / 1000.0)
                 } else {
                     format!("{} yr", self.shock_age.round() as i32)
                 }
             }
+            "bipolarPower" => format!("{:.2}", self.bipolar_power),
+            "jetPower" => format!("{:.2}", self.jet_power),
             "rtTurbulence" => format!("{:.2}", self.rt_turbulence),
             "expansionSpeed" => format!("{:.2}×", self.expansion_speed),
             "dustOpacity" => format!("{:.2}", self.dust_opacity),
@@ -1496,6 +1680,21 @@ impl Simulation for SupernovaSim {
         self.camera.fly_to(&PRESETS[idx], 1.0);
     }
 
+    fn trigger_special_action(&mut self) {
+        if self.evolving {
+            self.evolving = false;
+        } else {
+            self.evolving = true;
+            self.paused = false;
+            self.active_preset = None;
+            self.shock_age = AGE_MIN_YR as f32;
+            self.apply_morphology_for_age(AGE_MIN_YR);
+            if self.camera.distance < 5.0 {
+                self.camera.fly_to(&PRESETS[0], 1.0);
+            }
+        }
+    }
+
     fn hud_metadata(
         &self,
         assets: &SharedGpuAssets,
@@ -1504,11 +1703,14 @@ impl Simulation for SupernovaSim {
         max_samples: u32,
     ) -> HudMetadata {
         let tel = self.telemetry();
-        let preset_badge = self
-            .active_preset
-            .and_then(|i| PRESETS.get(i))
-            .map(|p| p.meta.full_name.to_string())
-            .unwrap_or_else(|| "Custom".to_string());
+        let preset_badge = if self.evolving {
+            "Evolving Lifecycle".to_string()
+        } else {
+            self.active_preset
+                .and_then(|i| PRESETS.get(i))
+                .map(|p| p.meta.full_name.to_string())
+                .unwrap_or_else(|| "Custom".to_string())
+        };
         let secondary_badge = if assets.sky_map_loaded {
             "4K Milky Way".to_string()
         } else {
@@ -1521,20 +1723,32 @@ impl Simulation for SupernovaSim {
         } else {
             format!("{} K", tel.central_temp_k.round() as i32)
         };
+        let radius_str = if tel.shock_radius_ly < 0.01 {
+            let au = tel.shock_radius_ly * LY_TO_AU;
+            if au >= 100.0 {
+                format!("{} AU", format_thousands(au.round() as i32))
+            } else {
+                format!("{au:.1} AU")
+            }
+        } else if tel.shock_radius_ly < 0.5 {
+            format!("{:.3} ly", tel.shock_radius_ly)
+        } else {
+            format!("{:.2} ly", tel.shock_radius_ly)
+        };
 
         HudMetadata {
-            brand_title: "SUPERNOVA REMNANT",
+            brand_title: "SUPERNOVA",
             preset_badge,
             secondary_badge,
             secondary_badge_warm: false,
             drawer_title: "NEBULA PHYSICS & OPTICS",
             drawer_subtitle: format!("{} · τ {:.2}", tel.palette_label, tel.optical_depth),
-            hint_text: "Drag to orbit · W/S fly through shell · Scroll zoom · Space 128× Still · H HUD",
+            hint_text: "Drag to orbit · W/S fly through · T Detonate & Evolve · Space 128× Still · H HUD",
             telemetry: [
                 TelemetryCell {
                     label: "SHOCK RADIUS",
                     unit: "R_sh",
-                    value: format!("{:.2} ly", tel.shock_radius_ly),
+                    value: radius_str,
                 },
                 TelemetryCell {
                     label: "EXPANSION VEL",
@@ -1565,20 +1779,40 @@ impl Simulation for SupernovaSim {
                     value: format!("{} · {}/{}", fps.round() as u32, sample_count, max_samples),
                 },
             ],
-            special_action: None,
+            special_action: Some(SpecialActionUi {
+                label: if self.evolving { "Stop" } else { "Detonate" },
+                key_hint: "T",
+                active: self.evolving,
+            }),
             orbit_toggle_label: "Orbit",
         }
     }
 
     fn step(&mut self, dt: f32, input: &SimInput) -> StepOutcome {
+        let mut reset_acc = false;
         if !self.paused {
-            self.sim_time += dt.clamp(0.0, 0.05);
+            let cdt = dt.clamp(0.0, 0.05);
+            self.sim_time += cdt;
+            if self.evolving {
+                let speed = self.expansion_speed.clamp(0.25, 2.5) as f64;
+                let end_norm = age_to_norm(EVOLVE_END_AGE_YR);
+                let next_norm = (age_to_norm(self.shock_age as f64)
+                    + (cdt as f64 * speed) / EVOLVE_DURATION_SEC as f64)
+                    .min(end_norm);
+                let next_age = norm_to_age(next_norm);
+                self.shock_age = next_age as f32;
+                self.apply_morphology_for_age(next_age);
+                if next_norm >= end_norm - 1e-4 {
+                    self.evolving = false;
+                }
+                reset_acc = true;
+            }
         }
         self.camera.update(dt, self.paused, self.auto_orbit, input);
         StepOutcome {
             camera_moved: self.camera.moved,
             sim_time: self.sim_time,
-            reset_accumulation: false,
+            reset_accumulation: reset_acc,
         }
     }
 

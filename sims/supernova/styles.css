@@ -1,4 +1,4 @@
-/* Theme & layout overrides for Supernova Remnant Simulator (shared HUD in ../../shared/ui/base.css) */
+/* Theme & layout overrides for Supernova Simulator (shared HUD in ../../shared/ui/base.css) */
 :root {
   --text-muted: rgba(203, 213, 225, 0.64);
   --slider-track-color: rgba(255, 255, 255, 0.24);
@@ -12,4 +12,15 @@
   --keycap-active-color: var(--accent-bright);
 
   --hud-pad: clamp(12px, 1.5dvw, 20px);
+}
+
+#btn-detonate[aria-pressed="true"] {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: rgba(251, 191, 36, 0.65);
+  color: #fde68a;
+}
+
+#btn-detonate[aria-pressed="true"] .keycap {
+  border-color: rgba(251, 191, 36, 0.52);
+  color: #fde68a;
 }

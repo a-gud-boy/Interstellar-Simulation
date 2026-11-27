@@ -263,24 +263,37 @@ console.log('\n=== 3. Wrenninge Multi-Octave Scattering & Optical Depth Monotoni
 console.log('\n=== 4. Presets, Telemetry & Origin-Safe Camera Fly-Through (r -> 0) ===');
 {
   const requiredStateKeys = [
-    'presetId', 'shockAge', 'rtTurbulence', 'dustOpacity', 'hgAnisotropy',
+    'presetId', 'shockAge', 'bipolarPower', 'jetPower', 'ringStrength', 'curtainWeight',
+    'rtTurbulence', 'dustOpacity', 'hgAnisotropy',
     'starLuminosity', 'paletteMode', 'filamentContrast', 'cavityGlow',
     'bokDensity', 'shellThickness', 'emissionGain', 'expansionSpeed',
     'exposure', 'bloomIntensity', 'anamorphicIntensity', 'skyIntensity',
-    'skyMode', 'skyRotation', 'quality', 'resolutionScale', 'paused', 'autoOrbit',
+    'skyMode', 'skyRotation', 'quality', 'resolutionScale', 'paused', 'autoOrbit', 'evolving',
   ];
-  const expectedOrder = ['crab', 'veil', 'hubble_sho', 'bok_globules', 'pulsar_cavity', 'flythrough'];
+  const expectedOrder = ['breakout', 'sn1987a', 'crab', 'veil', 'hubble_sho', 'pulsar_cathedral'];
   const actualOrder = PRESETS.map((p) => p.id);
   const init = createInitialState();
 
   assert(
-    DEFAULT_STATE.presetId === 'crab' &&
+    DEFAULT_STATE.presetId === 'breakout' &&
       requiredStateKeys.every((k) => k in DEFAULT_STATE && k in init) &&
       expectedOrder.every((id, idx) => actualOrder[idx] === id && PRESETS[idx].hotkey === String(idx + 1)) &&
       getPresetById('hubble_sho')?.params.paletteMode === 0 &&
-      getPresetById('crab')?.params.paletteMode === 1,
-    'Presets.js exports DEFAULT_STATE (crab) and all 6 presets in exact order 1..6',
+      getPresetById('breakout')?.params.paletteMode === 1 &&
+      getPresetById('pulsar_cathedral')?.params.paletteMode === 2,
+    'Presets.js exports DEFAULT_STATE (breakout) and all 6 presets in exact order 1..6 across 3 palettes',
     `order=[${actualOrder.join(', ')}]`
+  );
+
+  const stBreakout = evalSedovTaylor(0.002);
+  const telChandra = computeSupernovaTelemetry({ ...init, paletteMode: 2 });
+  assert(
+    stBreakout.regimeLabel === 'Shock Breakout' &&
+      stBreakout.shockRadiusLy > 0 &&
+      stBreakout.shockRadiusLy < 0.01 &&
+      telChandra.paletteLabel === 'Chandra / JWST',
+    'Shock Breakout epoch & Chandra / JWST palette telemetry evaluate cleanly',
+    `regime=${stBreakout.regimeLabel}, R=${stBreakout.shockRadiusLy.toExponential(2)} ly`
   );
 
   // Verify finite telemetry across all 6 presets
@@ -378,19 +391,19 @@ console.log('\n=== 5. Syntax, GLSL/WGSL Uniform Parity, Uniformity & Asset Contr
   }
 
   const fieldsEqual =
-    glslFields.length === 10 &&
-    wgslFields.length === 10 &&
+    glslFields.length === 11 &&
+    wgslFields.length === 11 &&
     glslFields.every((name, idx) => name === wgslFields[idx]);
   const expectedBytes = glslFields.length * 16;
 
   assert(
     fieldsEqual &&
-      expectedBytes === 160 &&
-      glRendererSrc.includes('Float32Array(40)') &&
-      glRendererSrc.includes('gl.bufferData(gl.UNIFORM_BUFFER, 160') &&
-      gpuRendererSrc.includes('new ArrayBuffer(160)') &&
-      gpuRendererSrc.includes("makeUbo('supernova-ubo', 160)"),
-    'GLSL & WGSL SupernovaUniforms match byte-for-byte (160 bytes / 10 vec4<f32> fields) and renderer UBO allocations',
+      expectedBytes === 176 &&
+      glRendererSrc.includes('Float32Array(44)') &&
+      glRendererSrc.includes('gl.bufferData(gl.UNIFORM_BUFFER, 176') &&
+      gpuRendererSrc.includes('new ArrayBuffer(176)') &&
+      gpuRendererSrc.includes("makeUbo('supernova-ubo', 176)"),
+    'GLSL & WGSL SupernovaUniforms match byte-for-byte (176 bytes / 11 vec4<f32> fields) and renderer UBO allocations',
     `fields=${glslFields.length}, bytes=${expectedBytes}`
   );
 

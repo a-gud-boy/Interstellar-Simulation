@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.1.4.0-beta] - 2026-11-28
+
+- **Full-Lifecycle Supernova Overhaul (WebGL2, WebGPU & Native Rust Desktop)**:
+  - Replaced the uniform remnant nebula with a logarithmic full-lifecycle core-collapse detonation (`0.0005 yr` / ~4.4 hr) through aged Sedov–Taylor remnant (`18,000 yr`), driven by a new **Detonate / Stop (`T`)** live ~22 s evolution sweep and sub-year to light-year telemetry (`AU` / `ly`).
+  - Added 3-octave Rayleigh–Taylor filament sculpting, turbulent boiling fireball with breakout dust sublimation and UV blast-wave shell, helical MHD bipolar jets with Mach bow-shock caps, SN 1987A clumpy beaded circumstellar ring, Chandra-style concentric synchrotron PWN torus, Veil folded silk shock curtains, forward blast-wave rim, and sculpted dark Bok pillars with Wrenninge multi-scattering rims.
+  - Added 6 lifecycle presets (`Shock Breakout`, `SN 1987A Ring`, `Crab Filament Shell`, `Veil Shock Curtains`, `Hubble SHO Pillars`, `Pulsar Cathedral`), live **Bipolar Asymmetry** (`bipolarPower`) and **Relativistic Jets** (`jetPower`) controls (176-byte UBO across GLSL, WGSL, and Rust), and a third **`Chandra / JWST`** composite spectral palette alongside **Hubble SHO** and **True Color**.
+  - Updated unified Observatory metadata (`shared/sims.json`, `desktop/src/sims/registry.rs`, `home/catalogData.js`), regenerated `home/previews/supernova.webp`, and bumped web + desktop app version to `0.1.4.0 beta`.
+
 ## [v0.1.3.1-beta] - 2026-11-27
 
 - Performance Roadmap Phase P1 (Shared Runtime & Canvas):

@@ -1,16 +1,22 @@
 /**
- * SupernovaPhysics.js — CPU astrophysical source of truth for the Volumetric
- * Multi-Scattering Supernova Remnant & Nebula Simulator:
- *  - Sedov–Taylor self-similar blast wave (R_sh = xi_0 * (E t^2 / rho_0)^(1/5))
+ * Physics.js — CPU astrophysical source of truth for the Full-Lifecycle
+ * Supernova & Volumetric Multi-Scattering Remnant Simulator:
+ *  - Logarithmic timeline from Shock Breakout (0.0005 yr ~ 4.4 hr) to old
+ *    Sedov-Taylor remnants (18,000 yr)
+ *  - Sedov-Taylor self-similar blast wave (R_sh = xi_0 * (E t^2 / rho_0)^(1/5))
  *    smoothly joined to young free-expansion ejecta kinematics (v_ej = sqrt(2E/M_ej))
- *  - Analytical shock velocity v_sh = dR_sh/dt and Rankine–Hugoniot post-shock temp
- *  - Normalized dual-lobe Henyey–Greenstein phase function (singularity-safe)
+ *  - Analytical shock velocity v_sh = dR_sh/dt and Rankine-Hugoniot post-shock temp
+ *  - Normalized dual-lobe Henyey-Greenstein phase function (singularity-safe)
  *  - Wrenninge 4-octave multiple scattering evaluator for optically thick dust/Bok knots
- *  - Multi-species radial ionization / dust density profiles, optical depth tau, & telemetry
+ *  - Lifecycle morphology interpolation & multi-species radial profiles
  */
 
 const PI = Math.PI;
 const INV_4_PI = 1.0 / (4.0 * PI);
+
+export const AGE_MIN_YR = 0.0005;
+export const AGE_MAX_YR = 18000.0;
+const INV_LOG_AGE_SPAN = 1.0 / Math.log(AGE_MAX_YR / AGE_MIN_YR);
 
 export const SEDOV_CONSTANTS = Object.freeze({
   XI_0: 1.1517,                      // Sedov-Taylor dimensionless constant for adiabatic gamma = 5/3
@@ -24,12 +30,17 @@ export const SEDOV_CONSTANTS = Object.freeze({
   M_EJ_G: 3.0 * 1.98847e33,          // Ejecta mass (3 M_sun)
   V_EJ_CMS: Math.sqrt((2.0 * 1.0e51) / (3.0 * 1.98847e33)), // ~5790 km/s free-expansion velocity
   LY_CM: 9.4607304725808e17,         // Light-year in cm
+  LY_TO_AU: 63241.077,               // Astronomical units per light-year
   YR_S: 31557600.0,                  // Julian year in seconds
   K_B: 1.380649e-16,                 // Boltzmann constant (erg / K)
 });
 
 export function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+function mix(a, b, t) {
+  return a + (b - a) * t;
 }
 
 function smoothstep(edge0, edge1, x) {
@@ -42,8 +53,132 @@ function gaussian(x, center, width) {
   return Math.exp(-Math.min(u * u, 40.0));
 }
 
+export function ageToNorm(ageYears) {
+  const age = clamp(
+    Number.isFinite(Number(ageYears)) ? Number(ageYears) : 0.002,
+    AGE_MIN_YR,
+    AGE_MAX_YR
+  );
+  return clamp(Math.log(age / AGE_MIN_YR) * INV_LOG_AGE_SPAN, 0.0, 1.0);
+}
+
+export function normToAge(norm) {
+  const t = clamp(Number.isFinite(Number(norm)) ? Number(norm) : 0.0, 0.0, 1.0);
+  return AGE_MIN_YR * Math.pow(AGE_MAX_YR / AGE_MIN_YR, t);
+}
+
+export function formatShockAge(ageYears) {
+  const v = Number(ageYears);
+  if (!Number.isFinite(v) || v <= 0) return '--';
+  if (v < 0.005) return `${(v * 8766.0).toFixed(1)} hr`;
+  if (v < 0.25) return `${Math.max(1, Math.round(v * 365.25))} d`;
+  if (v < 2.0) return `${v.toFixed(2)} yr`;
+  if (v < 1000.0) return `${Math.round(v)} yr`;
+  return `${(v / 1000.0).toFixed(2)} kyr`;
+}
+
+export function formatShockRadius(radiusLy) {
+  const r = Number(radiusLy);
+  if (!Number.isFinite(r) || r <= 0) return '--';
+  if (r < 0.01) {
+    const au = r * SEDOV_CONSTANTS.LY_TO_AU;
+    if (au >= 100.0) return `${Math.round(au).toLocaleString('en-US')} AU`;
+    return `${au.toFixed(1)} AU`;
+  }
+  if (r < 0.5) return `${r.toFixed(3)} ly`;
+  return `${r.toFixed(2)} ly`;
+}
+
 /**
- * Evaluates Sedov–Taylor self-similar blast-wave kinematics smoothly transitioned from
+ * Smoothly interpolates morphology and radiative parameters across the supernova
+ * lifecycle for live Detonate / Evolve playback (from 0.0005 yr to 18,000 yr).
+ *
+ * @param {number} ageYears
+ */
+export function evalLifecycleMorphology(ageYears) {
+  const n = ageToNorm(ageYears);
+
+  // Key epochs along log timeline:
+  //   0.0005 yr (n=0.00) -> Breakout (n=0.08) -> SN1987A (n=0.64) -> Crab (n=0.83) -> Veil (n=0.97)
+  const wBreak = 1.0 - smoothstep(0.08, 0.34, n);
+  const wRing = smoothstep(0.18, 0.52, n) * (1.0 - smoothstep(0.66, 0.80, n));
+  const wCrab = smoothstep(0.68, 0.82, n) * (1.0 - smoothstep(0.88, 0.95, n));
+  const wVeil = smoothstep(0.88, 0.97, n);
+
+  const bipolarPower = clamp(
+    0.95 * wBreak + 1.35 * wRing + 0.55 * wCrab + 0.35 * wVeil + 0.65 * (1.0 - wBreak - wRing - wCrab - wVeil),
+    0.25,
+    1.6
+  );
+  const jetPower = clamp(
+    1.65 * wBreak + 0.55 * smoothstep(0.28, 0.60, n) * (1.0 - smoothstep(0.68, 0.88, n)) + 0.85 * wCrab,
+    0.0,
+    1.8
+  );
+  const ringStrength = clamp(
+    1.30 * wBreak + 1.85 * wRing + 0.20 * wCrab,
+    0.0,
+    2.0
+  );
+  const curtainWeight = clamp(
+    0.15 * wRing + 0.15 * wCrab + 1.0 * wVeil,
+    0.0,
+    1.0
+  );
+
+  const starLuminosity = clamp(
+    mix(2.35, 0.65, smoothstep(0.10, 0.96, n)) + 0.55 * wCrab,
+    0.5,
+    2.5
+  );
+  const cavityGlow = clamp(
+    1.15 * wBreak + 0.85 * wRing + 1.35 * wCrab + 0.25 * wVeil + 0.7 * (1.0 - wBreak - wRing - wCrab - wVeil),
+    0.2,
+    1.8
+  );
+  const dustOpacity = clamp(
+    0.45 * wBreak + 0.58 * wRing + 0.55 * wCrab + 0.25 * wVeil + 0.50 * (1.0 - wBreak - wRing - wCrab - wVeil),
+    0.2,
+    1.2
+  );
+  const bokDensity = clamp(
+    0.35 * wBreak + 0.45 * wRing + 0.48 * wCrab + 0.15 * wVeil + 0.40 * (1.0 - wBreak - wRing - wCrab - wVeil),
+    0.1,
+    1.0
+  );
+  const filamentContrast = clamp(
+    1.35 + 0.28 * smoothstep(0.45, 0.96, n),
+    1.1,
+    1.7
+  );
+  const shellThickness = clamp(
+    mix(0.95, 0.58, smoothstep(0.70, 0.97, n)),
+    0.5,
+    1.2
+  );
+  const emissionGain = clamp(
+    1.20 + 0.15 * smoothstep(0.75, 0.97, n),
+    1.0,
+    1.5
+  );
+
+  return {
+    bipolarPower,
+    jetPower,
+    ringStrength,
+    curtainWeight,
+    dustOpacity,
+    bokDensity,
+    starLuminosity,
+    cavityGlow,
+    filamentContrast,
+    shellThickness,
+    emissionGain,
+  };
+}
+
+/**
+ * Evaluates Sedov-Taylor self-similar blast-wave kinematics smoothly transitioned from
  * early free-expansion ejecta:
  *   R_free(t) = v_ej * t
  *   R_ST(t)   = xi_0 * (E * t^2 / rho_0)^(1/5)
@@ -53,8 +188,8 @@ function gaussian(x, center, width) {
  * @param {number} ageYears Remnant age in years
  * @param {{ energyScale?: number, densityScale?: number }} [opts]
  */
-export function evalSedovTaylor(ageYears = 970.0, opts = {}) {
-  const ageYr = Math.max(1.0, Number.isFinite(Number(ageYears)) ? Number(ageYears) : 970.0);
+export function evalSedovTaylor(ageYears = 0.002, opts = {}) {
+  const ageYr = Math.max(1e-4, Number.isFinite(Number(ageYears)) ? Number(ageYears) : 0.002);
   const energyScale = clamp(Number.isFinite(Number(opts.energyScale)) ? Number(opts.energyScale) : 1.0, 0.1, 10.0);
   const densityScale = clamp(Number.isFinite(Number(opts.densityScale)) ? Number(opts.densityScale) : 1.0, 0.1, 10.0);
 
@@ -77,17 +212,19 @@ export function evalSedovTaylor(ageYears = 970.0, opts = {}) {
   const shockRadiusLy = rShockCm / SEDOV_CONSTANTS.LY_CM;
   const expansionVelocityKms = vShockCms / 1.0e5;
 
-  // Rankine–Hugoniot strong-shock post-shock ion/electron mean temperature (gamma = 5/3)
+  // Rankine-Hugoniot strong-shock post-shock ion/electron mean temperature (gamma = 5/3)
   const shockTempK =
     (3.0 / 16.0) * ((SEDOV_CONSTANTS.MU_IONIZED * SEDOV_CONSTANTS.M_H_G) / SEDOV_CONSTANTS.K_B) * vShockCms * vShockCms;
 
-  // Visual world-space radius scaled gently across [2.2, 5.4] so presets stay well-framed
-  const worldShockRadius = clamp(1.42 * Math.pow(Math.max(shockRadiusLy, 0.05), 0.34), 2.2, 5.4);
-  const shockAgeNorm = clamp(Math.log(ageYr / 150.0) / Math.log(18000.0 / 150.0), 0.0, 1.0);
+  const shockAgeNorm = ageToNorm(ageYr);
+  // Smooth monotonically expanding world-space radius across [1.55 .. 4.60]
+  const worldShockRadius = clamp(1.55 + 3.05 * Math.pow(shockAgeNorm, 0.72), 1.55, 4.65);
 
   const ratio = rFree / Math.max(rST, 1.0);
   let regimeLabel = 'Sedov–Taylor';
-  if (ratio < 0.65) {
+  if (ageYr < 0.05) {
+    regimeLabel = 'Shock Breakout';
+  } else if (ratio < 0.65) {
     regimeLabel = 'Free Expansion';
   } else if (ratio < 1.65) {
     regimeLabel = 'Transition';
@@ -109,7 +246,7 @@ export function evalSedovTaylor(ageYears = 970.0, opts = {}) {
 }
 
 /**
- * Single-lobe normalized Henyey–Greenstein phase function with strict singularity guard:
+ * Single-lobe normalized Henyey-Greenstein phase function with strict singularity guard:
  *   Phi(mu, g) = (1 - g^2) / (4 * pi * (1 + g^2 - 2*g*mu)^(3/2))
  * Integral over 4*pi steradians equals 1.0 identically for all g in [-0.95, 0.95].
  *
@@ -125,7 +262,7 @@ export function evalHG(cosTheta, g = 0.0) {
 }
 
 /**
- * Normalized dual-lobe Henyey–Greenstein phase function combining primary forward peak
+ * Normalized dual-lobe Henyey-Greenstein phase function combining primary forward peak
  * with a gentle backscatter/isotropic secondary lobe (weights sum to 1.0):
  *   Phi_dual(mu, g) = 0.82 * Phi_HG(mu, g1) + 0.18 * Phi_HG(mu, g2)
  *
@@ -182,31 +319,31 @@ export function evalWrenningeMultiScatter(tauShadow, cosTheta, g = 0.58) {
  */
 export function evalSpeciesProfile(rNorm, state = {}) {
   const u = Math.max(0.0, Number.isFinite(Number(rNorm)) ? Number(rNorm) : 0.0);
-  const dustOpacity = clamp(Number(state.dustOpacity ?? 0.72), 0.0, 3.0);
-  const bokDensity = clamp(Number(state.bokDensity ?? 0.55), 0.0, 2.5);
+  const dustOpacity = clamp(Number(state.dustOpacity ?? 0.55), 0.0, 3.0);
+  const bokDensity = clamp(Number(state.bokDensity ?? 0.48), 0.0, 2.5);
   const cavityGlow = clamp(Number(state.cavityGlow ?? 1.25), 0.0, 3.0);
   const shellThickness = clamp(Number(state.shellThickness ?? 1.0), 0.3, 2.5);
-  const emissionGain = clamp(Number(state.emissionGain ?? 1.15), 0.1, 3.0);
+  const emissionGain = clamp(Number(state.emissionGain ?? 1.20), 0.1, 3.0);
 
   const pwnCavity =
-    smoothstep(0.03, 0.14, u) * (1.0 - smoothstep(0.36, 0.64, u)) * cavityGlow;
-  const oiiiShell = gaussian(u, 0.72, 0.21 * shellThickness);
-  const hAlphaShell = gaussian(u, 0.96, 0.15 * shellThickness);
-  const siiRidge = gaussian(u, 1.09, 0.11 * shellThickness);
+    smoothstep(0.04, 0.16, u) * (1.0 - smoothstep(0.32, 0.58, u)) * cavityGlow;
+  const oiiiShell = gaussian(u, 0.68, 0.16 * shellThickness);
+  const hAlphaShell = gaussian(u, 0.92, 0.14 * shellThickness);
+  const siiRidge = gaussian(u, 1.04, 0.10 * shellThickness);
 
   const dustBand =
-    smoothstep(0.76, 1.04, u) * (1.0 - smoothstep(1.34, 1.66, u));
+    smoothstep(0.76, 1.00, u) * (1.0 - smoothstep(1.22, 1.44, u));
   const dustEnvelope = dustBand * dustOpacity;
   const bokBand =
-    smoothstep(0.86, 1.06, u) * (1.0 - smoothstep(1.32, 1.58, u));
+    smoothstep(0.82, 1.02, u) * (1.0 - smoothstep(1.18, 1.38, u));
   const bokEnvelope = bokBand * dustOpacity * bokDensity;
 
-  // Effective radial extinction & scattering coefficients matching mean shader density
+  // Effective radial extinction & scattering coefficients matching sculpted filament/pillar densities
   const gasDensity =
-    (0.18 * pwnCavity + 0.55 * oiiiShell + 0.95 * hAlphaShell + 0.65 * siiRidge) *
+    (0.14 * pwnCavity + 0.45 * oiiiShell + 0.85 * hAlphaShell + 0.58 * siiRidge) *
     emissionGain;
-  const sigmaScat = 0.08 * gasDensity + 0.52 * dustEnvelope + 0.42 * bokEnvelope;
-  const sigmaAbs = 0.02 * gasDensity + 0.26 * dustEnvelope + 0.48 * bokEnvelope;
+  const sigmaScat = 0.06 * gasDensity + 0.36 * dustEnvelope + 0.38 * bokEnvelope;
+  const sigmaAbs = 0.02 * gasDensity + 0.24 * dustEnvelope + 0.52 * bokEnvelope;
   const sigmaExt = sigmaScat + sigmaAbs;
 
   return {
@@ -224,7 +361,7 @@ export function evalSpeciesProfile(rNorm, state = {}) {
 
 /**
  * Integrates mean radial extinction from the central remnant core (r = 0) through the outer
- * dust boundary (r = 1.68 * R_shock) to estimate characteristic optical depth tau and transmittance.
+ * shock/dust boundary (r = 1.68 * R_shock) to estimate characteristic optical depth tau and transmittance.
  *
  * @param {object} [state]
  * @returns {{ opticalDepth: number, transmittance: number }}
@@ -251,34 +388,25 @@ export function evalSupernovaCentralTempK(ageYears, starLuminosity = 1.4) {
   const lum = clamp(Number(starLuminosity ?? 1.4), 0.05, 5.0);
   return (
     125000.0 *
-    Math.pow(1000.0 / Math.max(ageYears, 50.0), 0.28) *
+    Math.pow(1000.0 / Math.max(ageYears, 0.002), 0.14) *
     Math.pow(lum, 0.25)
   );
 }
+
+const PALETTE_LABELS = Object.freeze(['Hubble SHO', 'True Color', 'Chandra / JWST']);
 
 /**
  * Computes live HUD and shader telemetry from current simulator state.
  *
  * @param {object} [state]
- * @returns {{
- *   shockRadiusLy: number,
- *   expansionVelocityKms: number,
- *   opticalDepth: number,
- *   transmittance: number,
- *   centralTempK: number,
- *   shockTempK: number,
- *   worldShockRadius: number,
- *   shockAgeNorm: number,
- *   regimeLabel: string,
- *   paletteLabel: string
- * }}
  */
 export function computeSupernovaTelemetry(state = {}) {
   const st = evalSedovTaylor(state.shockAge);
   const { opticalDepth, transmittance } = estimateOpticalDepth(state);
   const centralTempK = evalSupernovaCentralTempK(st.ageYears, state.starLuminosity);
 
-  const paletteMode = (Number(state.paletteMode) | 0) === 1 ? 1 : 0;
+  const rawPal = Number(state.paletteMode) | 0;
+  const paletteIdx = clamp(rawPal, 0, 2);
 
   return {
     shockRadiusLy: st.shockRadiusLy,
@@ -290,6 +418,6 @@ export function computeSupernovaTelemetry(state = {}) {
     worldShockRadius: st.worldShockRadius,
     shockAgeNorm: st.shockAgeNorm,
     regimeLabel: st.regimeLabel,
-    paletteLabel: paletteMode === 1 ? 'True Color' : 'Hubble SHO',
+    paletteLabel: PALETTE_LABELS[paletteIdx] || 'True Color',
   };
 }

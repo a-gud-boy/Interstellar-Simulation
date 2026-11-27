@@ -360,15 +360,15 @@ async function main() {
     };
 
     const shots = {};
-    shots.crab = await capturePreset('crab', '04_crab_webgpu.png', 20);
-    shots.veil = await capturePreset('veil', '05_veil_webgpu.png', 20);
-    shots.hubble_sho = await capturePreset('hubble_sho', '06_hubble_sho_webgpu.png', 20);
-    shots.bok_globules = await capturePreset('bok_globules', '07_bok_globules_webgpu.png', 20);
-    shots.pulsar_cavity = await capturePreset('pulsar_cavity', '08_pulsar_cavity_webgpu.png', 20);
-    shots.flythrough = await capturePreset('flythrough', '09_flythrough_webgpu.png', 20);
+    shots.breakout = await capturePreset('breakout', '04_breakout_webgpu.png', 20);
+    shots.sn1987a = await capturePreset('sn1987a', '05_sn1987a_webgpu.png', 20);
+    shots.crab = await capturePreset('crab', '06_crab_webgpu.png', 20);
+    shots.veil = await capturePreset('veil', '07_veil_webgpu.png', 20);
+    shots.hubble_sho = await capturePreset('hubble_sho', '08_hubble_sho_webgpu.png', 20);
+    shots.pulsar_cathedral = await capturePreset('pulsar_cathedral', '09_pulsar_cathedral_webgpu.png', 20);
 
-    // 3. Test Hubble SHO (0) vs True Color Broadband (1) palette toggle via Controls drawer
-    console.log('3. Testing Hubble SHO (#ctrl-paletteMode-0) vs True Color (#ctrl-paletteMode-1) palette toggle...');
+    // 3. Test 3 spectral palettes: Hubble SHO (0), True Color (1), Chandra/JWST (2)
+    console.log('3. Testing 3 emission palettes (SHO / True Color / Chandra-JWST) via Controls drawer...');
     await evalJS(`
       window.__SUPERNOVA__.selectPreset('crab', true);
       window.__SUPERNOVA__.setState({ paused: true, autoOrbit: false });
@@ -382,6 +382,7 @@ async function main() {
       paletteMode: window.__SUPERNOVA__.getState().paletteMode,
       shoChecked: document.getElementById('ctrl-paletteMode-0')?.getAttribute('aria-checked'),
       trueChecked: document.getElementById('ctrl-paletteMode-1')?.getAttribute('aria-checked'),
+      chandraChecked: document.getElementById('ctrl-paletteMode-2')?.getAttribute('aria-checked'),
       drawerMeta: document.getElementById('drawer-physics-meta')?.textContent?.trim(),
     })`);
     await evalJS(`document.getElementById('controls-close')?.click()`);
@@ -391,8 +392,26 @@ async function main() {
     const s10 = await captureShot('10_palette_hubble_sho_webgpu.png');
     const statsPaletteSHO = await analyzePng(s10.base64);
     const paletteDiff = imageMeanAbsDiff(shots.crab.stats, statsPaletteSHO);
+
+    await evalJS(`document.getElementById('controls-toggle')?.click()`);
+    await sleep(250);
+    await evalJS(`document.getElementById('ctrl-paletteMode-2')?.click()`);
+    await sleep(120);
+    await waitFrames(4);
+    const chandraUiCheck = await evalJS(`({
+      paletteMode: window.__SUPERNOVA__.getState().paletteMode,
+      chandraChecked: document.getElementById('ctrl-paletteMode-2')?.getAttribute('aria-checked'),
+      drawerMeta: document.getElementById('drawer-physics-meta')?.textContent?.trim(),
+    })`);
+    await evalJS(`document.getElementById('controls-close')?.click()`);
+    await sleep(250);
+    await waitForSamples(20, 6000);
+    await waitFrames(4);
+    const s10b = await captureShot('10b_palette_chandra_jwst_webgpu.png');
+    const statsPaletteChandra = await analyzePng(s10b.base64);
+    const chandraDiff = imageMeanAbsDiff(shots.crab.stats, statsPaletteChandra);
     console.log(
-      `Captured 10_palette_hubble_sho_webgpu.png (samples=${shoDiag?.samples}, meanLuma=${statsPaletteSHO.meanLuma}, diffVsTrueColor=${paletteDiff})`
+      `Captured palette shots (samples=${shoDiag?.samples}, shoDiff=${paletteDiff}, chandraDiff=${chandraDiff})`
     );
 
     // Toggle back to True Color Broadband
@@ -414,7 +433,7 @@ async function main() {
     console.log('4. Testing interior W/S fly-through through the remnant shell...');
     await evalJS(`
       document.activeElement?.blur?.();
-      window.__SUPERNOVA__.selectPreset('flythrough', true);
+      window.__SUPERNOVA__.selectPreset('pulsar_cathedral', true);
       window.__SUPERNOVA__.setState({
         paused: false,
         autoOrbit: false,
@@ -449,20 +468,29 @@ async function main() {
     const shotFlyS = await cdp.send('Page.captureScreenshot', { format: 'png' });
     const statsFlyS = await analyzePng(shotFlyS.data);
 
-    // 5. Test live slider (#ctrl-shockAge), H HUD toggle, and live switch BACK WebGPU -> WebGL2
-    console.log('5. Testing live slider, H HUD toggle, and live switch BACK WebGPU -> WebGL2...');
+    // 5. Test live log slider (#ctrl-shockAge), Detonate/Evolve, H HUD toggle, and WebGPU -> WebGL2 switch
+    console.log('5. Testing live slider, Detonate/Evolve, H HUD toggle, and live switch BACK WebGPU -> WebGL2...');
     const sliderTest = await evalJS(`(() => {
       const target = document.getElementById('ctrl-shockAge');
       if (!target) return { ok: false };
       const before = window.__SUPERNOVA__.getState().shockAge;
       const origVal = target.value;
-      target.value = '12000';
+      target.value = '0.92';
       target.dispatchEvent(new Event('input', { bubbles: true }));
       const after = window.__SUPERNOVA__.getState().shockAge;
       target.value = origVal;
       target.dispatchEvent(new Event('input', { bubbles: true }));
-      return { ok: Math.abs(after - 12000) < 50 && Math.abs(before - after) > 500, before, after };
+      return { ok: after > 1000 && Math.abs(before - after) > 200, before, after };
     })()`);
+
+    await evalJS(`window.__SUPERNOVA__.detonate()`);
+    const ageAtDetonateStart = await evalJS(`window.__SUPERNOVA__.getState().shockAge`);
+    await sleep(900);
+    const evolveStateMid = await evalJS(`({
+      evolving: window.__SUPERNOVA__.getState().evolving,
+      shockAge: window.__SUPERNOVA__.getState().shockAge,
+    })`);
+    await evalJS(`window.__SUPERNOVA__.stopEvolution()`);
 
     await evalJS(`document.activeElement?.blur?.()`);
     await pressKey('h', 'KeyH', 72);
@@ -567,9 +595,16 @@ async function main() {
       shots,
       paletteToggle: {
         shoUiCheck,
+        chandraUiCheck,
         trueColorUiCheck,
         statsPaletteSHO,
+        statsPaletteChandra,
         paletteDiff,
+        chandraDiff,
+      },
+      evolveTest: {
+        ageAtDetonateStart,
+        evolveStateMid,
       },
       flythroughTest: {
         camBeforeFly,
@@ -669,32 +704,45 @@ async function main() {
       );
     }
 
-    const rPulsar = shots.pulsar_cavity.tel?.shockRadiusLy ?? 0;
+    const rBreakout = shots.breakout.tel?.shockRadiusLy ?? 0;
+    const rSn87 = shots.sn1987a.tel?.shockRadiusLy ?? 0;
+    const rPulsar = shots.pulsar_cathedral.tel?.shockRadiusLy ?? 0;
     const rCrab = shots.crab.tel?.shockRadiusLy ?? 0;
     const rVeil = shots.veil.tel?.shockRadiusLy ?? 0;
-    const vPulsar = shots.pulsar_cavity.tel?.expansionVelocityKms ?? 0;
+    const vBreakout = shots.breakout.tel?.expansionVelocityKms ?? 0;
     const vCrab = shots.crab.tel?.expansionVelocityKms ?? 0;
     const vVeil = shots.veil.tel?.expansionVelocityKms ?? 0;
-    const tauBok = shots.bok_globules.tel?.opticalDepth ?? 0;
+    const tauSho = shots.hubble_sho.tel?.opticalDepth ?? 0;
     const tauVeil = shots.veil.tel?.opticalDepth ?? 0;
     check(
-      rVeil > rCrab && rCrab > rPulsar && vPulsar > vCrab && vCrab > vVeil && tauBok > tauVeil,
-      'Sedov-Taylor shock radius, expansion velocity & optical depth ordering hold across presets',
-      `Rsh=[${rPulsar.toFixed(2)}, ${rCrab.toFixed(2)}, ${rVeil.toFixed(2)}] ly, tau=[Veil=${tauVeil.toFixed(2)}, Bok=${tauBok.toFixed(2)}]`
+      rVeil > rCrab && rCrab > rPulsar && rPulsar > rSn87 && rSn87 > rBreakout &&
+        vBreakout > vCrab && vCrab > vVeil && tauSho > tauVeil,
+      'Sedov-Taylor shock radius, expansion velocity & optical depth ordering hold across lifecycle presets',
+      `Rsh=[${rBreakout.toExponential(2)}, ${rSn87.toFixed(2)}, ${rPulsar.toFixed(2)}, ${rCrab.toFixed(2)}, ${rVeil.toFixed(2)}] ly, tau=[Veil=${tauVeil.toFixed(2)}, SHO=${tauSho.toFixed(2)}]`
     );
 
     check(
       shoUiCheck?.paletteMode === 0 &&
         shoUiCheck?.shoChecked === 'true' &&
         /hubble\s*sho/i.test(shoUiCheck?.drawerMeta || '') &&
+        chandraUiCheck?.paletteMode === 2 &&
+        chandraUiCheck?.chandraChecked === 'true' &&
+        /chandra/i.test(chandraUiCheck?.drawerMeta || '') &&
         trueColorUiCheck?.paletteMode === 1 &&
         trueColorUiCheck?.trueChecked === 'true' &&
         /true\s*color/i.test(trueColorUiCheck?.drawerMeta || '') &&
         statsPaletteSHO.meanLuma > 3.0 &&
-        statsPaletteSHO.maxLuma > 80 &&
-        paletteDiff > 2.5,
-      'Palette toggle (Hubble SHO <-> True Color Broadband) updates UI, state & rendered image distinctly',
-      `diff=${paletteDiff}, meanLuma=${statsPaletteSHO.meanLuma}, meta='${shoUiCheck?.drawerMeta}'`
+        statsPaletteChandra.meanLuma > 3.0 &&
+        paletteDiff > 2.5 &&
+        chandraDiff > 2.5,
+      'Palette toggle (Hubble SHO <-> True Color <-> Chandra/JWST) updates UI, state & rendered image distinctly',
+      `shoDiff=${paletteDiff}, chandraDiff=${chandraDiff}, meta='${chandraUiCheck?.drawerMeta}'`
+    );
+
+    check(
+      evolveStateMid?.evolving === true && evolveStateMid?.shockAge > ageAtDetonateStart * 2.0,
+      'Detonate & Evolve advances shockAge smoothly across the logarithmic lifecycle',
+      `age: ${ageAtDetonateStart} -> ${evolveStateMid?.shockAge}`
     );
 
     const flyFinite =

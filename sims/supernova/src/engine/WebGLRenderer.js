@@ -125,11 +125,11 @@ export class WebGLRenderer {
       supernova: this._createProgram('supernova', FULLSCREEN_VERT, SUPERNOVA_FRAG),
     };
 
-    // Locked 160-byte std140 UBO matching SupernovaUniforms
-    this._supernovaF32 = new Float32Array(40);
+    // Locked 176-byte std140 UBO matching SupernovaUniforms
+    this._supernovaF32 = new Float32Array(44);
     this.supernovaUniformBuf = gl.createBuffer();
     gl.bindBuffer(gl.UNIFORM_BUFFER, this.supernovaUniformBuf);
-    gl.bufferData(gl.UNIFORM_BUFFER, 160, gl.DYNAMIC_DRAW);
+    gl.bufferData(gl.UNIFORM_BUFFER, 176, gl.DYNAMIC_DRAW);
     gl.bindBuffer(gl.UNIFORM_BUFFER, null);
 
     if (this.programs.supernova) {
@@ -488,10 +488,15 @@ export class WebGLRenderer {
     f[34] = centralTempK;
     f[35] = isProgressive ? 1.0 : 0.0;
 
-    f[36] = Number.isFinite(state.bokDensity) ? state.bokDensity : 0.55;
-    f[37] = Number.isFinite(state.shellThickness) ? state.shellThickness : 1.00;
-    f[38] = Number.isFinite(state.emissionGain) ? state.emissionGain : 1.15;
+    f[36] = Number.isFinite(state.bokDensity) ? state.bokDensity : 0.35;
+    f[37] = Number.isFinite(state.shellThickness) ? state.shellThickness : 0.95;
+    f[38] = Number.isFinite(state.emissionGain) ? state.emissionGain : 1.20;
     f[39] = 0.0;
+
+    f[40] = Number.isFinite(state.bipolarPower) ? state.bipolarPower : 0.95;
+    f[41] = Number.isFinite(state.jetPower) ? state.jetPower : 1.60;
+    f[42] = Number.isFinite(state.ringStrength) ? state.ringStrength : 1.35;
+    f[43] = Number.isFinite(state.curtainWeight) ? state.curtainWeight : 0.0;
 
     const gl = this.gl;
     gl.bindBuffer(gl.UNIFORM_BUFFER, this.supernovaUniformBuf);

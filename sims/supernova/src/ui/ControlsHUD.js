@@ -1,7 +1,14 @@
 /**
  * ControlsHUD.js — Observatory HUD, compact supernova blast-wave telemetry bar,
- * preset/transport dock, and collapsible Astrophysics & Optics drawer.
+ * preset/transport dock (including Detonate & Evolve), and Astrophysics & Optics drawer.
  */
+
+import {
+  ageToNorm,
+  normToAge,
+  formatShockAge,
+  formatShockRadius,
+} from '../engine/Physics.js';
 
 const CONTROL_SECTIONS = [
   {
@@ -16,17 +23,39 @@ const CONTROL_SECTIONS = [
         options: [
           { value: 0, label: 'Hubble SHO' },
           { value: 1, label: 'True Color' },
+          { value: 2, label: 'Chandra / JWST' },
         ],
       },
       {
         type: 'range',
         key: 'shockAge',
         label: 'Shock Expansion Age',
-        min: 150,
-        max: 18000,
-        step: 25,
-        hints: ['150 yr (Young)', '18 kyr (Veil)'],
-        format: (v) => (v >= 1000 ? `${(v / 1000).toFixed(2)} kyr` : `${Math.round(v)} yr`),
+        min: 0.0,
+        max: 1.0,
+        step: 0.002,
+        scale: 'log',
+        toSlider: ageToNorm,
+        fromSlider: normToAge,
+        hints: ['4.4 hr (Breakout)', '18 kyr (Veil)'],
+        format: formatShockAge,
+      },
+      {
+        type: 'range',
+        key: 'bipolarPower',
+        label: 'Bipolar Asymmetry',
+        min: 0.0,
+        max: 2.0,
+        step: 0.05,
+        format: (v) => v.toFixed(2),
+      },
+      {
+        type: 'range',
+        key: 'jetPower',
+        label: 'Relativistic Jets',
+        min: 0.0,
+        max: 2.0,
+        step: 0.05,
+        format: (v) => v.toFixed(2),
       },
       {
         type: 'range',
@@ -195,14 +224,16 @@ const CONTROL_SECTIONS = [
   },
 ];
 
-function syncRangeVisuals(input, valueEl, format) {
-  const numeric = Number(input.value);
-  const formatted = format(numeric);
+function syncRangeVisuals(input, valueEl, spec) {
+  const sliderNumeric = Number(input.value);
+  const physicalVal = spec.fromSlider ? spec.fromSlider(sliderNumeric) : sliderNumeric;
+  const formatted = spec.format(physicalVal);
   input.style.setProperty('--attr-min', input.min || '0');
   input.style.setProperty('--attr-max', input.max || '1');
-  input.style.setProperty('--control-value', String(numeric));
+  input.style.setProperty('--control-value', String(sliderNumeric));
   input.setAttribute('aria-valuetext', formatted);
   valueEl.textContent = formatted;
+  return physicalVal;
 }
 
 function compactPresetLabel(preset, fallbackId) {
@@ -256,6 +287,8 @@ export function createHUD({
 
   const btnPlayPause = document.getElementById('btn-play-pause');
   const labelPlayPause = document.getElementById('label-play-pause');
+  const btnDetonate = document.getElementById('btn-detonate');
+  const labelDetonate = document.getElementById('label-detonate');
   const btnAutoOrbit = document.getElementById('btn-auto-orbit');
   const btnResetCamera = document.getElementById('btn-reset-camera');
   const btnScreenshot = document.getElementById('btn-screenshot');
@@ -337,13 +370,14 @@ export function createHUD({
           input.max = String(spec.max);
           input.step = String(spec.step);
 
-          const initialVal = state[spec.key] ?? spec.min;
-          input.value = String(initialVal);
-          syncRangeVisuals(input, valueEl, spec.format);
+          const initialPhysical = state[spec.key] ?? spec.min;
+          const initialSlider = spec.toSlider ? spec.toSlider(initialPhysical) : initialPhysical;
+          input.value = String(initialSlider);
+          syncRangeVisuals(input, valueEl, spec);
 
           input.addEventListener('input', () => {
-            syncRangeVisuals(input, valueEl, spec.format);
-            onParamChange(spec.key, Number(input.value));
+            const nextVal = syncRangeVisuals(input, valueEl, spec);
+            onParamChange(spec.key, nextVal);
           });
 
           row.appendChild(input);
@@ -363,8 +397,9 @@ export function createHUD({
             type: 'range',
             set(val) {
               if (val === undefined || val === null) return;
-              input.value = String(val);
-              syncRangeVisuals(input, valueEl, spec.format);
+              const sliderVal = spec.toSlider ? spec.toSlider(val) : val;
+              input.value = String(sliderVal);
+              syncRangeVisuals(input, valueEl, spec);
             },
           });
         } else if (spec.type === 'select') {
@@ -555,6 +590,12 @@ export function createHUD({
       labelPlayPause.textContent = isPaused ? 'Resume' : 'Pause';
     }
 
+    if ('evolving' in targetState && btnDetonate && labelDetonate) {
+      const isEvolving = Boolean(targetState.evolving);
+      btnDetonate.setAttribute('aria-pressed', isEvolving ? 'true' : 'false');
+      labelDetonate.textContent = isEvolving ? 'Stop' : 'Detonate';
+    }
+
     if ('autoOrbit' in targetState) {
       const autoOrbit = Boolean(targetState.autoOrbit);
       btnAutoOrbit.setAttribute('aria-pressed', autoOrbit ? 'true' : 'false');
@@ -598,7 +639,7 @@ export function createHUD({
     rendererName,
   } = {}) {
     if (Number.isFinite(shockRadiusLy)) {
-      setTextIfChanged(telShockRadius, textCache, 'shockRadius', `${shockRadiusLy.toFixed(2)} ly`);
+      setTextIfChanged(telShockRadius, textCache, 'shockRadius', formatShockRadius(shockRadiusLy));
     }
 
     if (Number.isFinite(expansionVelocityKms)) {
@@ -695,6 +736,9 @@ export function createHUD({
   });
 
   btnPlayPause.addEventListener('click', () => onAction('togglePause'));
+  if (btnDetonate) {
+    btnDetonate.addEventListener('click', () => onAction('toggleDetonate'));
+  }
   btnAutoOrbit.addEventListener('click', () => onAction('toggleAutoOrbit'));
   btnResetCamera.addEventListener('click', () => onAction('resetCamera'));
   btnScreenshot.addEventListener('click', () => onAction('screenshot'));

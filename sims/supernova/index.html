@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="color-scheme" content="dark" />
-  <title>Supernova Remnant — Volumetric Multi-Scattering Nebula Simulator</title>
+  <title>Supernova — Full-Lifecycle Explosion &amp; Volumetric Remnant Simulator</title>
   <link
     rel="icon"
     type="image/svg+xml"
@@ -58,10 +58,10 @@
         <div class="observatory-brand">
           <div class="brand-title-row">
             <span class="status-dot" aria-hidden="true"></span>
-            <h1 class="brand-title">SUPERNOVA REMNANT</h1>
+            <h1 class="brand-title">SUPERNOVA</h1>
           </div>
           <div class="badge-row">
-            <span id="hud-preset-badge" class="badge badge-accent">Crab Filament Shell</span>
+            <span id="hud-preset-badge" class="badge badge-accent">Shock Breakout</span>
             <span id="hud-sky-badge" class="badge badge-muted">Procedural Sky</span>
           </div>
         </div>
@@ -166,7 +166,7 @@
 
       <!-- Bottom-Left Discreet Navigation Hint -->
       <p class="hud-hint" aria-hidden="true">
-        Drag to orbit · W/S fly through shell · Scroll zoom · Space 128× Still · H HUD
+        Drag to orbit · W/S fly through · T Detonate &amp; Evolve · Space 128× Still · H HUD
       </p>
 
       <!-- Bottom-Center Compact Preset & Transport Dock -->
@@ -174,7 +174,7 @@
         class="hud-bottom-dock glass-surface"
         aria-label="Simulation presets and transport controls"
       >
-        <div id="preset-list" class="preset-strip" role="group" aria-label="Supernova remnant presets">
+        <div id="preset-list" class="preset-strip" role="group" aria-label="Supernova presets">
           <!-- Dynamically populated from presets[] -->
         </div>
 
@@ -202,6 +202,21 @@
               Pause triggers 128-sample cinema accumulation (Space)
             </span>
           </div>
+
+          <button
+            id="btn-detonate"
+            type="button"
+            class="transport-btn"
+            aria-pressed="false"
+            aria-label="Detonate and evolve supernova lifecycle (T)"
+          >
+            <svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+              <path d="M10 2.5v3.2M10 14.3v3.2M2.5 10h3.2M14.3 10h3.2M4.7 4.7l2.3 2.3M13 13l2.3 2.3M15.3 4.7L13 7M7 13l-2.3 2.3" stroke-linecap="round" />
+              <circle cx="10" cy="10" r="2.2" fill="currentColor" />
+            </svg>
+            <span id="label-detonate">Detonate</span>
+            <kbd class="keycap">T</kbd>
+          </button>
 
           <button
             id="btn-auto-orbit"
