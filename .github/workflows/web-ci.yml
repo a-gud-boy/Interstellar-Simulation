@@ -63,6 +63,9 @@ jobs:
         with:
           workspaces: desktop
 
+      - name: Install Vulkan software ICD (Lavapipe) for headless wgpu validation
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path desktop/Cargo.toml -- --check
 
