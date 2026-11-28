@@ -75,7 +75,7 @@ pub(super) fn draw_dossier_modal(
                             ui.set_max_width(inner_w - 40.0);
                             ui.label(tracked_job(
                                 &format!(
-                                    "{} / 08 · {} · {}",
+                                    "{} / 09 · {} · {}",
                                     entry.index,
                                     entry.category_label.to_uppercase(),
                                     entry.metric_name.to_uppercase()
@@ -338,8 +338,8 @@ pub(super) fn draw_controls_modal(
             }
         });
 
-    let dlg_w = (screen.width() - 48.0).clamp(320.0, 620.0);
-    let dlg_h = (screen.height() - 72.0).clamp(300.0, 480.0);
+    let dlg_w = (screen.width() - 48.0).clamp(320.0, 640.0);
+    let dlg_h = (screen.height() - 56.0).clamp(320.0, 560.0);
     let dlg_rect = Rect::from_center_size(screen.center(), Vec2::new(dlg_w, dlg_h));
 
     Area::new(Id::unique("home_controls_dialog"))
@@ -430,69 +430,86 @@ pub(super) fn draw_controls_modal(
                         ("1 – 6", "Load physics preset"),
                         ("Space", "Pause / 128× cinema still"),
                         ("O", "Toggle orbital cruise"),
-                        ("T", "Toggle special mode / telemetry"),
+                        ("T", "Toggle special sim action"),
+                        ("C", "Open / close Controls drawer"),
+                        ("I", "Interactive Physics Tour"),
+                        ("V", "Cinema PNG sequence recorder"),
+                        ("G", "Live GPU Pass Profiler"),
                         ("R", "Reset camera & accumulation"),
                         ("P", "Save PNG capture"),
                         ("H", "Hide / restore HUD overlay"),
+                        ("? / F1", "Open in-sim Help Menu"),
                     ];
                     let half_w = (inner_w - 10.0) * 0.5;
-                    for pair in bindings.chunks(2) {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 10.0;
-                            for (key_txt, desc_txt) in pair {
-                                let (k_rect, _) =
-                                    ui.allocate_exact_size(Vec2::new(half_w, 32.0), Sense::hover());
-                                ui.painter().rect(
-                                    k_rect,
-                                    CornerRadius::same(8),
-                                    Color32::from_rgba_unmultiplied(255, 255, 255, 8),
-                                    Stroke::new(1.0, hairline_soft()),
-                                    StrokeKind::Inside,
-                                );
-                                let k_g = ui.painter().layout_job(tracked_job(
-                                    key_txt,
-                                    FontId::new(10.5, egui::FontFamily::Monospace),
-                                    active.accent_bright,
-                                    0.2,
-                                ));
-                                let pill_w = k_g.size().x + 12.0;
-                                let pill_rect = Rect::from_min_size(
-                                    Pos2::new(k_rect.left() + 8.0, k_rect.center().y - 10.0),
-                                    Vec2::new(pill_w, 20.0),
-                                );
-                                ui.painter().rect(
-                                    pill_rect,
-                                    CornerRadius::same(5),
-                                    Color32::from_rgba_unmultiplied(0, 0, 0, 125),
-                                    Stroke::new(1.0, hairline()),
-                                    StrokeKind::Inside,
-                                );
-                                ui.painter().galley(
-                                    Pos2::new(
-                                        pill_rect.left() + 6.0,
-                                        pill_rect.center().y - k_g.size().y * 0.5,
-                                    ),
-                                    k_g,
-                                    active.accent_bright,
-                                );
-                                let d_g = ui.painter().layout_job(tracked_job(
-                                    desc_txt,
-                                    FontId::new(11.5, egui::FontFamily::Proportional),
-                                    TEXT_PRIMARY,
-                                    0.0,
-                                ));
-                                ui.painter().galley(
-                                    Pos2::new(
-                                        pill_rect.right() + 9.0,
-                                        k_rect.center().y - d_g.size().y * 0.5,
-                                    ),
-                                    d_g,
-                                    TEXT_PRIMARY,
-                                );
+                    ScrollArea::vertical()
+                        .id_salt("home_controls_scroll")
+                        .max_height((dlg_h - 196.0).max(160.0))
+                        .show(ui, |ui| {
+                            ui.set_min_width(inner_w);
+                            ui.set_max_width(inner_w);
+                            for pair in bindings.chunks(2) {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 10.0;
+                                    for (key_txt, desc_txt) in pair {
+                                        let (k_rect, _) = ui.allocate_exact_size(
+                                            Vec2::new(half_w, 32.0),
+                                            Sense::hover(),
+                                        );
+                                        ui.painter().rect(
+                                            k_rect,
+                                            CornerRadius::same(8),
+                                            Color32::from_rgba_unmultiplied(255, 255, 255, 8),
+                                            Stroke::new(1.0, hairline_soft()),
+                                            StrokeKind::Inside,
+                                        );
+                                        let k_g = ui.painter().layout_job(tracked_job(
+                                            key_txt,
+                                            FontId::new(10.5, egui::FontFamily::Monospace),
+                                            active.accent_bright,
+                                            0.2,
+                                        ));
+                                        let pill_w = k_g.size().x + 12.0;
+                                        let pill_rect = Rect::from_min_size(
+                                            Pos2::new(
+                                                k_rect.left() + 8.0,
+                                                k_rect.center().y - 10.0,
+                                            ),
+                                            Vec2::new(pill_w, 20.0),
+                                        );
+                                        ui.painter().rect(
+                                            pill_rect,
+                                            CornerRadius::same(5),
+                                            Color32::from_rgba_unmultiplied(0, 0, 0, 125),
+                                            Stroke::new(1.0, hairline()),
+                                            StrokeKind::Inside,
+                                        );
+                                        ui.painter().galley(
+                                            Pos2::new(
+                                                pill_rect.left() + 6.0,
+                                                pill_rect.center().y - k_g.size().y * 0.5,
+                                            ),
+                                            k_g,
+                                            active.accent_bright,
+                                        );
+                                        let d_g = ui.painter().layout_job(tracked_job(
+                                            desc_txt,
+                                            FontId::new(11.5, egui::FontFamily::Proportional),
+                                            TEXT_PRIMARY,
+                                            0.0,
+                                        ));
+                                        ui.painter().galley(
+                                            Pos2::new(
+                                                pill_rect.right() + 9.0,
+                                                k_rect.center().y - d_g.size().y * 0.5,
+                                            ),
+                                            d_g,
+                                            TEXT_PRIMARY,
+                                        );
+                                    }
+                                });
+                                ui.add_space(5.0);
                             }
                         });
-                        ui.add_space(5.0);
-                    }
 
                     ui.add_space(4.0);
                     ui.label(

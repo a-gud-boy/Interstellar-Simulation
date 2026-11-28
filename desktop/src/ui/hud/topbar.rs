@@ -9,7 +9,7 @@ use crate::sims::registry::{SIM_REGISTRY, SimCategory, registry_entry};
 use crate::sims::{HudMetadata, SimId, SimTheme};
 use crate::ui::theme::{
     HUD_PAD, apply_dark_widget_visuals, build_glass_shapes, draw_badge, draw_chevron_down_icon,
-    draw_eye_icon, draw_home_icon, draw_sliders_icon, draw_standalone_glass_pill,
+    draw_eye_icon, draw_help_icon, draw_home_icon, draw_sliders_icon, draw_standalone_glass_pill,
     paint_glass_panel, semibold_family, tracked_job, with_alpha,
 };
 use crate::ui::{HudAction, HudState};
@@ -388,6 +388,23 @@ pub(crate) fn draw_top_right_bar(
                 .clicked()
                 {
                     actions.push(HudAction::ToggleDrawer);
+                }
+
+                // Help Pill (36px height)
+                if draw_standalone_glass_pill(
+                    ui,
+                    "Help",
+                    hud.help_open,
+                    theme,
+                    screen_size,
+                    glass_tex_id,
+                    &draw_help_icon,
+                    None,
+                )
+                .on_hover_text("Open Help Menu (? / F1)")
+                .clicked()
+                {
+                    actions.push(HudAction::ToggleHelp);
                 }
 
                 // Hide UI Pill (36px height)

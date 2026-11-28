@@ -499,7 +499,7 @@ fn draw_floating_topbar(
                             ui.painter()
                                 .rect_filled(sep, CornerRadius::ZERO, hairline());
                             ui.label(tracked_job(
-                                "v0.1.4.2 · 9 ENGINES",
+                                "v0.1.4.3 · 9 ENGINES",
                                 FontId::new(10.5, egui::FontFamily::Monospace),
                                 TEXT_SECONDARY,
                                 0.5,
@@ -653,7 +653,7 @@ fn draw_mission_brief(
                 ui.painter().circle_filled(dc, 3.2, entry.accent_bright);
 
                 let eyebrow = format!(
-                    "{} / 08 · {}",
+                    "{} / 09 · {}",
                     entry.index,
                     entry.category_label.to_uppercase()
                 );
@@ -798,7 +798,7 @@ fn draw_mission_brief(
                 }
 
                 // Zero idle GPU readout pill
-                let status_txt = "0% Idle GPU · 48 Presets";
+                let status_txt = "0% Idle GPU · 54 Presets";
                 let sg = ui.painter().layout_job(tracked_job(
                     status_txt,
                     FontId::new(10.5, egui::FontFamily::Monospace),

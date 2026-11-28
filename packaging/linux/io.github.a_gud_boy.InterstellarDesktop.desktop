@@ -10,4 +10,4 @@ Categories=Science;Astronomy;Physics;Education;
 Keywords=relativity;black-hole;astrophysics;wgpu;raytracing;simulation;
 StartupNotify=true
 StartupWMClass=interstellar-desktop
-X-AppImage-Version=0.1.4-beta.2
+X-AppImage-Version=0.1.4-beta.3

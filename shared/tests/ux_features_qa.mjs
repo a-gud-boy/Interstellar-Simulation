@@ -79,11 +79,12 @@ async function main() {
       return await evalJS(`window.${handle}?.getDiagnostics?.()`);
     };
 
-    const pressKey = async (key, code, keyCode) => {
+    const pressKey = async (key, code, keyCode, modifiers = 0) => {
       await cdp.send('Input.dispatchKeyEvent', {
         type: 'keyDown',
         key,
         code,
+        modifiers,
         windowsVirtualKeyCode: keyCode,
         nativeVirtualKeyCode: keyCode,
       });
@@ -91,6 +92,7 @@ async function main() {
         type: 'keyUp',
         key,
         code,
+        modifiers,
         windowsVirtualKeyCode: keyCode,
         nativeVirtualKeyCode: keyCode,
       });
@@ -312,6 +314,111 @@ async function main() {
       swInfo.supported && swInfo.regCount >= 1 && swInfo.scripts.some((s) => s.endsWith('/sw.js')),
       'Observatory PWA Service Worker registers cleanly under active scope',
       `regs=${swInfo.regCount}`
+    );
+
+    // 7. Universal In-Sim Help Menu (? / F1 / Button / Tabs / Presets / Esc)
+    console.log('7. Testing Universal In-Sim Help Menu (? / F1 / Button / Tabs / Presets / Esc)...');
+    const helpBtnLayout = await evalJS(`(() => {
+      const overlaps = (a, b) => !(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top);
+      const btn = document.getElementById('btn-help-menu');
+      const hdr = document.querySelector('.hud-top-left');
+      const ctrl = document.getElementById('controls-toggle');
+      const br = btn?.getBoundingClientRect();
+      const hr = hdr?.getBoundingClientRect();
+      const cr = ctrl?.getBoundingClientRect();
+      return {
+        exists: Boolean(btn),
+        hdrOverlap: Boolean(br && hr && overlaps(br, hr)),
+        ctrlOverlap: Boolean(br && cr && overlaps(br, cr)),
+      };
+    })()`);
+
+    await evalJS(`document.getElementById('btn-help-menu')?.click()`);
+    await sleep(220);
+    const helpOpenControls = await evalJS(`(() => ({
+      open: window.__GARGANTUA__.getHelpState().open,
+      title: document.getElementById('help-menu-title')?.textContent?.trim(),
+      eq: document.querySelector('.help-modal-eq')?.textContent?.trim(),
+      controlsVisible: !document.getElementById('help-panel-controls')?.hidden,
+      keyRows: document.querySelectorAll('#help-panel-controls .help-key-row').length,
+    }))()`);
+    const shotHelpControls = await cdp.send('Page.captureScreenshot', { format: 'png' });
+    fs.writeFileSync(path.join(SHOT_DIR, 'help_menu_controls.png'), Buffer.from(shotHelpControls.data, 'base64'));
+
+    await evalJS(`document.getElementById('help-tab-physics')?.click()`);
+    await sleep(160);
+    const helpPhysicsInfo = await evalJS(`(() => ({
+      physicsVisible: !document.getElementById('help-panel-physics')?.hidden,
+      presetCards: document.querySelectorAll('#help-panel-physics .help-preset-card').length,
+    }))()`);
+    const shotHelpPhysics = await cdp.send('Page.captureScreenshot', { format: 'png' });
+    fs.writeFileSync(path.join(SHOT_DIR, 'help_menu_physics.png'), Buffer.from(shotHelpPhysics.data, 'base64'));
+
+    await evalJS(`document.getElementById('help-tab-tips')?.click()`);
+    await sleep(140);
+    const helpTipsVisible = await evalJS(`!document.getElementById('help-panel-tips')?.hidden`);
+
+    await evalJS(`document.getElementById('help-tab-physics')?.click()`);
+    await sleep(120);
+    await evalJS(`document.querySelector('#help-panel-physics .help-preset-card[data-preset-id="relativistic"]')?.click()`);
+    await sleep(220);
+    const helpAfterPresetClick = await evalJS(`(() => ({
+      helpOpen: window.__GARGANTUA__.getHelpState().open,
+      presetId: window.__GARGANTUA__.getState().presetId,
+    }))()`);
+
+    // Hotkey ? / F1 / Esc / H
+    await pressKey('?', 'Slash', 191, 8);
+    const openedByQuestion = await evalJS(`window.__GARGANTUA__.getHelpState().open`);
+    await pressKey('Escape', 'Escape', 27);
+    const closedByEsc = await evalJS(`!window.__GARGANTUA__.getHelpState().open`);
+    await pressKey('F1', 'F1', 112);
+    const openedByF1 = await evalJS(`window.__GARGANTUA__.getHelpState().open`);
+    await pressKey('h', 'KeyH', 72);
+    const closedByHideHud = await evalJS(`!window.__GARGANTUA__.getHelpState().open && document.getElementById('hud-chrome')?.classList.contains('is-hud-hidden')`);
+    await pressKey('h', 'KeyH', 72);
+
+    // Verify Help Menu on a second simulator (TDE)
+    await cdp.send('Page.navigate', { url: `http://127.0.0.1:${port}/sims/tde/` });
+    await waitReady('__TDE__', 'webgl2');
+    await pressKey('F1', 'F1', 112);
+    const tdeHelp = await evalJS(`(() => ({
+      hasBtn: Boolean(document.getElementById('btn-help-menu')),
+      open: window.__TDE__.getHelpState().open,
+      title: document.getElementById('help-menu-title')?.textContent?.trim(),
+      presetCards: document.querySelectorAll('#help-panel-physics .help-preset-card').length,
+    }))()`);
+    await pressKey('Escape', 'Escape', 27);
+
+    const helpChecks = {
+      btnExists: helpBtnLayout.exists,
+      noHdrOverlap: !helpBtnLayout.hdrOverlap,
+      noCtrlOverlap: !helpBtnLayout.ctrlOverlap,
+      openControls: helpOpenControls.open === true,
+      hasTitle: Boolean(helpOpenControls.title),
+      hasEq: Boolean(helpOpenControls.eq),
+      controlsVisible: helpOpenControls.controlsVisible === true,
+      enoughKeys: helpOpenControls.keyRows >= 15,
+      physicsVisible: helpPhysicsInfo.physicsVisible === true,
+      sixPresets: helpPhysicsInfo.presetCards === 6,
+      tipsVisible: helpTipsVisible === true,
+      closedOnPresetClick: helpAfterPresetClick.helpOpen === false,
+      presetSwitched: helpAfterPresetClick.presetId === 'relativistic',
+      openedByQuestion,
+      closedByEsc,
+      openedByF1,
+      closedByHideHud,
+      tdeHasBtn: tdeHelp.hasBtn === true,
+      tdeOpen: tdeHelp.open === true,
+      tdeTitleOk: Boolean(tdeHelp.title?.includes('Tidal Disruption')),
+      tdeSixPresets: tdeHelp.presetCards === 6,
+    };
+    const failedHelpFlags = Object.entries(helpChecks).filter(([, v]) => !v).map(([k]) => k);
+
+    check(
+      failedHelpFlags.length === 0,
+      'Universal Help Menu mounts cleanly, avoids HUD overlap, switches tabs & presets, and responds to ?, F1, Esc, and H across sims',
+      `blackholeKeys=${helpOpenControls.keyRows}, tdeTitle=${tdeHelp.title}, failed=[${failedHelpFlags.join(',')}]`
     );
 
     check(consoleErrors.length === 0, 'Zero console errors during UX QA', consoleErrors.join(' | '));

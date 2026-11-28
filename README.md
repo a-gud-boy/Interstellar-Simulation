@@ -74,13 +74,17 @@ Serve the repository root (so relative `../../shared/` and `../../sims/<id>/` sw
 | `1` – `6` | Select camera & physics preset |
 | `Space` | Pause / Resume (triggers 128-sample cinema still accumulation) |
 | `O` | Toggle gentle auto-orbit / auto-pan |
-| `T` | **Traverse** wormhole throat (Wormhole), toggle **Inside Bridge / External Chase** (Warp Drive), **Detonate & Evolve** (Supernova), flip **Forward / Aft** (Starflight), or toggle **Drag Source / Orbit** (Lens Cluster) |
+| `T` | **Traverse** wormhole throat (Wormhole), toggle **Inside Bridge / External Chase** (Warp Drive), **Detonate & Evolve** (Supernova), flip **Forward / Aft** (Starflight), toggle **Drag Source / Orbit** (Lens Cluster), or trigger **Disrupt & Evolve** (TDE) |
+| `C` | Open / close **Controls** drawer |
 | `I` | Toggle **Interactive Physics Tour** overlay (`[` / `]` steps callout pins) |
 | `V` | Start / Stop **Cinema Recorder** (WebM video or deterministic PNG frame sequence) |
+| `G` | Toggle live **GPU Pass Profiler** overlay |
+| `M` | Toggle **Audio Sonification** (Binary BH & Pulsar) |
 | `L` | Copy **Shareable URL** encoding active preset, camera pose, and physics parameters |
 | `R` / Double-click | Reset camera to active preset |
 | `P` | Capture PNG screenshot |
 | `H` | Toggle HUD visibility |
+| `?` / `F1` | Open / close in-sim **Help Menu** |
 
 ## Verification Suites
 

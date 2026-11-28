@@ -12,7 +12,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
+use winit::keyboard::{Key, KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use interstellar_desktop::APP_VERSION;
@@ -25,6 +25,7 @@ use interstellar_desktop::renderer::{
 };
 use interstellar_desktop::settings::DesktopSettings;
 use interstellar_desktop::sims::{SimId, SimInput, Simulation, create_simulation};
+use interstellar_desktop::ui::hud::HelpTab;
 use interstellar_desktop::ui::tour_data::preset_tour;
 use interstellar_desktop::ui::{
     HomeAction, HomeState, HudAction, HudState, configure_fonts, draw_homepage, draw_hud,
@@ -610,6 +611,7 @@ impl RuntimeState {
         self.input.clear();
         self.hud.hud_hidden = false;
         self.hud.drawer_open = false;
+        self.hud.help_open = false;
         self.hud.physics_tour_open = false;
         self.hud.switcher_open = false;
         self.hud.switcher_query.clear();
@@ -715,6 +717,7 @@ impl RuntimeState {
         self.home.inspect_sim = None;
         self.hud.hud_hidden = false;
         self.hud.drawer_open = false;
+        self.hud.help_open = false;
         self.hud.physics_tour_step = 0;
         self.hud.switcher_open = false;
         self.hud.switcher_query.clear();
@@ -918,6 +921,7 @@ impl RuntimeState {
                     self.hud.switcher_open = !self.hud.switcher_open;
                     if self.hud.switcher_open {
                         self.hud.drawer_open = false;
+                        self.hud.help_open = false;
                         self.hud.switcher_query.clear();
                         self.hud.switcher_focus_search = true;
                         self.hud.switcher_just_opened = true;
@@ -961,6 +965,7 @@ impl RuntimeState {
                 HudAction::ToggleHud => {
                     self.hud.hud_hidden = !self.hud.hud_hidden;
                     if self.hud.hud_hidden {
+                        self.hud.help_open = false;
                         self.hud.switcher_open = false;
                         self.hud.switcher_query.clear();
                         self.hud.switcher_focus_search = false;
@@ -969,9 +974,21 @@ impl RuntimeState {
                 HudAction::ToggleDrawer => {
                     self.hud.drawer_open = !self.hud.drawer_open;
                     if self.hud.drawer_open {
+                        self.hud.help_open = false;
                         self.hud.switcher_open = false;
                         self.hud.switcher_query.clear();
                         self.hud.switcher_focus_search = false;
+                    }
+                }
+                HudAction::ToggleHelp => {
+                    self.hud.help_open = !self.hud.help_open;
+                    if self.hud.help_open {
+                        self.hud.hud_hidden = false;
+                        self.hud.drawer_open = false;
+                        self.hud.switcher_open = false;
+                        self.hud.switcher_query.clear();
+                        self.hud.switcher_focus_search = false;
+                        self.hud.help_tab = HelpTab::Controls;
                     }
                 }
                 HudAction::SetVsync(v) => {
@@ -1117,7 +1134,7 @@ impl RuntimeState {
         }
     }
 
-    fn handle_shortcut(&mut self, code: KeyCode) {
+    fn handle_shortcut(&mut self, code: KeyCode, is_question_mark: bool) {
         if self.screen == AppScreen::Home {
             if !self.egui_ctx.egui_wants_keyboard_input()
                 && self.home.inspect_sim.is_none()
@@ -1153,6 +1170,12 @@ impl RuntimeState {
             return;
         }
 
+        if code == KeyCode::Escape && self.hud.help_open {
+            self.hud.help_open = false;
+            self.needs_redraw = true;
+            return;
+        }
+
         if code == KeyCode::Escape && self.hud.switcher_open {
             self.hud.switcher_open = false;
             self.hud.switcher_query.clear();
@@ -1165,31 +1188,35 @@ impl RuntimeState {
             return;
         }
         let mut actions = Vec::new();
-        match code {
-            KeyCode::Digit1 => actions.push(HudAction::SelectPreset(0)),
-            KeyCode::Digit2 => actions.push(HudAction::SelectPreset(1)),
-            KeyCode::Digit3 => actions.push(HudAction::SelectPreset(2)),
-            KeyCode::Digit4 => actions.push(HudAction::SelectPreset(3)),
-            KeyCode::Digit5 => actions.push(HudAction::SelectPreset(4)),
-            KeyCode::Digit6 => actions.push(HudAction::SelectPreset(5)),
-            KeyCode::Space => actions.push(HudAction::TogglePause),
-            KeyCode::KeyO => actions.push(HudAction::ToggleAutoOrbit),
-            KeyCode::KeyR => actions.push(HudAction::ResetCamera),
-            KeyCode::KeyP => actions.push(HudAction::CapturePng),
-            KeyCode::KeyH => actions.push(HudAction::ToggleHud),
-            KeyCode::KeyT => actions.push(HudAction::TriggerSpecial),
-            KeyCode::KeyC => actions.push(HudAction::ToggleDrawer),
-            KeyCode::KeyG => actions.push(HudAction::ToggleProfiler),
-            KeyCode::KeyI => actions.push(HudAction::TogglePhysicsTour),
-            KeyCode::KeyV => actions.push(HudAction::ToggleRecording),
-            KeyCode::BracketLeft if self.hud.physics_tour_open => {
-                actions.push(HudAction::StepPhysicsTour(-1));
+        if is_question_mark || code == KeyCode::F1 {
+            actions.push(HudAction::ToggleHelp);
+        } else {
+            match code {
+                KeyCode::Digit1 => actions.push(HudAction::SelectPreset(0)),
+                KeyCode::Digit2 => actions.push(HudAction::SelectPreset(1)),
+                KeyCode::Digit3 => actions.push(HudAction::SelectPreset(2)),
+                KeyCode::Digit4 => actions.push(HudAction::SelectPreset(3)),
+                KeyCode::Digit5 => actions.push(HudAction::SelectPreset(4)),
+                KeyCode::Digit6 => actions.push(HudAction::SelectPreset(5)),
+                KeyCode::Space => actions.push(HudAction::TogglePause),
+                KeyCode::KeyO => actions.push(HudAction::ToggleAutoOrbit),
+                KeyCode::KeyR => actions.push(HudAction::ResetCamera),
+                KeyCode::KeyP => actions.push(HudAction::CapturePng),
+                KeyCode::KeyH => actions.push(HudAction::ToggleHud),
+                KeyCode::KeyT => actions.push(HudAction::TriggerSpecial),
+                KeyCode::KeyC => actions.push(HudAction::ToggleDrawer),
+                KeyCode::KeyG => actions.push(HudAction::ToggleProfiler),
+                KeyCode::KeyI => actions.push(HudAction::TogglePhysicsTour),
+                KeyCode::KeyV => actions.push(HudAction::ToggleRecording),
+                KeyCode::BracketLeft if self.hud.physics_tour_open => {
+                    actions.push(HudAction::StepPhysicsTour(-1));
+                }
+                KeyCode::BracketRight if self.hud.physics_tour_open => {
+                    actions.push(HudAction::StepPhysicsTour(1));
+                }
+                KeyCode::Escape if self.hud.drawer_open => actions.push(HudAction::ToggleDrawer),
+                _ => {}
             }
-            KeyCode::BracketRight if self.hud.physics_tour_open => {
-                actions.push(HudAction::StepPhysicsTour(1));
-            }
-            KeyCode::Escape if self.hud.drawer_open => actions.push(HudAction::ToggleDrawer),
-            _ => {}
         }
         if !actions.is_empty() {
             self.handle_hud_actions(actions);
@@ -1907,6 +1934,7 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
                 event:
                     KeyEvent {
                         physical_key: PhysicalKey::Code(code),
+                        logical_key,
                         state,
                         repeat,
                         ..
@@ -1917,7 +1945,11 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
                 let cmd_or_ctrl =
                     rt.input.modifiers.super_key() || rt.input.modifiers.control_key();
                 if rt.screen == AppScreen::Sim {
-                    if pressed && !cmd_or_ctrl && !rt.egui_ctx.egui_wants_keyboard_input() {
+                    if pressed
+                        && !cmd_or_ctrl
+                        && !rt.hud.help_open
+                        && !rt.egui_ctx.egui_wants_keyboard_input()
+                    {
                         rt.input.set_nav_key(code, true);
                     } else if !pressed {
                         rt.input.set_nav_key(code, false);
@@ -1933,7 +1965,9 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
                     return;
                 }
                 if pressed && !repeat && !cmd_or_ctrl && !rt.input.modifiers.alt_key() {
-                    rt.handle_shortcut(code);
+                    let is_question_mark = matches!(logical_key.as_ref(), Key::Character("?"))
+                        || (code == KeyCode::Slash && rt.input.modifiers.shift_key());
+                    rt.handle_shortcut(code, is_question_mark);
                 }
             }
             WindowEvent::RedrawRequested => {

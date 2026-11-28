@@ -1,4 +1,5 @@
 mod dock;
+mod help;
 mod profiler;
 mod topbar;
 mod tour;
@@ -17,6 +18,8 @@ use crate::ui::theme::{
 use crate::ui::{HudAction, HudState};
 
 pub(crate) use dock::{draw_bottom_dock, draw_bottom_left_hint};
+pub use help::HelpTab;
+pub(crate) use help::draw_help_modal;
 pub(crate) use profiler::draw_gpu_profiler_card;
 pub(crate) use topbar::{draw_top_left_card, draw_top_right_bar};
 pub(crate) use tour::{draw_physics_tour, draw_recording_pill};

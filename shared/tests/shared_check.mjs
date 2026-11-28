@@ -131,14 +131,19 @@ assert(
   baseCss.includes('.sim-canvas') &&
     baseCss.includes('.sim-switcher') &&
     baseCss.includes('.sim-switch-trigger') &&
-    baseCss.includes('.sim-switch-popover'),
-  'shared/ui/base.css defines .sim-canvas, .sim-switcher, .sim-switch-trigger, and .sim-switch-popover'
+    baseCss.includes('.sim-switch-popover') &&
+    baseCss.includes('.help-modal-backdrop') &&
+    baseCss.includes('.help-modal'),
+  'shared/ui/base.css defines .sim-canvas, .sim-switcher, .sim-switch-trigger, .sim-switch-popover, and .help-modal*'
 );
 
 const simAppShellSrc = fs.readFileSync(path.join(REPO_ROOT, 'shared/engine/SimAppShell.js'), 'utf8');
 assert(
-  simAppShellSrc.includes("'../ui/simSwitcher.js'") && simAppShellSrc.includes("'../assets/skyLoader.js'"),
-  'shared/engine/SimAppShell.js imports ../ui/simSwitcher.js and ../assets/skyLoader.js'
+  simAppShellSrc.includes("'../ui/simSwitcher.js'") &&
+    simAppShellSrc.includes("'../assets/skyLoader.js'") &&
+    simAppShellSrc.includes("'../ui/helpMenu.js'") &&
+    simAppShellSrc.includes('toggleHelp'),
+  'shared/engine/SimAppShell.js imports ../ui/simSwitcher.js, ../ui/helpMenu.js, and ../assets/skyLoader.js'
 );
 
 for (const sim of SIMULATORS) {
@@ -625,6 +630,20 @@ const urlStateMod = await import(path.join(REPO_ROOT, 'shared/engine/urlState.js
 const gfxMod = await import(path.join(REPO_ROOT, 'shared/engine/graphicsProfile.js'));
 const recMod = await import(path.join(REPO_ROOT, 'shared/engine/cinemaRecorder.js'));
 const tourDataMod = await import(path.join(REPO_ROOT, 'shared/ui/physicsTourData.js'));
+const helpMod = await import(path.join(REPO_ROOT, 'shared/ui/helpMenu.js'));
+
+{
+  const allSimsHaveHelpProfile = SIMULATORS.every((s) => {
+    const p = helpMod.SIM_HELP_PROFILES?.[s.id];
+    return p && typeof p.signatureTitle === 'string' && Array.isArray(p.cameraBindings) && p.cameraBindings.length >= 5;
+  });
+  assert(
+    typeof helpMod.createHelpMenu === 'function' &&
+      helpMod.HELP_VERSION_LABEL === '0.1.4.3 beta' &&
+      allSimsHaveHelpProfile,
+    `helpMenu.js exports createHelpMenu & covers all ${SIMULATORS.length} simulators in SIM_HELP_PROFILES`
+  );
+}
 
 {
   const shareUrl = urlStateMod.buildShareableUrl('https://example.org/sims/blackhole/', {

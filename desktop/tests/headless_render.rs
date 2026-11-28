@@ -135,6 +135,7 @@ fn render_and_capture(
     glass_tex_id: egui::TextureId,
     sim_id: SimId,
     drawer_open: bool,
+    help_open: bool,
     out_name: &str,
 ) {
     let mut sim = create_simulation(sim_id, assets);
@@ -142,6 +143,7 @@ fn render_and_capture(
 
     let mut hud = HudState::default();
     hud.drawer_open = drawer_open;
+    hud.help_open = help_open;
 
     let mut sim_input = SimInput {
         viewport_w: WIDTH as f32,
@@ -376,22 +378,28 @@ fn render_all_seven_sims_with_hud() {
     );
 
     let cases = [
-        (SimId::Blackhole, false, "01_blackhole_hud.png"),
-        (SimId::Blackhole, true, "02_blackhole_drawer.png"),
-        (SimId::Wormhole, false, "03_wormhole_hud.png"),
-        (SimId::BinaryBh, false, "04_binary_bh_hud.png"),
-        (SimId::WarpDrive, false, "05_warp_drive_hud.png"),
-        (SimId::Supernova, false, "06_supernova_hud.png"),
-        (SimId::Pulsar, false, "07_pulsar_hud.png"),
-        (SimId::Starflight, false, "08_starflight_hud.png"),
-        (SimId::Starflight, true, "09_starflight_drawer.png"),
-        (SimId::LensCluster, false, "10_lens_cluster_hud.png"),
-        (SimId::LensCluster, true, "11_lens_cluster_drawer.png"),
-        (SimId::Tde, false, "12_tde_hud.png"),
-        (SimId::Tde, true, "13_tde_drawer.png"),
+        (SimId::Blackhole, false, false, "01_blackhole_hud.png"),
+        (SimId::Blackhole, true, false, "02_blackhole_drawer.png"),
+        (SimId::Wormhole, false, false, "03_wormhole_hud.png"),
+        (SimId::BinaryBh, false, false, "04_binary_bh_hud.png"),
+        (SimId::WarpDrive, false, false, "05_warp_drive_hud.png"),
+        (SimId::Supernova, false, false, "06_supernova_hud.png"),
+        (SimId::Pulsar, false, false, "07_pulsar_hud.png"),
+        (SimId::Starflight, false, false, "08_starflight_hud.png"),
+        (SimId::Starflight, true, false, "09_starflight_drawer.png"),
+        (SimId::LensCluster, false, false, "10_lens_cluster_hud.png"),
+        (
+            SimId::LensCluster,
+            true,
+            false,
+            "11_lens_cluster_drawer.png",
+        ),
+        (SimId::Tde, false, false, "12_tde_hud.png"),
+        (SimId::Tde, true, false, "13_tde_drawer.png"),
+        (SimId::Blackhole, false, true, "14_blackhole_help.png"),
     ];
 
-    for (sim_id, drawer_open, filename) in cases {
+    for (sim_id, drawer_open, help_open, filename) in cases {
         render_and_capture(
             &mut assets,
             &mut post,
@@ -402,6 +410,7 @@ fn render_all_seven_sims_with_hud() {
             glass_tex_id,
             sim_id,
             drawer_open,
+            help_open,
             filename,
         );
     }

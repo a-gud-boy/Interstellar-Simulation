@@ -109,7 +109,8 @@ Notes:
 - **`C`**: Open/close Controls drawer (persists `Eco / Balanced / Ultra` quality profile, DPR cap, and resolution scale)
 - **`P`**: Save composite PNG to `./screenshots/` (`~/Pictures/Interstellar/` on macOS)
 - **`R`**: Reset camera
-- **`H`**: Toggle HUD visibility (`Esc` closes Controls drawer or Quick-Inspect Dossier; top-right Home button returns to Observatory Homepage; `Cmd+Q`/`Cmd+W` quits on macOS)
+- **`?` / `F1`**: Open/close universal in-sim Help Menu (`Controls & Keys`, `Physics & Presets`, `Observatory & Tips`)
+- **`H`**: Toggle HUD visibility (`Esc` closes Help Menu, Controls drawer, or Quick-Inspect Dossier; top-right Home button returns to Observatory Homepage; `Cmd+Q`/`Cmd+W` quits on macOS)
 
 ## Distribution & Packaging Channels
 

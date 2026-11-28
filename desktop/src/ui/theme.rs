@@ -433,6 +433,25 @@ pub(crate) fn draw_sliders_icon(painter: &Painter, center: Pos2, color: Color32)
     }
 }
 
+pub(crate) fn draw_help_icon(painter: &Painter, center: Pos2, color: Color32) {
+    let stroke = Stroke::new(1.35, color);
+    painter.circle_stroke(center, 6.2, stroke);
+    let q_galley = painter.layout_job(tracked_job(
+        "?",
+        FontId::new(10.5, semibold_family()),
+        color,
+        0.0,
+    ));
+    painter.galley(
+        Pos2::new(
+            center.x - q_galley.size().x * 0.5,
+            center.y - q_galley.size().y * 0.5,
+        ),
+        q_galley,
+        color,
+    );
+}
+
 pub(crate) fn draw_eye_icon(painter: &Painter, center: Pos2, color: Color32, slashed: bool) {
     let stroke = Stroke::new(1.35, color);
     let mut top = Vec::with_capacity(9);

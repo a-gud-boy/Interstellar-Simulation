@@ -12,6 +12,7 @@ import { loadSkyTextureWebGL, loadSkyTextureWebGPU } from '../assets/skyLoader.j
 import { mountSimSwitcher } from '../ui/simSwitcher.js';
 import { createPhysicsTour } from '../ui/physicsTour.js';
 import { createGpuProfilerOverlay } from '../ui/gpuProfilerOverlay.js';
+import { createHelpMenu } from '../ui/helpMenu.js';
 import { createSonificationEngine } from './sonification.js';
 import { registerObservatorySw } from './pwaRegister.js';
 import { buildShareableUrl, parseUrlState } from './urlState.js';
@@ -580,6 +581,7 @@ export async function createSimApp(config) {
     activeBackend = targetBackend;
     state.backend = targetBackend;
     simSwitcher.syncBackend(activeBackend);
+    helpMenu?.syncBackend(activeBackend);
     contextLost = false;
     resetFpsTracker();
 
@@ -840,6 +842,7 @@ export async function createSimApp(config) {
     renderer?.resize(state.resolutionScale, dprCap);
     resetRendererAccumulationCompat(renderer, true);
     physicsTour.setPreset(preset.id);
+    helpMenu?.syncPreset(preset.id);
 
     if (hud) {
       hud.syncState(state);
@@ -867,6 +870,7 @@ export async function createSimApp(config) {
   }
 
   let physicsTour = null;
+  let helpMenu = null;
   let profilerOpen = false;
   let perfProfilerCheckbox = null;
   const profilerOverlay = createGpuProfilerOverlay(document.body);
@@ -1037,9 +1041,27 @@ export async function createSimApp(config) {
         break;
 
       case 'toggleHud': {
-        const hidden = hud?.toggleHud();
-        if (typeof hidden === 'boolean') {
-          profilerOverlay.setHudHidden(hidden);
+        const hudVisible = hud?.toggleHud();
+        if (typeof hudVisible === 'boolean') {
+          const isHidden = !hudVisible;
+          profilerOverlay.setHudHidden(isHidden);
+          if (isHidden) {
+            helpMenu?.close({ returnFocus: false });
+          }
+        }
+        break;
+      }
+
+      case 'toggleHelp':
+        helpMenu?.toggle(typeof payload === 'boolean' ? payload : undefined);
+        break;
+
+      case 'toggleControls': {
+        const drawer = document.getElementById('controls-drawer');
+        if (drawer?.classList.contains('is-open')) {
+          document.getElementById('controls-close')?.click();
+        } else {
+          document.getElementById('controls-toggle')?.click();
         }
         break;
       }
@@ -1109,6 +1131,44 @@ export async function createSimApp(config) {
     },
     onOpenChange: (isOpen) => syncTourUi(isOpen),
   });
+
+  helpMenu = createHelpMenu({
+    simId,
+    presets,
+    getActivePresetId: () => state.presetId || initialPreset.id,
+    getBackend: () => activeBackend,
+    hasAudio: Boolean(audioEngine),
+    audioLabel: sonification?.label || '',
+    onSelectPreset: (presetId) => selectPreset(presetId, { instant: false }),
+    onAction: handleAction,
+    onOpenChange: (isOpen) => {
+      if (isOpen) {
+        const drawer = document.getElementById('controls-drawer');
+        if (drawer?.classList.contains('is-open')) {
+          document.getElementById('controls-close')?.click();
+        }
+        simSwitcher.close?.();
+        const hudChromeEl = document.getElementById('hud-chrome');
+        if (hudChromeEl?.classList.contains('is-hud-hidden')) {
+          const hudVisible = hud?.toggleHud(true);
+          if (typeof hudVisible === 'boolean') {
+            profilerOverlay.setHudHidden(!hudVisible);
+          }
+        }
+      }
+    },
+  });
+
+  if (typeof document !== 'undefined') {
+    document.getElementById('controls-toggle')?.addEventListener('click', () => {
+      if (helpMenu?.isOpen()) helpMenu.close({ returnFocus: false });
+    });
+    simSwitcher.trigger?.addEventListener('click', () => {
+      if (simSwitcher.isOpen() && helpMenu?.isOpen()) {
+        helpMenu.close({ returnFocus: false });
+      }
+    });
+  }
 
   if (typeof document !== 'undefined') {
     const makeDrawerSegmented = (parent, id, labelText, options, initialVal, onSelect) => {
@@ -1501,6 +1561,19 @@ export async function createSimApp(config) {
   window.addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey || isEditableTarget(e.target)) return;
 
+    if (e.key === '?' || e.code === 'F1') {
+      e.preventDefault();
+      handleAction('toggleHelp');
+      return;
+    }
+
+    if (e.key === 'Escape' && helpMenu?.isOpen()) {
+      e.preventDefault();
+      e.stopPropagation();
+      helpMenu.close({ returnFocus: true });
+      return;
+    }
+
     if (e.key >= '1' && e.key <= '6') {
       const idx = Number(e.key) - 1;
       if (presets[idx]) {
@@ -1515,6 +1588,10 @@ export async function createSimApp(config) {
     }
 
     switch (e.code) {
+      case 'KeyC':
+        e.preventDefault();
+        handleAction('toggleControls');
+        break;
       case 'Space':
         e.preventDefault();
         handleAction('togglePause');
@@ -1597,6 +1674,7 @@ export async function createSimApp(config) {
         interactiveDragScale,
         reducedGlass,
         physicsTourOpen: Boolean(physicsTour?.isOpen()),
+        helpOpen: Boolean(helpMenu?.isOpen()),
         recording: cinemaRecorder.isRecording(),
         camera: camera ? camera.getState() : null,
       };
@@ -1646,6 +1724,14 @@ export async function createSimApp(config) {
 
     togglePhysicsTour(visible) {
       return physicsTour.toggle(visible);
+    },
+
+    toggleHelp(visible) {
+      return helpMenu.toggle(visible);
+    },
+
+    getHelpState() {
+      return helpMenu.getState();
     },
 
     stepPhysicsTour(delta = 1) {
@@ -1741,11 +1827,15 @@ export async function createSimApp(config) {
     },
 
     toggleHud(visible) {
-      const hidden = hud.toggleHud(visible);
-      if (typeof hidden === 'boolean') {
-        profilerOverlay.setHudHidden(hidden);
+      const hudVisible = hud.toggleHud(visible);
+      if (typeof hudVisible === 'boolean') {
+        const isHidden = !hudVisible;
+        profilerOverlay.setHudHidden(isHidden);
+        if (isHidden) {
+          helpMenu?.close({ returnFocus: false });
+        }
       }
-      return hidden;
+      return hudVisible;
     },
 
     toggleProfiler(visible) {
@@ -1806,6 +1896,7 @@ export async function createSimApp(config) {
         interactiveDragScale,
         reducedGlass,
         physicsTourOpen: Boolean(physicsTour?.isOpen()),
+        helpOpen: Boolean(helpMenu?.isOpen()),
         recording: cinemaRecorder.isRecording(),
         profiler: renderer?.getProfilerMetrics ? renderer.getProfilerMetrics() : { enabled: profilerOpen },
         ...(audioEngine ? { audio: audioEngine.getState() } : {}),

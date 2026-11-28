@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
 PackageIdentifier: a-gud-boy.InterstellarDesktop
-PackageVersion: 0.1.4-beta.2
+PackageVersion: 0.1.4-beta.3
 PackageLocale: en-US
 Publisher: Interstellar Simulation Contributors
 PublisherUrl: https://github.com/a-gud-boy/Interstellar-Simulation

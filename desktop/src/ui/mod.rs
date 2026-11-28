@@ -20,6 +20,8 @@ use crate::sims::{HudMetadata, SimId, Simulation};
 
 pub struct HudState {
     pub drawer_open: bool,
+    pub help_open: bool,
+    pub help_tab: hud::HelpTab,
     pub hud_hidden: bool,
     pub vsync: bool,
     pub quality_profile: QualityProfile,
@@ -49,6 +51,8 @@ impl Default for HudState {
     fn default() -> Self {
         Self {
             drawer_open: false,
+            help_open: false,
+            help_tab: hud::HelpTab::Controls,
             hud_hidden: false,
             vsync: true,
             quality_profile: QualityProfile::Balanced,
@@ -126,6 +130,7 @@ pub enum HudAction {
     CapturePng,
     ToggleHud,
     ToggleDrawer,
+    ToggleHelp,
     SetVsync(bool),
     SetQualityProfile(QualityProfile),
     SetDprCap(f32),
@@ -182,6 +187,19 @@ pub fn draw_hud(
             ctx,
             sim,
             &meta,
+            assets,
+            hud,
+            &theme,
+            screen_size,
+            glass_tex_id,
+            &mut actions,
+        );
+    }
+
+    if hud.help_open {
+        hud::draw_help_modal(
+            ctx,
+            sim,
             assets,
             hud,
             &theme,

@@ -10,7 +10,7 @@
  *   fallback for offline launches.
  */
 
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const SHELL_CACHE = `interstellar-shell-${CACHE_VERSION}`;
 const ASSET_CACHE = `interstellar-assets-${CACHE_VERSION}`;
 

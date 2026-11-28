@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.1.4.3-beta] - 2026-11-28
+
+- **Universal In-Sim Help Menu (`?` / `F1`, Web + Native Rust Desktop)**:
+  - Added a dedicated Observatory-glass **Help** pill (`#btn-help-menu`) and modal dialog (`shared/ui/helpMenu.js`, wired via `shared/engine/SimAppShell.js` and styled in `shared/ui/base.css`) present across all 9 web simulators (`blackhole`, `wormhole`, `binary`, `warp`, `supernova`, `pulsar`, `starflight`, `lens-cluster`, `tde`).
+  - Implemented full 1:1 native Rust `egui` Help Menu parity (`desktop/src/ui/hud/help.rs`, `desktop/src/ui/hud/topbar.rs`, `desktop/src/ui/theme.rs`, `desktop/src/main.rs`) across all 9 desktop simulators.
+  - Features 3 contextual tabs (**Controls & Keys** with per-sim camera bindings & universal shortcuts, **Physics & Presets** with governing metric equation, specs, clickable 6-preset switcher, and Physics Tour launcher, and **Observatory & Tips** with workflow guidance and Quick Actions), plus `KeyC` Controls drawer toggle parity on web and `?` / `F1` / `Esc` keyboard support.
+  - Updated Observatory Homepage controls reference (`index.html`, `desktop/src/ui/home/dossier.rs`), bumped PWA service worker cache (`sw.js` `v2`), and bumped web and native desktop versions to `0.1.4.3 beta` (`desktop/Cargo.toml` `0.1.4-beta.3`).
+
 ## [v0.1.4.2-beta] - 2026-11-28
 
 - **9th Engine — Tidal Disruption Event (`sims/tde`, WebGL2, WebGPU & Native Rust Desktop)**:

@@ -97,7 +97,7 @@ function renderMetainfoXml(version) {
   <releases>
     <release version="${version}" date="2026-11-28">
       <description>
-        <p>Tidal Disruption Event engine, live GPU pass profiler overlay, and visual parity exporter.</p>
+        <p>Universal in-sim Help Menu across all nine web and native desktop simulators.</p>
       </description>
     </release>
   </releases>
