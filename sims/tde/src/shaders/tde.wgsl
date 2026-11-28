@@ -1,0 +1,721 @@
+struct VSOut {
+  @builtin(position) pos: vec4f,
+  @location(0) uv: vec2f,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
+  let x = f32((vid & 1u) << 2u) - 1.0;
+  let y = f32((vid & 2u) << 1u) - 1.0;
+  var out: VSOut;
+  out.pos = vec4f(x, y, 0.0, 1.0);
+  out.uv = vec2f(x * 0.5 + 0.5, 0.5 - y * 0.5);
+  return out;
+}
+
+struct TdeUniforms {
+  resolution_time_frame : vec4f, // x=res.x, y=res.y, z=time, w=f32(frameIndex)
+  jitter_fov_spin       : vec4f, // x=jitterX, y=jitterY, z=fovY, w=spin
+  camPos_relMode        : vec4f, // xyz=camPos, w=relativisticMode
+  camRight_lensing      : vec4f, // xyz=camBasis[0], w=lensingStrength
+  camUp_tdePhase        : vec4f, // xyz=camBasis[1], w=tdePhase
+  camFwd_beta           : vec4f, // xyz=camBasis[2], w=beta
+  streamParams          : vec4f, // x=streamDensity, y=shockIntensity, z=diskDensity, w=jetIntensity
+  visualParams          : vec4f, // x=flowSpeed, y=precessRadVis, z=rpVis, w=streamTiltRad
+  skyParams             : vec4f, // x=skyIntensity, y=skyRotX, z=skyRotY, w=diskTemp
+  modes_pad             : vec4i, // x=frameIndex, y=skyMode, z=quality, w=swallowedDirect
+  zamoE0                : vec4f, // 4D Lorentzian Gram-Schmidt ZAMO basis e0
+  zamoE1                : vec4f, // e1
+  zamoE2                : vec4f, // e2
+  zamoE3                : vec4f, // e3
+  camKS_l_2H            : vec4f, // xyz=fCam.l, w=2*fCam.H
+  kerrConsts            : vec4f, // x=rPlus, y=rIsco, z=rOuter, w=tanHalfFov
+  rayConsts             : vec4f, // x=escapeR, y=captureR, z=maxSlabY, w=streamEcc
+  shockPosConsts        : vec4f, // xyz=shockWorldPos, w=shockTempK
+  starCoreConsts        : vec4f, // xyz=coreWorldPos, w=coreRadiusVis
+  skyTrig               : vec4f, // x=cosRotX, y=sinRotX, z=cosRotY, w=sinRotY
+};
+
+@group(0) @binding(0) var<uniform> u: TdeUniforms;
+@group(0) @binding(1) var uVolumeNoise: texture_3d<f32>;
+@group(0) @binding(2) var sVolume: sampler;
+@group(0) @binding(3) var uSkyMap: texture_2d<f32>;
+@group(0) @binding(4) var uProcSkyMap: texture_2d<f32>;
+@group(0) @binding(5) var sSky: sampler;
+@group(0) @binding(6) var uBlackbodyLut: texture_2d<f32>;
+@group(0) @binding(7) var sLut: sampler;
+@group(0) @binding(8) var uBlueNoise: texture_2d<f32>;
+
+const PI             : f32 = 3.14159265359;
+const TAU            : f32 = 6.28318530718;
+const INV_PI         : f32 = 0.31830988618;
+const INV_TAU        : f32 = 0.15915494309;
+const T_MIN          : f32 = 800.0;
+const T_MAX          : f32 = 40000.0;
+const INV_LOG_T_SPAN : f32 = 1.0 / 3.91202300543;
+
+fn isBadFloat(x: f32) -> bool {
+  return (bitcast<u32>(x) & 0x7f800000u) == 0x7f800000u;
+}
+
+fn sanitizeVec3Zero(v: vec3f) -> vec3f {
+  return vec3f(
+    select(v.x, 0.0, isBadFloat(v.x)),
+    select(v.y, 0.0, isBadFloat(v.y)),
+    select(v.z, 0.0, isBadFloat(v.z))
+  );
+}
+
+// ============================================================================
+// 1. EXACT 3D CARTESIAN OUTGOING KERR-SCHILD METRIC & HAMILTONIAN
+// ============================================================================
+
+struct KSFields {
+  r  : f32,
+  r2 : f32,
+  D  : f32,
+  H  : f32,
+  R2 : f32,
+  l  : vec3f,
+};
+
+fn evalKerrR(pos: vec3f, a2: f32) -> f32 {
+  if (a2 < 1e-8) {
+    return sqrt(max(dot(pos, pos), 1e-8));
+  }
+  let uVal = dot(pos, pos) - a2;
+  let ay = 2.0 * pos.y;
+  let disc = sqrt(max(uVal * uVal + a2 * ay * ay, 1e-12));
+  return sqrt(max(0.5 * (uVal + disc), 1e-8));
+}
+
+fn evalKSFields(pos: vec3f, a: f32, a2: f32, lensing: f32) -> KSFields {
+  var f: KSFields;
+  if (a2 < 1e-8) {
+    f.r2 = max(dot(pos, pos), 1e-8);
+    f.r  = sqrt(f.r2);
+    f.D  = f.r2 * f.r2;
+    f.R2 = f.r2;
+    f.H  = lensing / max(f.r, 1e-5);
+    f.l  = pos / max(f.r, 1e-5);
+    return f;
+  }
+  let uVal = dot(pos, pos) - a2;
+  let ay = 2.0 * pos.y;
+  let disc = sqrt(max(uVal * uVal + a2 * ay * ay, 1e-12));
+  f.r2 = max(0.5 * (uVal + disc), 1e-8);
+  f.r  = sqrt(f.r2);
+  f.D  = f.r2 * f.r2 + a2 * pos.y * pos.y;
+  f.R2 = f.r2 + a2;
+  f.H  = (lensing * f.r * f.r2) / max(f.D, 1e-10);
+  let invR2 = 1.0 / max(f.R2, 1e-8);
+  f.l  = vec3f(
+    (f.r * pos.x + a * pos.z) * invR2,
+    pos.y / max(f.r, 1e-5),
+    (f.r * pos.z - a * pos.x) * invR2
+  );
+  return f;
+}
+
+struct GeodesicRHS {
+  dpos : vec3f,
+  dp   : vec3f,
+  f    : KSFields,
+};
+
+fn evalGeodesicRHS(pos: vec3f, p: vec3f, pt: f32, a: f32, a2: f32, lensing: f32) -> GeodesicRHS {
+  var res: GeodesicRHS;
+  let f = evalKSFields(pos, a, a2, lensing);
+  res.f = f;
+
+  let L = -pt + dot(f.l, p);
+  let twoHL = 2.0 * f.H * L;
+  res.dpos = p - twoHL * f.l;
+
+  let invD = 1.0 / max(f.D, 1e-10);
+  let invR2 = 1.0 / max(f.R2, 1e-8);
+  let gradR = vec3f(f.r * f.r2 * pos.x, f.r * f.R2 * pos.y, f.r * f.r2 * pos.z) * invD;
+  let cR = -f.r2 * f.r2 + 3.0 * a2 * pos.y * pos.y;
+  let hFac = lensing * f.r2 * invD * invD;
+  let dH = hFac * cR * gradR + vec3f(0.0, -2.0 * a2 * lensing * f.r * f.r2 * pos.y * invD * invD, 0.0);
+
+  let lpHoriz = f.l.x * p.x + f.l.z * p.z;
+  let S = (p.x * pos.x + p.z * pos.z - 2.0 * f.r * lpHoriz) * invR2 - (pos.y * p.y) / max(f.r2, 1e-8);
+  let dLP = vec3f(
+    (f.r * p.x - a * p.z) * invR2,
+    p.y / max(f.r, 1e-5),
+    (a * p.x + f.r * p.z) * invR2
+  ) + S * gradR;
+
+  res.dp = (L * L) * dH + twoHL * dLP;
+  return res;
+}
+
+// ============================================================================
+// 2. PLANCK BLACKBODY, RELATIVISTIC DOPPLER & TDE ORBITAL COORDINATES
+// ============================================================================
+
+fn sampleBlackbody(tempK: f32) -> vec3f {
+  let t = clamp(tempK, T_MIN, T_MAX);
+  let uCoord = clamp(log(t / T_MIN) * INV_LOG_T_SPAN, 0.001, 0.999);
+  return textureSampleLevel(uBlackbodyLut, sLut, vec2f(uCoord, 0.5), 0.0).rgb;
+}
+
+fn rotateTiltX(v: vec3f, angleRad: f32) -> vec3f {
+  let c = cos(angleRad);
+  let s = sin(angleRad);
+  return vec3f(v.x, v.y * c - v.z * s, v.y * s + v.z * c);
+}
+
+struct VolSample {
+  emission   : vec3f,
+  extinction : f32,
+};
+
+fn computeFrequencyShift(
+  pos: vec3f,
+  vel3: vec3f,
+  rayP: vec3f,
+  pt: f32,
+  a: f32,
+  a2: f32,
+  lensing: f32
+) -> f32 {
+  let f = evalKSFields(pos, a, a2, lensing);
+  let lv = dot(f.l, vel3);
+  let v2 = dot(vel3, vel3);
+  let denom = max(1.0 - 2.0 * f.H * (1.0 - lv) * (1.0 - lv) - v2, 0.025);
+  let ut = inverseSqrt(denom);
+  let kDotU = pt + dot(rayP, vel3);
+  let kDotUObs = ut * kDotU;
+  return clamp(-1.0 / min(kDotUObs, -0.05), 0.14, 3.2);
+}
+
+// Evaluates precessing elliptical fallback stream, unbound escaping tail,
+// intact/tidal-stretched stellar core, and nozzle self-intersection shock.
+fn evalTidalDebris(
+  pos: vec3f,
+  rKerr: f32,
+  rayP: vec3f,
+  pt: f32,
+  rPlus: f32,
+  a: f32,
+  a2: f32,
+  lensing: f32,
+  camDistFade: f32,
+  lowDetail: bool
+) -> VolSample {
+  var outS: VolSample;
+  outS.emission = vec3f(0.0);
+  outS.extinction = 0.0;
+
+  let streamDens = max(u.streamParams.x, 0.0);
+  let shockInt   = max(u.streamParams.y, 0.0);
+  if (streamDens <= 0.001 && shockInt <= 0.001) {
+    return outS;
+  }
+
+  let t = u.resolution_time_frame.z * max(u.visualParams.x, 0.05);
+  let phase = clamp(u.camUp_tdePhase.w, 0.02, 1.0);
+  let beta  = max(u.camFwd_beta.w, 0.4);
+  let precess = u.visualParams.y;
+  let rpVis = u.visualParams.z;
+  let ecc = u.rayConsts.w;
+  let tilt = u.visualParams.w;
+  let swallowed = (u.modes_pad.w != 0);
+  let rel = clamp(u.camPos_relMode.w, 0.0, 1.0);
+
+  // Transform point into orbital stream plane (tilted around +X)
+  let q = rotateTiltX(pos, -tilt);
+  let rHoriz = length(q.xz);
+
+  // --- A. Self-Intersection Nozzle Shock & Reprocessing Halo (world space) ---
+  let shockPos = u.shockPosConsts.xyz;
+  let dShock = pos - shockPos;
+  let rShockDist = length(dShock);
+  if (shockInt > 0.001 && rShockDist < 11.5) {
+    let nUV = u.shockPosConsts.xyz * 0.075 + dShock * 0.075 - vec3f(0.0, t * 0.28, 0.0);
+    let turb = textureSampleLevel(uVolumeNoise, sVolume, nUV, 0.0);
+    let lobeScale = vec3f(1.25, 0.72 + 0.35 * phase, 1.45);
+    let rPlume = length(dShock / lobeScale);
+    let nozzleCore = exp(-rPlume * rPlume * 0.65) * (0.45 + 0.95 * turb.g);
+    let reprocHalo = exp(-rShockDist * rShockDist * 0.055) * (0.35 + 0.65 * turb.r) * (0.35 + 0.65 * phase);
+
+    let phaseShock = smoothstep(0.14, 0.45, phase) * (1.0 - 0.35 * smoothstep(0.72, 1.0, phase));
+    let holeDim = select(1.0, 0.22, swallowed);
+    let sGain = shockInt * phaseShock * holeDim * camDistFade;
+
+    let nozzleCol = sampleBlackbody(u.shockPosConsts.w) * vec3f(0.88, 0.96, 1.15);
+    let haloCol   = sampleBlackbody(mix(12500.0, 21000.0, 0.5 * turb.r)) * vec3f(1.04, 0.86, 1.08);
+    outS.emission += (nozzleCol * (nozzleCore * 4.4) + haloCol * (reprocHalo * 0.95)) * sGain;
+    outS.extinction += (nozzleCore * 0.32 + reprocHalo * 0.14) * shockInt * holeDim;
+  }
+
+  // --- B. Disrupted Stellar Core (dominant at early tdePhase, Roche elongated) ---
+  let corePos = u.starCoreConsts.xyz;
+  let coreRad = max(u.starCoreConsts.w, 0.18);
+  let dCore = pos - corePos;
+  let dCoreSq = dot(dCore, dCore);
+  let coreFade = (1.0 - smoothstep(0.45, 0.92, phase));
+  if (coreFade > 0.01 && dCoreSq < (coreRad * 6.5) * (coreRad * 6.5)) {
+    let dirToBh = normalize(-corePos + vec3f(1e-5, 0.0, 0.0));
+    let axial = dot(dCore, dirToBh);
+    let perpVec = dCore - axial * dirToBh;
+    let stretch = 1.0 + 1.15 * min(beta, 3.0) * smoothstep(0.05, 0.45, phase);
+    let ellipDist = length(perpVec) + abs(axial) / stretch;
+    let rNorm = ellipDist / coreRad;
+    if (rNorm < 2.6) {
+      let puff = textureSampleLevel(uVolumeNoise, sVolume, dCore * 0.18 + vec3f(t * 0.15, 0.0, 0.0), 0.0);
+      let photosphere = exp(-rNorm * rNorm * 2.1) * (0.78 + 0.44 * puff.r);
+      let stellarCol = sampleBlackbody(mix(6400.0, 12800.0, smoothstep(0.0, 1.8, rNorm)));
+      outS.emission += stellarCol * (photosphere * 5.2 * coreFade * streamDens * camDistFade);
+      outS.extinction += photosphere * 1.45 * coreFade * streamDens;
+    }
+  }
+
+  // --- C. Precessing Elliptical Tidal Stream Arms & Unbound Escaping Tail ---
+  if (streamDens > 0.001 && rHoriz > rPlus * 1.04 && rHoriz < 36.0 && abs(q.y) < 3.6) {
+    let semiL = rpVis * (1.0 + ecc);
+    let phi = atan2(q.z, q.x); // (-PI, PI]
+    let pHalf = 0.5 * precess;
+
+    // 1) Bound returning + circularizing elliptical loop (two wraps around precessed apsides)
+    //    Wrap 1: incoming stellar arc phi in [-2.6, +pi - pHalf]
+    //    Wrap 2: post-pericenter apsidally precessed arc shifted by +precess
+    let denom1 = max(1.0 + ecc * cos(phi), 0.18);
+    let rOrbit1 = semiL / denom1;
+
+    let phiShifted = phi - precess;
+    let denom2 = max(1.0 + ecc * cos(phiShifted), 0.18);
+    let rOrbit2 = semiL / denom2;
+
+    // 3) Unbound hyperbola-like escaping tail flinging outward along -X/+Z
+    let phiTail = phi + 1.92;
+    let denomTail = max(1.0 + 1.12 * ecc * cos(phiTail * 0.55), 0.22);
+    let rTail = (rpVis * 1.15 * (1.0 + ecc)) / denomTail;
+
+    let d1 = abs(rHoriz - rOrbit1);
+    let d2 = abs(rHoriz - rOrbit2);
+    let d3 = abs(rHoriz - rTail);
+
+    // Stream cross-section widens gently with radius and phase
+    let w1 = 0.34 + 0.042 * rHoriz + 0.32 * phase;
+    let w2 = 0.38 + 0.048 * rHoriz + 0.42 * phase;
+    let w3 = 0.46 + 0.055 * rHoriz;
+
+    let hStream = 0.22 + 0.028 * rHoriz + 0.24 * phase;
+    let vProf = exp(-(q.y * q.y) / max(hStream * hStream, 0.02));
+
+    let arc1Mask = smoothstep(-2.9, -1.6, phi) * smoothstep(0.15, -0.55, phi - (PI - pHalf * 0.3));
+    let arc2Mask = smoothstep(-0.35, 0.55, phi) * (1.0 - 0.25 * swallowedF(swallowed)) * smoothstep(0.18, 0.45, phase);
+    let tailMask = smoothstep(0.12, 0.42, phase) * smoothstep(0.85, 2.5, rHoriz / max(rpVis, 1.0));
+
+    let env1 = exp(-(d1 * d1) / (w1 * w1)) * vProf * arc1Mask;
+    let env2 = exp(-(d2 * d2) / (w2 * w2)) * vProf * arc2Mask;
+    let env3 = exp(-(d3 * d3) / (w3 * w3)) * vProf * tailMask * 0.55;
+
+    let streamEnv = max(max(env1, env2), env3);
+    if (streamEnv > 0.015) {
+      let sTime = t * 0.55;
+      let fUv = vec3f(phi * 0.55 - sTime * 0.45, log2(max(rHoriz, 0.8)) * 0.42, q.y * 0.55);
+      let n0 = textureSampleLevel(uVolumeNoise, sVolume, fUv, 0.0);
+      var filament = mix(0.55, 1.45, n0.g * 0.65 + n0.r * 0.35);
+      if (!lowDetail) {
+        let n1 = textureSampleLevel(uVolumeNoise, sVolume, fUv * 2.15 + vec3f(0.31, -sTime * 0.22, 0.17), 0.0);
+        filament *= mix(0.75, 1.32, n1.b);
+      }
+
+      // Tangential Keplerian velocity + radial tidal stretch component
+      let speed = clamp(inverseSqrt(max(rKerr, 1.35)), 0.05, 0.66);
+      let tanDirLocal = normalize(vec3f(-q.z, 0.0, q.x) + vec3f(0.12 * q.x, 0.0, 0.12 * q.z));
+      let velWorld = rotateTiltX(tanDirLocal, tilt) * speed;
+      let g = computeFrequencyShift(pos, velWorld, rayP, pt, a, a2, lensing);
+      let gEff = mix(mix(1.0, g, 0.28), g, rel);
+      let beaming = clamp(pow(gEff, mix(1.6, 2.8, rel)), 0.22, 3.6);
+
+      // Tidal heating hottest near pericenter & self-intersection, cooler orange along unbound tail
+      let proxHeat = clamp(rpVis / max(rHoriz, rpVis * 0.7), 0.25, 1.85);
+      let isTail = select(0.0, 1.0, env3 > max(env1, env2));
+      let baseT = mix(u.skyParams.w * (0.65 + 0.55 * proxHeat), 5400.0, isTail * 0.72);
+      let col = sampleBlackbody(baseT * mix(1.0, gEff, 0.65));
+
+      let dens = streamEnv * filament * streamDens * select(1.0, 0.42, swallowed);
+      let emissiveGain = (0.95 + 1.85 * proxHeat * (0.5 + 0.5 * phase)) * beaming * camDistFade;
+      outS.emission += col * (dens * emissiveGain);
+      outS.extinction += dens * (0.24 + 0.35 * filament);
+    }
+  }
+
+  return outS;
+}
+
+fn swallowedF(b: bool) -> f32 {
+  return select(0.0, 1.0, b);
+}
+
+// Volumetric circularization accretion disk forming around r_ISCO .. rOuter
+fn evalCircularDisk(
+  pos: vec3f,
+  rKerr: f32,
+  rayP: vec3f,
+  pt: f32,
+  rIsco: f32,
+  rOuter: f32,
+  rPlus: f32,
+  a: f32,
+  a2: f32,
+  lensing: f32,
+  camDistFade: f32,
+  lowDetail: bool
+) -> VolSample {
+  var outD: VolSample;
+  outD.emission = vec3f(0.0);
+  outD.extinction = 0.0;
+
+  let diskDens = max(u.streamParams.z, 0.0);
+  let phase = clamp(u.camUp_tdePhase.w, 0.02, 1.0);
+  let phaseDisk = smoothstep(0.18, 0.68, phase);
+  if (diskDens <= 0.001 || phaseDisk <= 0.01) {
+    return outD;
+  }
+  if (rKerr <= rPlus * 1.02 || rKerr >= rOuter * 1.06) {
+    return outD;
+  }
+
+  let hScale = (0.14 + 0.042 * (rKerr - rIsco) * 0.35 + 0.16 * phase) * (1.0 + 0.15 * clamp(u.streamParams.y, 0.0, 2.0));
+  let vDens = exp(-(pos.y * pos.y) / max(hScale * hScale, 0.015));
+  if (vDens < 0.006) {
+    return outD;
+  }
+
+  let radialIn = smoothstep(rPlus * 1.03, rIsco * 1.04, rKerr);
+  let radialOut = 1.0 - smoothstep(rOuter * 0.52, rOuter * 1.04, rKerr);
+  let rProf = radialIn * radialOut;
+  if (rProf <= 0.004) {
+    return outD;
+  }
+
+  let t = u.resolution_time_frame.z * max(u.visualParams.x, 0.05);
+  let omega = inverseSqrt(max(rKerr * rKerr * rKerr, 0.8)) * 0.85;
+  let phi = atan2(pos.z, pos.x);
+  let advPhase = phi - omega * t * 3.8;
+  let uvN = vec3f(cos(advPhase) * 0.32 + rKerr * 0.11, pos.y * 0.55, sin(advPhase) * 0.32 - t * 0.14);
+  let nMain = textureSampleLevel(uVolumeNoise, sVolume, uvN, 0.0);
+  var structFac = mix(0.45, 1.45, nMain.g * 0.6 + nMain.r * 0.4);
+  if (!lowDetail) {
+    let nFine = textureSampleLevel(uVolumeNoise, sVolume, uvN * 2.4 + vec3f(0.19, 0.0, -t * 0.25), 0.0);
+    structFac *= mix(0.75, 1.28, nFine.a);
+  }
+
+  let rho = max(sqrt(pos.x * pos.x + pos.z * pos.z), 0.1);
+  let kepSpeed = clamp(inverseSqrt(max(rKerr - 0.65 * a, 1.15)), 0.06, 0.72);
+  let velWorld = vec3f(-pos.z / rho, 0.0, pos.x / rho) * kepSpeed;
+  let g = computeFrequencyShift(pos, velWorld, rayP, pt, a, a2, lensing);
+  let rel = clamp(u.camPos_relMode.w, 0.0, 1.0);
+  let gEff = mix(mix(1.0, g, 0.28), g, rel);
+  let beaming = clamp(pow(gEff, mix(1.75, 3.25, rel)), 0.15, 4.2);
+
+  let rNorm = clamp((rOuter - rKerr) / max(rOuter - rIsco, 1.0), 0.0, 1.0);
+  let tempK = u.skyParams.w * (0.62 + 1.25 * rNorm * rNorm) * mix(1.0, gEff, 0.82);
+  let col = sampleBlackbody(tempK);
+
+  let swallowedDim = select(1.0, 0.18, u.modes_pad.w != 0);
+  let dens = vDens * rProf * structFac * diskDens * phaseDisk * swallowedDim;
+  outD.emission = col * (dens * 1.55 * beaming * camDistFade);
+  outD.extinction = dens * 0.34;
+  return outD;
+}
+
+// Blandford-Znajek collimated twin polar jet (Swift J1644 regime)
+fn evalTdeJet(pos: vec3f, rayDpos: vec3f, rPlus: f32, camDistFade: f32) -> vec3f {
+  let jetInt = max(u.streamParams.w, 0.0);
+  if (jetInt <= 0.002) {
+    return vec3f(0.0);
+  }
+  let ay = abs(pos.y);
+  if (ay < rPlus * 0.7 || ay > 38.0) {
+    return vec3f(0.0);
+  }
+  let rho = sqrt(pos.x * pos.x + pos.z * pos.z);
+  let coneR = 0.28 + 0.115 * pow(ay, 0.74);
+  let sheath = exp(-((rho - 0.45 * coneR) * (rho - 0.45 * coneR)) / max(0.32 * coneR * coneR, 0.04));
+  let core = exp(-(rho * rho) / max(0.36 * coneR * coneR, 0.04));
+  let t = u.resolution_time_frame.z * max(u.visualParams.x, 0.05);
+  let phi = atan2(pos.z, pos.x);
+  let jUv = vec3f(cos(phi) * 0.24, ay * 0.12 - t * 1.9, sin(phi) * 0.24);
+  let n = textureSampleLevel(uVolumeNoise, sVolume, jUv, 0.0);
+
+  let jetSign = select(-1.0, 1.0, pos.y >= 0.0);
+  let cosBeam = clamp(dot(normalize(rayDpos), vec3f(0.0, jetSign, 0.0)), -1.0, 1.0);
+  // Approaching polar jet boosts along view ray
+  let boost = clamp(pow(1.0 / max(1.0 + 0.52 * cosBeam, 0.35), 1.65), 0.35, 3.2);
+  let verticalEnv = smoothstep(rPlus * 0.7, rPlus * 2.2, ay) * (1.0 - smoothstep(14.0, 36.0, ay));
+  let col = mix(vec3f(0.55, 0.72, 1.25), vec3f(0.92, 0.78, 1.35), sheath);
+  return col * ((core * 0.85 + sheath * 0.65) * (0.45 + 0.9 * n.g) * verticalEnv * boost * jetInt * 0.42 * camDistFade);
+}
+
+// ============================================================================
+// 3. EQUATORIAL & WRAP-SAFE SKY LENSING + SPECTRAL STARS
+// ============================================================================
+
+fn rotateSkyDir(d: vec3f) -> vec3f {
+  let cX = u.skyTrig.x;
+  let sX = u.skyTrig.y;
+  let cY = u.skyTrig.z;
+  let sY = u.skyTrig.w;
+  let rx = vec3f(d.x * cX - d.z * sX, d.y, d.x * sX + d.z * cX);
+  return vec3f(rx.x, rx.y * cY - rx.z * sY, rx.y * sY + rx.z * cY);
+}
+
+fn hash33f(p: vec3f) -> vec3f {
+  var q = fract(p * vec3f(0.1031, 0.1030, 0.0973));
+  q += dot(q, q.yxz + vec3f(33.33));
+  return fract((q.xxy + q.yxx) * q.zyx);
+}
+
+fn evalMicroStarLayer(dir: vec3f, gridScale: f32, threshold: f32, boost: f32, fw: f32) -> vec3f {
+  let p = dir * gridScale;
+  let cell = floor(p);
+  let rnd = hash33f(cell);
+  if (rnd.x < threshold) { return vec3f(0.0); }
+  let local = fract(p) - (vec3f(0.25) + 0.5 * rnd);
+  let d2 = dot(local, local);
+  let mag = (rnd.x - threshold) / (1.0 - threshold);
+  let rRad = max(0.015, fw * gridScale * 0.65);
+  let core = exp(-d2 / max(rRad * rRad, 0.0005));
+  let specT = mix(3400.0, 21000.0, rnd.y * rnd.y);
+  let col = sampleBlackbody(specT);
+  return col * (core * (0.1 + 2.6 * mag) * boost / (1.0 + fw * 6.0));
+}
+
+fn sampleSkyBackground(rawDir: vec3f, escaped: bool, edgeMask: f32) -> vec3f {
+  let dir = normalize(rotateSkyDir(rawDir));
+  let u1 = atan2(dir.z, dir.x) * INV_TAU + 0.5;
+  let v  = acos(clamp(dir.y, -1.0, 1.0)) * INV_PI;
+  let uv1 = vec2f(u1, v);
+  let uv2 = vec2f(fract(u1 + 0.5), v);
+
+  let dx1 = dpdx(uv1);
+  let dy1 = dpdy(uv1);
+  let dx2 = dpdx(uv2);
+  let dy2 = dpdy(uv2);
+
+  var dUVdx = vec2f(select(dx2.x, dx1.x, abs(dx1.x) < abs(dx2.x)), dx1.y);
+  var dUVdy = vec2f(select(dy2.x, dy1.x, abs(dy1.x) < abs(dy2.x)), dy1.y);
+  if (edgeMask > 0.01) {
+    dUVdx = vec2f(1.0 / 4096.0, 0.0);
+    dUVdy = vec2f(0.0, 1.0 / 2048.0);
+  } else {
+    dUVdx = clamp(dUVdx, vec2f(-0.045), vec2f(0.045));
+    dUVdy = clamp(dUVdy, vec2f(-0.045), vec2f(0.045));
+  }
+  var dirFw = length(fwidth(dir));
+  if (edgeMask > 0.01) {
+    dirFw = 0.0012;
+  }
+
+  if (!escaped) {
+    return vec3f(0.0);
+  }
+
+  let sampleUv = vec2f(uv1.x, clamp(uv1.y, 0.005, 0.995));
+  let skyMode = u.modes_pad.y;
+  var mapSrgb: vec3f;
+  if (skyMode == 2) {
+    mapSrgb = textureSampleGrad(uProcSkyMap, sSky, sampleUv, dUVdx, dUVdy).rgb;
+  } else {
+    mapSrgb = textureSampleGrad(uSkyMap, sSky, sampleUv, dUVdx, dUVdy).rgb;
+  }
+  var skyLin = pow(max(mapSrgb, vec3f(0.0)), vec3f(2.2));
+  let brightCores = max(skyLin - vec3f(0.32), vec3f(0.0));
+  skyLin += brightCores * brightCores * 2.4;
+
+  if (skyMode == 0 || skyMode == 2) {
+    let starGain = select(0.95, 0.55, skyMode == 0);
+    skyLin += evalMicroStarLayer(dir, 105.0, 0.915, 0.95 * starGain, dirFw)
+            + evalMicroStarLayer(dir, 225.0, 0.885, 0.42 * starGain, dirFw);
+  }
+  return skyLin * max(u.skyParams.x, 0.0);
+}
+
+// ============================================================================
+// 4. MAIN OUTGOING KERR-SCHILD RAYMARCHER + TDE VOLUME RADIATIVE TRANSFER
+// ============================================================================
+
+@fragment
+fn fs_main(in: VSOut) -> @location(0) vec4f {
+  let res = max(u.resolution_time_frame.xy, vec2f(1.0));
+  let pixelCoord = in.pos.xy + u.jitter_fov_spin.xy;
+  let ndc = vec2f(
+    (pixelCoord.x / res.x) * 2.0 - 1.0,
+    1.0 - (pixelCoord.y / res.y) * 2.0
+  );
+
+  let aspect = res.x / res.y;
+  let tanHalfFov = u.kerrConsts.w;
+  let localRay = normalize(vec3f(ndc.x * aspect * tanHalfFov, ndc.y * tanHalfFov, 1.0));
+
+  let a = clamp(u.jitter_fov_spin.w, 0.0, 0.998);
+  let a2 = a * a;
+  let lensing = clamp(u.camRight_lensing.w, 0.0, 1.0);
+  let rPlus  = u.kerrConsts.x;
+  let rIsco  = u.kerrConsts.y;
+  let rOuter = u.kerrConsts.z;
+
+  // Exact ZAMO orthonormal observer tetrad null momentum
+  let pUp = -u.zamoE0 + localRay.x * u.zamoE1 + localRay.y * u.zamoE2 + localRay.z * u.zamoE3;
+  let lp = -pUp.x + dot(u.camKS_l_2H.xyz, pUp.yzw);
+  let twoHL = u.camKS_l_2H.w * lp;
+  let pt = -pUp.x - twoHL;
+  var p = pUp.yzw + twoHL * u.camKS_l_2H.xyz;
+  var pos = u.camPos_relMode.xyz;
+
+  let bnCoord = vec2i(i32(in.pos.x) & 127, i32(in.pos.y) & 127);
+  let bnRaw = textureLoad(uBlueNoise, bnCoord, 0);
+  let fIdx = f32(u.modes_pad.x & 1023);
+  let bn = fract(bnRaw + fIdx * vec4f(0.75487766, 0.56984029, 0.43015971, 0.61803399));
+
+  let quality = u.modes_pad.z;
+  var maxSteps : i32 = 220;
+  var qualScale : f32 = 1.0;
+  if (quality <= 0) {
+    maxSteps = 145;
+    qualScale = 1.28;
+  } else if (quality >= 2) {
+    maxSteps = 320;
+    qualScale = 0.68;
+  }
+  let lowDetailBase = (quality <= 0);
+
+  let escapeR    = u.rayConsts.x;
+  let captureR   = u.rayConsts.y;
+  let maxSlabY   = u.rayConsts.z;
+  let hasJet     = (u.streamParams.w > 0.002);
+
+  var radiance = vec3f(0.0);
+  var transmittance : f32 = 1.0;
+  var rayDist : f32 = 0.0;
+  var captured = false;
+  var escaped = false;
+  var finalVel = localRay;
+
+  for (var step: i32 = 0; step < maxSteps; step++) {
+    let k1 = evalGeodesicRHS(pos, p, pt, a, a2, lensing);
+    let r = k1.f.r;
+    finalVel = k1.dpos;
+
+    if (r <= captureR) {
+      captured = true;
+      break;
+    }
+
+    let outbound = (dot(pos, k1.dpos) > 0.0);
+    if (outbound && r > escapeR) {
+      escaped = true;
+      break;
+    }
+
+    let hScale = clamp((r - 0.85 * rPlus) * 0.072, 0.045, 2.55) * qualScale;
+    let maxStep = select(2.6, 1.35, r < 34.0);
+    var h = clamp(hScale, 0.032, maxStep);
+    if (step == 0) {
+      h *= mix(0.65, 1.0, bn.x);
+    }
+
+    let useRk2 = (r > rPlus * 5.2 + 2.5);
+    var posNext: vec3f;
+    var pNext: vec3f;
+    var rMidEst = r;
+
+    if (!useRk2) {
+      let k2 = evalGeodesicRHS(pos + 0.5 * h * k1.dpos, p + 0.5 * h * k1.dp, pt, a, a2, lensing);
+      let k3 = evalGeodesicRHS(pos + 0.5 * h * k2.dpos, p + 0.5 * h * k2.dp, pt, a, a2, lensing);
+      let k4 = evalGeodesicRHS(pos + h * k3.dpos, p + h * k3.dp, pt, a, a2, lensing);
+      posNext = pos + (h / 6.0) * (k1.dpos + 2.0 * k2.dpos + 2.0 * k3.dpos + k4.dpos);
+      pNext   = p   + (h / 6.0) * (k1.dp   + 2.0 * k2.dp   + 2.0 * k3.dp   + k4.dp);
+      rMidEst = k2.f.r;
+    } else {
+      let k2 = evalGeodesicRHS(pos + 0.5 * h * k1.dpos, p + 0.5 * h * k1.dp, pt, a, a2, lensing);
+      posNext = pos + h * k2.dpos;
+      pNext   = p   + h * k2.dp;
+      rMidEst = k2.f.r;
+    }
+
+    let segLen = length(posNext - pos);
+    let midDist = rayDist + 0.5 * segLen;
+    let camDistFade = smoothstep(0.0, 0.85, midDist);
+    let lowDet = lowDetailBase || (transmittance < 0.09);
+
+    if (rMidEst < 38.0) {
+      let midPos = mix(pos, posNext, fract(bn.y + f32(step) * 0.61803399));
+      let midP = 0.5 * (p + pNext);
+      let rMid = evalKerrR(midPos, a2);
+
+      // Accumulate TDE debris stream + shock + stellar core
+      let tdeSamp = evalTidalDebris(midPos, rMid, midP, pt, rPlus, a, a2, lensing, camDistFade, lowDet);
+      if (tdeSamp.extinction > 1e-6 || dot(tdeSamp.emission, tdeSamp.emission) > 1e-9) {
+        let tau = tdeSamp.extinction * segLen;
+        let stepT = exp(-tau);
+        let stepRad = select(
+          tdeSamp.emission * segLen,
+          tdeSamp.emission * ((1.0 - stepT) / max(tdeSamp.extinction, 1e-5)),
+          tau > 1e-4
+        );
+        radiance += transmittance * stepRad;
+        transmittance *= stepT;
+      }
+
+      // Accumulate circularization accretion disk
+      let inSlab = (min(pos.y, posNext.y) <= maxSlabY && max(pos.y, posNext.y) >= -maxSlabY);
+      if (inSlab && transmittance > 0.008 && rMid < rOuter * 1.1) {
+        let diskSamp = evalCircularDisk(midPos, rMid, midP, pt, rIsco, rOuter, rPlus, a, a2, lensing, camDistFade, lowDet);
+        if (diskSamp.extinction > 1e-6 || dot(diskSamp.emission, diskSamp.emission) > 1e-9) {
+          let tauD = diskSamp.extinction * segLen;
+          let stepTD = exp(-tauD);
+          let stepRadD = select(
+            diskSamp.emission * segLen,
+            diskSamp.emission * ((1.0 - stepTD) / max(diskSamp.extinction, 1e-5)),
+            tauD > 1e-4
+          );
+          radiance += transmittance * stepRadD;
+          transmittance *= stepTD;
+        }
+      }
+
+      if (hasJet && transmittance > 0.008) {
+        let jPos = mix(pos, posNext, fract(bn.z + f32(step) * 0.38196601));
+        let jEmit = evalTdeJet(jPos, k1.dpos, rPlus, camDistFade);
+        radiance += transmittance * jEmit * segLen;
+      }
+    }
+
+    pos = posNext;
+    p   = pNext;
+    rayDist += segLen;
+
+    if (transmittance < 0.008) {
+      break;
+    }
+  }
+
+  if (!captured && !escaped) {
+    let rEnd = evalKerrR(pos, a2);
+    if (rEnd < rPlus * 1.65 || (rEnd < 4.0 * rPlus && dot(pos, finalVel) < 0.0)) {
+      captured = true;
+    } else {
+      escaped = true;
+    }
+  }
+
+  let escFlag = select(0.0, 1.0, escaped && !captured && transmittance > 0.008);
+  let edgeMask = fwidth(escFlag);
+  let safeSkyDir = select(localRay, normalize(finalVel), dot(finalVel, finalVel) > 1e-10);
+  let skyColor = sampleSkyBackground(safeSkyDir, escFlag > 0.5, edgeMask);
+
+  if (escFlag > 0.5) {
+    radiance += transmittance * skyColor;
+  }
+
+  radiance = clamp(sanitizeVec3Zero(radiance), vec3f(0.0), vec3f(28.0));
+  return vec4f(radiance, 1.0);
+}

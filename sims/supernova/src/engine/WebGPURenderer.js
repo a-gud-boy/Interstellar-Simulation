@@ -18,6 +18,7 @@ import {
   formatAdapterName,
   formatWgslMessages,
 } from '../../../../shared/engine/SharedWebGPUPostPipeline.js';
+import { createWebGPUPassProfiler } from '../../../../shared/engine/gpuProfiler.js';
 import { evalSedovTaylor, evalSupernovaCentralTempK } from './Physics.js';
 import {
   createProceduralSkyTextureWebGPU,
@@ -68,6 +69,7 @@ export class WebGPURenderer {
     this.width = 0;
     this.height = 0;
     this.dpr = 1;
+    this.maxDpr = MAX_DPR;
     this.resolutionScale = 1.0;
 
     this.frameIndex = 0;
@@ -111,6 +113,9 @@ export class WebGPURenderer {
     const requiredFeatures = [];
     if (adapter.features?.has('rg11b10ufloat-renderable')) {
       requiredFeatures.push('rg11b10ufloat-renderable');
+    }
+    if (adapter.features?.has('timestamp-query')) {
+      requiredFeatures.push('timestamp-query');
     }
 
     const device = await adapter.requestDevice(
@@ -290,7 +295,9 @@ export class WebGPURenderer {
       });
     }
 
+    this.profiler = createWebGPUPassProfiler(device);
     this.post = new SharedWebGPUPostPipeline({
+      profiler: this.profiler,
       device,
       context: this.context,
       canvasFormat: this.canvasFormat,
@@ -429,9 +436,10 @@ export class WebGPURenderer {
     });
   }
 
-  resize(resolutionScale = this.resolutionScale) {
+  resize(resolutionScale = this.resolutionScale, maxDpr = this.maxDpr) {
     const scale = Math.max(0.25, Math.min(1.0, Number(resolutionScale) || 1.0));
-    const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+    const dprCap = Math.max(0.5, Math.min(3.0, Number(maxDpr) || MAX_DPR));
+    const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
     const cssW = Math.max(1, this.canvas.clientWidth || window.innerWidth || 1280);
     const cssH = Math.max(1, this.canvas.clientHeight || window.innerHeight || 720);
 
@@ -442,6 +450,7 @@ export class WebGPURenderer {
       nextW === this.width &&
       nextH === this.height &&
       Math.abs(scale - this.resolutionScale) < 1e-4 &&
+      Math.abs(dprCap - this.maxDpr) < 1e-4 &&
       this.post?.getSceneView()
     ) {
       return false;
@@ -450,6 +459,7 @@ export class WebGPURenderer {
     this.width = nextW;
     this.height = nextH;
     this.dpr = dpr;
+    this.maxDpr = dprCap;
     this.resolutionScale = scale;
 
     if (this.canvas.width !== nextW || this.canvas.height !== nextH) {
@@ -530,6 +540,14 @@ export class WebGPURenderer {
 
   markPostDirty() {
     this._postDirty = true;
+  }
+
+  setProfilerEnabled(enabled) {
+    this.profiler?.setEnabled(enabled);
+  }
+
+  getProfilerMetrics() {
+    return this.profiler ? this.profiler.getMetrics() : null;
   }
 
   getAllShadersCompiled() {
@@ -643,7 +661,9 @@ export class WebGPURenderer {
 
     const sceneView = this.post.getSceneView();
     if (this.supernovaPipeline && this.supernovaBindGroup && sceneView) {
+      const ts = this.profiler?.timestampWritesFor('raymarch');
       const pass = encoder.beginRenderPass({
+        ...(ts ? { timestampWrites: ts } : {}),
         colorAttachments: [
           {
             view: sceneView,
@@ -664,6 +684,7 @@ export class WebGPURenderer {
 
   _submitFrame(commandBuffer) {
     this.device.queue.submit([commandBuffer]);
+    this.profiler?.afterSubmit();
     if (this._useQueueBackpressure) {
       this._inFlight++;
       this.device.queue.onSubmittedWorkDone().then(
@@ -719,17 +740,22 @@ export class WebGPURenderer {
         const blendFactor = this._hardReset ? 1.0 : 1.0 / this.sampleCount;
         this._hardReset = false;
 
+        this.profiler?.beginFrame();
+
         const encoder = this.device.createCommandEncoder({ label: 'frame-progressive' });
         this._encodeSupernovaAndTaa(encoder, state, cam, simTime, jitterX, jitterY, blendFactor, true);
         this.post.encodeBloomAndAnamorphic(encoder, state);
         this.post.encodeComposite(encoder, state, this.width, this.height, simTime, this.frameIndex);
+        this.profiler?.endFrame(encoder);
         this._submitFrame(encoder.finish());
         this._postDirty = false;
         return true;
       } else if (this._postDirty || opts.forceComposite) {
+        this.profiler?.beginFrame();
         const encoder = this.device.createCommandEncoder({ label: 'frame-regrade' });
         this.post.encodeBloomAndAnamorphic(encoder, state);
         this.post.encodeComposite(encoder, state, this.width, this.height, simTime, this.frameIndex);
+        this.profiler?.endFrame(encoder);
         this._submitFrame(encoder.finish());
         this._postDirty = false;
         return true;
@@ -755,10 +781,13 @@ export class WebGPURenderer {
     const jitterX = blendFactor >= 0.999 ? 0.0 : halton(jitterIdx, 2) - 0.5;
     const jitterY = blendFactor >= 0.999 ? 0.0 : halton(jitterIdx, 3) - 0.5;
 
+    this.profiler?.beginFrame();
+
     const encoder = this.device.createCommandEncoder({ label: 'frame-taa' });
     this._encodeSupernovaAndTaa(encoder, state, cam, simTime, jitterX, jitterY, blendFactor, false);
     this.post.encodeBloomAndAnamorphic(encoder, state);
     this.post.encodeComposite(encoder, state, this.width, this.height, simTime, this.frameIndex);
+    this.profiler?.endFrame(encoder);
     this._submitFrame(encoder.finish());
     this._postDirty = false;
     return true;
@@ -862,6 +891,7 @@ export class WebGPURenderer {
 
   dispose() {
     this._disposed = true;
+    this.profiler?.dispose();
     this.post?.dispose();
     this.volumeNoiseTex?.destroy();
     this.blackbodyTex?.destroy();

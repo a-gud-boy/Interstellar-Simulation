@@ -1,4 +1,5 @@
 pub mod post;
+pub mod profiler;
 
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -4,6 +4,7 @@
  */
 
 import { SIMULATORS, getSimById } from '../shared/simRegistry.js';
+import { registerObservatorySw } from '../shared/engine/pwaRegister.js';
 import { CATEGORIES, SIM_CATALOG_META } from './catalogData.js';
 
 const BACKEND_STORAGE_KEY = 'interstellar-backend';
@@ -558,6 +559,7 @@ function bootHomepage() {
   initBackendControls();
   initDialogs();
   initKeyboardNav();
+  registerObservatorySw();
 }
 
 bootHomepage();

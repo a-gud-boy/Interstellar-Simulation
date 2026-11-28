@@ -387,6 +387,8 @@ fn render_all_seven_sims_with_hud() {
         (SimId::Starflight, true, "09_starflight_drawer.png"),
         (SimId::LensCluster, false, "10_lens_cluster_hud.png"),
         (SimId::LensCluster, true, "11_lens_cluster_drawer.png"),
+        (SimId::Tde, false, "12_tde_hud.png"),
+        (SimId::Tde, true, "13_tde_drawer.png"),
     ];
 
     for (sim_id, drawer_open, filename) in cases {

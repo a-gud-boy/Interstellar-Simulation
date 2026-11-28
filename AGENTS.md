@@ -16,8 +16,10 @@ Static, zero-dependency, dual-backend (**WebGL2 + WebGPU**) relativistic GPU ray
 | `sims/supernova/` | Volumetric Multi-Scattering Supernova Remnant & Nebula | `window.__SUPERNOVA__` |
 | `sims/pulsar/` | Magnetar / Millisecond Pulsar Magnetosphere & GR Lensing | `window.__PULSAR__` |
 | `sims/starflight/` | Relativistic Starflight (SR Aberration, Doppler & Terrell Sky) | `window.__STARFLIGHT__` |
+| `sims/lens-cluster/` | Gravitational Lensing Observatory (Einstein Rings, Caustics & NFW Cluster) | `window.__LENS_CLUSTER__` |
+| `sims/tde/` | Tidal Disruption Event (Kerr Stream Precession, Nozzle Shock & Hills Limit) | `window.__TDE__` |
 
-- Root `index.html` renders the lightweight Observatory Homepage at `/` and `/?hub`, while `?sim=<alias>` redirects via `./shared/simRegistry.js` (forwarding query params such as `?backend=webgpu`, or falling back to `./sims/blackhole/` for unknown aliases).
+- Root `index.html` renders the lightweight Observatory Homepage at `/` and `/?hub`, while `?sim=<alias>` redirects via `./shared/simRegistry.js` (forwarding query params such as `?backend=webgpu` and `#s=` state hash, or falling back to `./sims/blackhole/` for unknown aliases).
 - Cross-sim navigation (`nav[aria-label="Simulation switcher"]`) is mounted dynamically from `shared/ui/simSwitcher.js` and `shared/simRegistry.js` using relative `../../sims/<id>/` links and canonical `#sim-switch-<id>` IDs; local HTTP servers **must serve the repository root**, not an individual simulator folder.
 
 ## Local Launch (`./launch.sh`)
@@ -28,7 +30,7 @@ Serves the repo root via `python3 -m http.server` on the first free port in `127
 # Default: Observatory Homepage (index.html), headed X11 Google Chrome (dark mode)
 ./launch.sh
 
-# Select simulator (--blackhole | --wormhole | --binary | --warp | --supernova | --pulsar | --starflight | --sim <name>)
+# Select simulator (--blackhole | --wormhole | --binary | --warp | --supernova | --pulsar | --starflight | --lens-cluster | --tde | --sim <name>)
 ./launch.sh --blackhole
 ./launch.sh --wormhole
 ./launch.sh --binary
@@ -36,6 +38,8 @@ Serves the repo root via `python3 -m http.server` on the first free port in `127
 ./launch.sh --supernova
 ./launch.sh --pulsar
 ./launch.sh --starflight
+./launch.sh --lens-cluster
+./launch.sh --tde
 
 # Start directly in WebGPU (?backend=webgpu) or WebGL2 (?backend=webgl2)
 ./launch.sh --webgpu
@@ -53,11 +57,11 @@ Pass extra browser or desktop arguments after `--`. Prerequisites: `python3` + `
 
 ## Verification Suites
 
-Use either the unified runner (`scripts/run-tests.mjs`) or run individual suites from the repository root (`<sim>` ∈ `sims/blackhole`, `sims/wormhole`, `sims/binary`, `sims/warp`, `sims/supernova`, `sims/pulsar`, `sims/starflight`):
+Use either the unified runner (`scripts/run-tests.mjs`) or run individual suites from the repository root (`<sim>` ∈ `sims/blackhole`, `sims/wormhole`, `sims/binary`, `sims/warp`, `sims/supernova`, `sims/pulsar`, `sims/starflight`, `sims/lens-cluster`, `sims/tde`):
 
 ```bash
 # Unified runner
-node scripts/run-tests.mjs --physics            # shared/tests/shared_check.mjs + all 7 physics_check.mjs
+node scripts/run-tests.mjs --physics            # shared/tests/shared_check.mjs + all 9 physics_check.mjs
 node scripts/run-tests.mjs --desktop            # cargo test --manifest-path desktop/Cargo.toml --test physics_parity --test shader_validation
 node scripts/run-tests.mjs --all --sim pulsar   # scoped full run (gracefully skips browser/firefox if display/GPU absent)
 
@@ -96,4 +100,4 @@ node sims/<id>/tests/firefox_qa.mjs
 3. **Ignore `docs/ideas.md`**: Do **not** treat `docs/ideas.md` as an active specification, roadmap, or requirements doc, and do **not** read it unless the user explicitly asks.
 4. **Shared Layer vs. Per-Simulator Modules**:
    - **Shared in `shared/`**: `simRegistry.js`, single canonical `assets/milkyway_4k.jpg` (also embedded by `desktop/src/assets/sky.rs`), `assets/physicalLuts.js`, `assets/skyLoader.js`, `shaders/common.{glsl,wgsl}.js`, `shaders/postConfig.js`, `shaders/post.{glsl,wgsl}.js`, `ui/base.css`, `ui/simSwitcher.js`, and `testing/{staticServer,chromeCdp,firefoxHarness}.mjs`. Editing anything in `shared/` affects multiple simulators (or `desktop/` for the sky JPEG); verify all dependents.
-   - **Per-simulator only**: `sims/<id>/styles.css` holds `:root` Observatory token overrides (+ small sim-specific rules like `#btn-traverse span` in `sims/wormhole`), `sims/<id>/src/ui/ControlsHUD.js` is unique per simulator, `sims/<id>/src/shaders/<id>.*` and `sims/<id>/src/engine/{CameraController,Physics,Presets,WebGLRenderer,WebGPURenderer}.js` hold simulator physics, and `sims/wormhole/` intentionally uses the blue-noise-only subset of `physicalLuts.js` and dual-universe Universe A + B APIs from `skyLoader.js`. `sims/pulsar` and `sims/starflight` pass `'pulsar'` / `'starflight'` optical profile names into `createPostShaders{GLSL,WGSL}` from `shared/shaders/post.*.js`.
+   - **Per-simulator only**: `sims/<id>/styles.css` holds `:root` Observatory token overrides (+ small sim-specific rules like `#btn-traverse span` in `sims/wormhole`), `sims/<id>/src/ui/ControlsHUD.js` is unique per simulator, `sims/<id>/src/shaders/<id>.*` and `sims/<id>/src/engine/{CameraController,Physics,Presets,WebGLRenderer,WebGPURenderer}.js` hold simulator physics, and `sims/wormhole/` intentionally uses the blue-noise-only subset of `physicalLuts.js` and dual-universe Universe A + B APIs from `skyLoader.js`. `sims/pulsar`, `sims/starflight`, `sims/lens-cluster`, and `sims/tde` pass `'pulsar'`, `'starflight'`, `'lens-cluster'`, and `'tde'` optical profile names into `createPostShaders{GLSL,WGSL}` from `shared/shaders/post.*.js`.

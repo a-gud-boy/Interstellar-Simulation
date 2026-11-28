@@ -2,7 +2,7 @@
 /**
  * Unified Interstellar Simulation Test Runner
  *
- * Orchestrates shared contract checks, 7-simulator physics checks,
+ * Orchestrates shared contract checks, 9-simulator physics checks,
  * native Rust desktop parity/shader tests, and headed NVIDIA GPU QA suites.
  */
 
@@ -24,6 +24,7 @@ Options:
   --homepage         Run shared/tests/homepage_qa.mjs (Chrome X11 NVIDIA; skips if prereqs absent)
   --browser          Run homepage_qa.mjs (when unscoped) and <sim>/tests/browser_qa.mjs (Chrome X11 NVIDIA)
   --firefox          Run <sim>/tests/firefox_qa.mjs (Firefox Wayland NVIDIA; skips if prereqs absent)
+  --parity           Run scripts/parity-diff.mjs (WebGL2 vs WebGPU PSNR/SSIM diffing; skips if prereqs absent)
   --all              Run --physics, --desktop, --browser (incl. --homepage), and --firefox
   --sim <name>       Scope web suites to specific simulator(s) (repeatable or comma-separated)
   -h, --help         Show this help message and exit`);
@@ -36,6 +37,7 @@ function parseArgs(argv) {
     homepage: false,
     browser: false,
     firefox: false,
+    parity: false,
     simTokens: [],
     help: false,
   };
@@ -54,6 +56,8 @@ function parseArgs(argv) {
       opts.browser = true;
     } else if (arg === '--firefox') {
       opts.firefox = true;
+    } else if (arg === '--parity') {
+      opts.parity = true;
     } else if (arg === '--all') {
       opts.physics = true;
       opts.desktop = true;
@@ -76,7 +80,7 @@ function parseArgs(argv) {
     }
   }
 
-  if (!opts.physics && !opts.desktop && !opts.homepage && !opts.browser && !opts.firefox) {
+  if (!opts.physics && !opts.desktop && !opts.homepage && !opts.browser && !opts.firefox && !opts.parity) {
     opts.physics = true;
   }
   return opts;
@@ -223,6 +227,23 @@ function main() {
         const script = path.join(sim.dir, 'tests/firefox_qa.mjs');
         runStep(results, `${sim.dir} firefox_qa`, process.execPath, [script]);
       }
+    }
+  }
+
+  if (opts.parity) {
+    const missing = [];
+    if (!fs.existsSync('/usr/bin/google-chrome')) missing.push('/usr/bin/google-chrome');
+    if (!process.env.DISPLAY) missing.push('DISPLAY (headed X11)');
+    if (!hasNvidiaGpu()) missing.push('nvidia-smi');
+
+    if (missing.length > 0) {
+      skipStep(results, 'parity_diff', `missing prerequisites: ${missing.join(', ')}`);
+    } else {
+      const args = ['scripts/parity-diff.mjs'];
+      if (scopedBySim) {
+        args.push('--sim', selectedSims.map((s) => s.id).join(','));
+      }
+      runStep(results, 'parity_diff', process.execPath, args);
     }
   }
 

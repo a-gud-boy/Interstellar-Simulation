@@ -12,10 +12,12 @@ use crate::ui::theme::{
     tracked_job, with_alpha,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_bottom_dock(
     ctx: &Context,
     sim: &dyn Simulation,
     meta: &HudMetadata,
+    tour_open: bool,
     theme: &SimTheme,
     screen_size: Vec2,
     glass_tex_id: Option<TextureId>,
@@ -227,6 +229,23 @@ pub(crate) fn draw_bottom_dock(
                         .clicked()
                         {
                             actions.push(HudAction::CapturePng);
+                        }
+
+                        if screen_size.x >= 1180.0
+                            && draw_pill_button(
+                                ui,
+                                "Tour",
+                                tour_open,
+                                false,
+                                theme,
+                                30.0,
+                                8.0,
+                                None,
+                                Some("I"),
+                            )
+                            .clicked()
+                        {
+                            actions.push(HudAction::TogglePhysicsTour);
                         }
 
                         if draw_pill_button(

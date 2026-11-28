@@ -6,7 +6,9 @@ use egui::{
     Stroke, TextureId, Vec2,
 };
 
+use crate::recorder::RecorderMode;
 use crate::renderer::SharedGpuAssets;
+use crate::settings::QualityProfile;
 use crate::sims::{ControlKind, HudMetadata, SimTheme, Simulation};
 use crate::ui::theme::{
     DRAWER_WIDTH, HUD_PAD, apply_dark_widget_visuals, draw_chevron_icon, draw_close_icon,
@@ -276,7 +278,7 @@ pub(crate) fn draw_controls_drawer(
                                                     ui.add_space(3.0);
                                                 }
 
-                                                // Add Native Present Mode control at end of optics section
+                                                // Add Display & Performance + Cinema Recorder at end of optics section
                                                 if sec_idx + 1 == section_count {
                                                     let curr_vsync = i32::from(hud.vsync);
                                                     if let Some(next_vsync) =
@@ -315,6 +317,194 @@ pub(crate) fn draw_controls_drawer(
                                         ui.add_space(14.0);
                                     });
                                 }
+
+                                // Display & Performance (Persistent Settings)
+                                draw_shared_section(
+                                    ui,
+                                    hud,
+                                    "__perf",
+                                    "DISPLAY & PERFORMANCE",
+                                    false,
+                                    inner_w,
+                                    theme,
+                                    |ui, hud| {
+                                        if let Some(next_prof) = draw_segmented_control(
+                                            ui,
+                                            "Quality Profile",
+                                            &[(0, "Eco"), (1, "Balanced"), (2, "Ultra")],
+                                            hud.quality_profile.as_i32(),
+                                            theme,
+                                        ) && let Some(p) = QualityProfile::from_i32(next_prof)
+                                        {
+                                            actions.push(HudAction::SetQualityProfile(p));
+                                        }
+                                        ui.add_space(3.0);
+
+                                        let dpr_idx = if hud.dpr_cap <= 1.2 {
+                                            10
+                                        } else if hud.dpr_cap <= 1.75 {
+                                            15
+                                        } else {
+                                            20
+                                        };
+                                        if let Some(next_dpr) = draw_segmented_control(
+                                            ui,
+                                            "DPR Cap",
+                                            &[(10, "1.0×"), (15, "1.5×"), (20, "2.0×")],
+                                            dpr_idx,
+                                            theme,
+                                        ) {
+                                            actions.push(HudAction::SetDprCap(
+                                                next_dpr as f32 / 10.0,
+                                            ));
+                                        }
+                                        ui.add_space(3.0);
+
+                                        if let Some(next_drag) = draw_segmented_control(
+                                            ui,
+                                            "0.75× Scale While Dragging",
+                                            &[(0, "Off"), (1, "On")],
+                                            i32::from(hud.interactive_drag_scale),
+                                            theme,
+                                        ) {
+                                            actions.push(HudAction::SetInteractiveDragScale(
+                                                next_drag != 0,
+                                            ));
+                                        }
+                                        ui.add_space(3.0);
+
+                                        if let Some(_next_tour) = draw_segmented_control(
+                                            ui,
+                                            "Interactive Physics Tour (I)",
+                                            &[(0, "Off"), (1, "On")],
+                                            i32::from(hud.physics_tour_open),
+                                            theme,
+                                        ) {
+                                            actions.push(HudAction::TogglePhysicsTour);
+                                        }
+                                        ui.add_space(3.0);
+
+                                        if let Some(_next_prof) = draw_segmented_control(
+                                            ui,
+                                            "GPU Pass Profiler (G)",
+                                            &[(0, "Off"), (1, "On")],
+                                            i32::from(hud.profiler_open),
+                                            theme,
+                                        ) {
+                                            actions.push(HudAction::ToggleProfiler);
+                                        }
+                                    },
+                                );
+
+                                // Cinema PNG Sequence Recorder
+                                draw_shared_section(
+                                    ui,
+                                    hud,
+                                    "__recorder",
+                                    "CINEMA RECORDER",
+                                    false,
+                                    inner_w,
+                                    theme,
+                                    |ui, hud| {
+                                        if let Some(next_mode) = draw_segmented_control(
+                                            ui,
+                                            "Shot Mode",
+                                            &[(0, "Live"), (1, "360° Orbit"), (2, "Evolution")],
+                                            hud.recorder_mode.as_i32(),
+                                            theme,
+                                        ) {
+                                            actions.push(HudAction::SetRecorderMode(
+                                                RecorderMode::from_i32(next_mode),
+                                            ));
+                                        }
+                                        ui.add_space(3.0);
+
+                                        if let Some(next_dur) = draw_segmented_control(
+                                            ui,
+                                            "Duration",
+                                            &[(4, "4s"), (8, "8s"), (12, "12s")],
+                                            hud.recorder_duration_sec as i32,
+                                            theme,
+                                        ) {
+                                            actions.push(HudAction::SetRecorderDuration(
+                                                next_dur as u32,
+                                            ));
+                                        }
+                                        ui.add_space(3.0);
+
+                                        if let Some(next_fps) = draw_segmented_control(
+                                            ui,
+                                            "Frame Rate",
+                                            &[(24, "24 fps"), (30, "30 fps"), (60, "60 fps")],
+                                            hud.recorder_fps as i32,
+                                            theme,
+                                        ) {
+                                            actions.push(HudAction::SetRecorderFps(
+                                                next_fps as u32,
+                                            ));
+                                        }
+                                        ui.add_space(5.0);
+
+                                        let btn_label = if hud.recording_active {
+                                            format!(
+                                                "Stop PNG Sequence ({}/{}) [V]",
+                                                hud.recording_frame, hud.recording_total_frames
+                                            )
+                                        } else {
+                                            "Start PNG Sequence (V)".to_string()
+                                        };
+                                        let (b_rect, b_resp) = ui.allocate_exact_size(
+                                            Vec2::new(inner_w, 32.0),
+                                            Sense::click(),
+                                        );
+                                        if b_resp.hovered() {
+                                            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                                        }
+                                        let (bg, border, fg) = if hud.recording_active {
+                                            (
+                                                Color32::from_rgba_unmultiplied(239, 68, 68, 60),
+                                                Color32::from_rgba_unmultiplied(248, 113, 113, 180),
+                                                Color32::from_rgb(254, 202, 202),
+                                            )
+                                        } else if b_resp.hovered() {
+                                            (
+                                                theme.accent_soft,
+                                                theme.accent_border,
+                                                theme.accent_bright,
+                                            )
+                                        } else {
+                                            (
+                                                Color32::from_rgba_unmultiplied(255, 255, 255, 16),
+                                                theme.glass_border_strong,
+                                                theme.text_primary,
+                                            )
+                                        };
+                                        ui.painter().rect(
+                                            b_rect,
+                                            CornerRadius::same(8),
+                                            bg,
+                                            Stroke::new(1.0, border),
+                                            StrokeKind::Inside,
+                                        );
+                                        let bgal = ui.painter().layout_job(tracked_job(
+                                            &btn_label,
+                                            FontId::new(11.5, semibold_family()),
+                                            fg,
+                                            0.1,
+                                        ));
+                                        ui.painter().galley(
+                                            Pos2::new(
+                                                b_rect.center().x - bgal.size().x * 0.5,
+                                                b_rect.center().y - bgal.size().y * 0.5,
+                                            ),
+                                            bgal,
+                                            fg,
+                                        );
+                                        if b_resp.clicked() {
+                                            actions.push(HudAction::ToggleRecording);
+                                        }
+                                    },
+                                );
                             });
                     },
                 );
@@ -358,4 +548,66 @@ pub(crate) fn draw_controls_drawer(
                 );
             });
         });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_shared_section<F: FnOnce(&mut egui::Ui, &mut HudState)>(
+    ui: &mut egui::Ui,
+    hud: &mut HudState,
+    id: &'static str,
+    title: &str,
+    default_open: bool,
+    inner_w: f32,
+    theme: &SimTheme,
+    body: F,
+) {
+    let is_open = *hud.open_sections.entry(id).or_insert(default_open);
+    ui.horizontal(|ui| {
+        ui.add_space(14.0);
+        ui.vertical(|ui| {
+            ui.set_min_width(inner_w);
+            ui.set_max_width(inner_w);
+            ui.spacing_mut().item_spacing.y = 6.0;
+
+            let (d_rect, _) = ui.allocate_exact_size(Vec2::new(inner_w, 1.0), Sense::hover());
+            ui.painter().line_segment(
+                [d_rect.left_center(), d_rect.right_center()],
+                Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 20)),
+            );
+
+            let (sec_hdr, sec_resp) =
+                ui.allocate_exact_size(Vec2::new(inner_w, 30.0), Sense::click());
+            if sec_resp.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+            let sec_title = ui.painter().layout_job(tracked_job(
+                title,
+                FontId::new(11.0, semibold_family()),
+                theme.accent_bright,
+                1.2,
+            ));
+            ui.painter().galley(
+                Pos2::new(
+                    sec_hdr.left(),
+                    sec_hdr.center().y - sec_title.size().y * 0.5,
+                ),
+                sec_title,
+                theme.accent_bright,
+            );
+            draw_chevron_icon(
+                ui.painter(),
+                Pos2::new(sec_hdr.right() - 8.0, sec_hdr.center().y),
+                with_alpha(theme.accent_bright, 210),
+                is_open,
+            );
+            if sec_resp.clicked() {
+                hud.open_sections.insert(id, !is_open);
+            }
+            if is_open {
+                body(ui, hud);
+            }
+            ui.add_space(4.0);
+        });
+        ui.add_space(14.0);
+    });
 }

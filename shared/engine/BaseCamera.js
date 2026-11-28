@@ -1,7 +1,7 @@
 /**
  * BaseCamera.js — Shared critically damped spring integrators, spherical/local-look
  * orthonormal basis math, cubic flight easing, and input normalization helpers
- * shared across all 7 Interstellar Simulation camera controllers.
+ * shared across all 8 Interstellar Simulation camera controllers.
  */
 
 export const DEG2RAD = Math.PI / 180;

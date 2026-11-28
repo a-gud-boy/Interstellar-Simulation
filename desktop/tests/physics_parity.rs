@@ -245,3 +245,25 @@ fn lens_cluster_gravitational_lensing_parity() {
         assert!(gx.hypot(gy) < 5e-4);
     }
 }
+
+#[test]
+fn tde_hills_limit_fallback_and_precession_parity() {
+    use interstellar_desktop::sims::tde::{compute_kerr_radii, compute_tde_telemetry};
+
+    let (r_hor_0, r_isco_0, r_ibco_0) = compute_kerr_radii(0.0);
+    assert!((r_hor_0 - 2.0).abs() < 1e-6);
+    assert!((r_isco_0 - 6.0).abs() < 1e-4);
+    assert!((r_ibco_0 - 4.0).abs() < 1e-4);
+
+    let peak = compute_tde_telemetry(2.0, 1.0, 1.8, 0.42, 0.72);
+    let late = compute_tde_telemetry(2.0, 1.0, 1.8, 0.84, 0.72);
+    assert!(!peak.swallowed_direct);
+    assert!(peak.eddington_ratio > late.eddington_ratio * 2.5);
+
+    let deep = compute_tde_telemetry(3.2, 1.0, 4.5, 0.55, 0.78);
+    let graze = compute_tde_telemetry(3.2, 1.0, 1.0, 0.55, 0.78);
+    assert!(deep.precess_deg > graze.precess_deg);
+
+    let schw_hills = compute_tde_telemetry(135.0, 1.0, 1.0, 0.50, 0.0);
+    assert!(schw_hills.swallowed_direct);
+}

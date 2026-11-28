@@ -1,0 +1,30 @@
+{
+  "name": "Interstellar Observatory",
+  "short_name": "Interstellar",
+  "description": "Nine real-time WebGL2 & WebGPU relativistic GPU ray-tracing simulators.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#05070e",
+  "background_color": "#03050a",
+  "categories": ["science", "education", "graphics"],
+  "icons": [
+    {
+      "src": "./shared/assets/app-icon-256.png",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./shared/assets/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "./favicon.ico",
+      "sizes": "48x48",
+      "type": "image/x-icon"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 /**
- * SimAppShell.js — Unified WebGL2 + WebGPU application shell shared by all 7
+ * SimAppShell.js — Unified WebGL2 + WebGPU application shell shared by all 9
  * Interstellar Simulation `src/main.js` entrypoints:
  *  - Backend resolution (?backend= / localStorage / default webgl2) & live switcher
  *  - Serialized switch queue with WebGPU <-> WebGL2 fallback and canvas replacement
@@ -10,32 +10,31 @@
 
 import { loadSkyTextureWebGL, loadSkyTextureWebGPU } from '../assets/skyLoader.js';
 import { mountSimSwitcher } from '../ui/simSwitcher.js';
+import { createPhysicsTour } from '../ui/physicsTour.js';
+import { createGpuProfilerOverlay } from '../ui/gpuProfilerOverlay.js';
+import { createSonificationEngine } from './sonification.js';
+import { registerObservatorySw } from './pwaRegister.js';
+import { buildShareableUrl, parseUrlState } from './urlState.js';
+import {
+  DPR_CAP_OPTIONS,
+  GRAPHICS_PROFILES,
+  clampDprCap,
+  inferQualityProfile,
+  loadGraphicsPrefs,
+  saveGraphicsPrefs,
+} from './graphicsProfile.js';
+import {
+  RECORDER_DURATIONS,
+  RECORDER_FPS_OPTIONS,
+  RECORDER_FORMATS,
+  RECORDER_MODES,
+  createCinemaRecorder,
+} from './cinemaRecorder.js';
 
 const DEFAULT_POST_ONLY_KEYS = new Set(['exposure', 'bloomIntensity', 'anamorphicIntensity']);
 const TELEMETRY_INTERVAL_MS = 85;
 const VALID_BACKENDS = new Set(['webgl2', 'webgpu']);
 const FPS_RING_SIZE = 128;
-const PERF_DRAG_SCALE_KEY = 'interstellar_perf_drag_scale';
-const PERF_REDUCED_GLASS_KEY = 'interstellar_perf_reduced_glass';
-
-function readStoredPerfFlag(storageKey, fallback = false) {
-  try {
-    const raw = window.localStorage?.getItem(storageKey);
-    if (raw === '1' || raw === 'true') return true;
-    if (raw === '0' || raw === 'false') return false;
-  } catch {
-    // Ignore restricted localStorage
-  }
-  return fallback;
-}
-
-function writeStoredPerfFlag(storageKey, value) {
-  try {
-    window.localStorage?.setItem(storageKey, value ? '1' : '0');
-  } catch {
-    // Ignore restricted localStorage
-  }
-}
 
 export function normalizeBackend(value) {
   if (typeof value !== 'string') return null;
@@ -185,6 +184,7 @@ export async function createSimApp(config) {
     getDiagnosticsExtra = null,
     extraApi = null,
     onReady = null,
+    sonification = null,
   } = config;
 
   let canvas = document.getElementById(canvasId);
@@ -194,18 +194,38 @@ export async function createSimApp(config) {
   }
 
   const canvasFallbackText = canvas.textContent;
+  const baseDefaults = createInitialState();
   const state = createInitialState();
   if (typeof initState === 'function') initState(state);
 
-  let activeBackend = resolveInitialBackend(storageKey);
+  const urlState =
+    typeof window !== 'undefined'
+      ? parseUrlState(window.location?.search, window.location?.hash)
+      : { hasState: false, backend: null, presetId: null, tour: null, camera: null, params: null };
+  const graphicsPrefs = loadGraphicsPrefs();
+
+  let activeBackend = urlState.backend || resolveInitialBackend(storageKey);
   state.backend = activeBackend;
 
   const simSwitcher = mountSimSwitcher({
     currentSimId: simId,
     initialBackend: activeBackend,
   });
+  registerObservatorySw();
 
-  const initialPreset = getPresetById(state.presetId) || presets[0];
+  const initialPreset =
+    (urlState.presetId && getPresetById(urlState.presetId)) ||
+    getPresetById(state.presetId) ||
+    presets[0];
+
+  if (graphicsPrefs.hasStoredPrefs) {
+    if (graphicsPrefs.resolutionScale !== null && 'resolutionScale' in state) {
+      state.resolutionScale = graphicsPrefs.resolutionScale;
+    }
+    if (graphicsPrefs.quality !== null && 'quality' in state) {
+      state.quality = graphicsPrefs.quality;
+    }
+  }
 
   let renderer = null;
   let camera = null;
@@ -227,11 +247,33 @@ export async function createSimApp(config) {
   let switchTail = Promise.resolve();
   let rendererGeneration = 0;
   let canvasTouched = false;
-  let interactiveDragScale = readStoredPerfFlag(PERF_DRAG_SCALE_KEY, false);
-  let reducedGlass = readStoredPerfFlag(PERF_REDUCED_GLASS_KEY, false);
+  let dprCap = clampDprCap(graphicsPrefs.dprCap, 1.5);
+  let interactiveDragScale = Boolean(graphicsPrefs.interactiveDragScale);
+  let reducedGlass = Boolean(graphicsPrefs.reducedGlass);
+  let qualityProfile =
+    graphicsPrefs.profileId ||
+    inferQualityProfile({
+      quality: state.quality ?? 1,
+      resolutionScale: state.resolutionScale ?? 1.0,
+      dprCap,
+    });
   let isPointerDragging = false;
   let perfDragCheckbox = null;
   let perfGlassCheckbox = null;
+  let profileControlBinding = null;
+  let dprControlBinding = null;
+  let tourBtn = null;
+  let drawerTourBtn = null;
+  let recBtn = null;
+  let drawerRecBtn = null;
+  let recStatusEl = null;
+  let recPillEl = null;
+  let recPillTextEl = null;
+  let audioBtn = null;
+  let drawerAudioBtn = null;
+  let audioStatusEl = null;
+  let toastEl = null;
+  let toastTimer = null;
   const frameRenderOpts = { dt: 0, effectiveResolutionScale: 1.0 };
   const runtimeErrors = [];
 
@@ -239,12 +281,51 @@ export async function createSimApp(config) {
     document.body?.classList.toggle('reduced-glass', reducedGlass);
   }
 
+  function showToast(msg, durationMs = 2800) {
+    if (typeof document === 'undefined') return;
+    if (!toastEl) {
+      toastEl = document.createElement('div');
+      toastEl.id = 'obs-toast';
+      toastEl.className = 'obs-toast glass-surface';
+      toastEl.setAttribute('role', 'status');
+      toastEl.setAttribute('aria-live', 'polite');
+      toastEl.hidden = true;
+      document.getElementById('hud-chrome')?.appendChild(toastEl) || document.body?.appendChild(toastEl);
+    }
+    toastEl.textContent = String(msg);
+    toastEl.hidden = false;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      if (toastEl) toastEl.hidden = true;
+    }, durationMs);
+  }
+
+  function persistGraphics({ profileOverride = null } = {}) {
+    qualityProfile =
+      profileOverride ||
+      inferQualityProfile({
+        quality: state.quality ?? 1,
+        resolutionScale: state.resolutionScale ?? 1.0,
+        dprCap,
+      });
+    saveGraphicsPrefs({
+      profileId: qualityProfile,
+      quality: typeof state.quality === 'number' ? state.quality : null,
+      resolutionScale: typeof state.resolutionScale === 'number' ? state.resolutionScale : null,
+      dprCap,
+      interactiveDragScale,
+      reducedGlass,
+    });
+    profileControlBinding?.set(qualityProfile);
+    dprControlBinding?.set(dprCap);
+  }
+
   function setInteractiveDragScale(enabled, { persist = true, syncUi = true } = {}) {
     interactiveDragScale = Boolean(enabled);
-    if (persist) writeStoredPerfFlag(PERF_DRAG_SCALE_KEY, interactiveDragScale);
+    if (persist) persistGraphics();
     if (syncUi && perfDragCheckbox) perfDragCheckbox.checked = interactiveDragScale;
     if (!interactiveDragScale && renderer && !switchingBackend) {
-      renderer.resize(state.resolutionScale);
+      renderer.resize(state.resolutionScale, dprCap);
     }
     return interactiveDragScale;
   }
@@ -254,9 +335,55 @@ export async function createSimApp(config) {
     if (typeof document !== 'undefined') {
       document.body?.classList.toggle('reduced-glass', reducedGlass);
     }
-    if (persist) writeStoredPerfFlag(PERF_REDUCED_GLASS_KEY, reducedGlass);
+    if (persist) persistGraphics();
     if (syncUi && perfGlassCheckbox) perfGlassCheckbox.checked = reducedGlass;
     return reducedGlass;
+  }
+
+  function setDprCap(nextCap, { persist = true } = {}) {
+    dprCap = clampDprCap(nextCap, 1.5);
+    if (renderer && !switchingBackend) {
+      renderer.resize(state.resolutionScale, dprCap);
+      if (state.paused && camera) {
+        ctx.renderImmediate({ dt: 0, isMotion: false });
+      }
+      ctx.pushTelemetry();
+    }
+    if (persist) persistGraphics();
+    else dprControlBinding?.set(dprCap);
+    return dprCap;
+  }
+
+  function setQualityProfile(profileId, { persist = true } = {}) {
+    const profile = GRAPHICS_PROFILES[String(profileId || '').toLowerCase()];
+    if (!profile) return null;
+    dprCap = profile.dprCap;
+    setInteractiveDragScale(profile.interactiveDragScale, { persist: false, syncUi: true });
+    setReducedGlass(profile.reducedGlass, { persist: false, syncUi: true });
+    if ('quality' in state) {
+      state.quality = profile.quality;
+      hud?.syncState({ quality: state.quality });
+    }
+    if ('resolutionScale' in state) {
+      state.resolutionScale = profile.resolutionScale;
+      hud?.syncState({ resolutionScale: state.resolutionScale });
+    }
+    if (renderer && !switchingBackend) {
+      renderer.resize(state.resolutionScale, dprCap);
+      resetRendererAccumulationCompat(renderer, true);
+      if (state.paused && camera) {
+        ctx.renderImmediate({ dt: 0, isMotion: false });
+      }
+      ctx.pushTelemetry();
+    }
+    if (persist) persistGraphics({ profileOverride: profile.id });
+    else {
+      qualityProfile = profile.id;
+      profileControlBinding?.set(profile.id);
+      dprControlBinding?.set(dprCap);
+    }
+    showToast(`Graphics profile: ${profile.label}`);
+    return profile.id;
   }
 
   if (typeof window !== 'undefined') {
@@ -400,7 +527,7 @@ export async function createSimApp(config) {
         gpuRenderer.dispose();
         throw new Error(errSummary);
       }
-      gpuRenderer.resize(state.resolutionScale);
+      gpuRenderer.resize(state.resolutionScale, dprCap);
       return gpuRenderer;
     }
 
@@ -425,7 +552,7 @@ export async function createSimApp(config) {
       glRenderer.dispose();
       throw new Error(errSummary);
     }
-    glRenderer.resize(state.resolutionScale);
+    glRenderer.resize(state.resolutionScale, dprCap);
     return glRenderer;
   }
 
@@ -462,7 +589,8 @@ export async function createSimApp(config) {
       setCameraCanvasCompat(camera, canvas);
     }
 
-    renderer.resize(state.resolutionScale);
+    renderer.resize(state.resolutionScale, dprCap);
+    renderer.setProfilerEnabled?.(profilerOpen);
     ctx.renderImmediate({ dt: 0, isMotion: false });
     skyLoadPromise =
       typeof attachSky === 'function'
@@ -615,10 +743,26 @@ export async function createSimApp(config) {
       setReducedGlass(value, { persist: true, syncUi });
       return;
     }
+    if (key === 'dprCap') {
+      setDprCap(value, { persist: true });
+      return;
+    }
+    if (key === 'qualityProfile') {
+      setQualityProfile(value, { persist: true });
+      return;
+    }
 
     if (typeof onParamChange === 'function') {
       const handled = onParamChange(key, value, { syncUi }, ctx);
-      if (handled === true) return;
+      if (handled === true) {
+        if (key === 'resolutionScale') {
+          renderer?.resize(state.resolutionScale, dprCap);
+          persistGraphics();
+        } else if (key === 'quality') {
+          persistGraphics();
+        }
+        return;
+      }
     }
 
     if (!(key in state) && key !== 'skyRotation' && key !== 'skyRotationA' && key !== 'skyRotationB') {
@@ -642,7 +786,7 @@ export async function createSimApp(config) {
 
     if (renderer) {
       if (key === 'resolutionScale') {
-        renderer.resize(state.resolutionScale);
+        renderer.resize(state.resolutionScale, dprCap);
       } else if (postOnlyKeys.has(key)) {
         renderer.markPostDirty?.();
       } else if (key !== 'paused' && key !== 'autoOrbit') {
@@ -650,15 +794,21 @@ export async function createSimApp(config) {
       }
     }
 
+    if (key === 'resolutionScale' || key === 'quality') {
+      persistGraphics();
+    }
+
     if (syncUi && hud) {
       hud.syncState({ [key]: state[key] });
     }
   }
 
-  function selectPreset(presetId, { instant = false } = {}) {
+  function selectPreset(presetId, { instant = false, preserveDisplayPrefs = false } = {}) {
     const preset = getPresetById(presetId);
     if (!preset) return false;
 
+    const prevQuality = state.quality;
+    const prevResScale = state.resolutionScale;
     state.presetId = preset.id;
     onPresetBeforeParams?.(preset, { instant }, ctx);
 
@@ -673,6 +823,11 @@ export async function createSimApp(config) {
       }
     }
 
+    if (preserveDisplayPrefs) {
+      if (typeof prevQuality === 'number') state.quality = prevQuality;
+      if (typeof prevResScale === 'number') state.resolutionScale = prevResScale;
+    }
+
     if (typeof preset.camera?.autoOrbit === 'boolean') {
       state.autoOrbit = preset.camera.autoOrbit;
     }
@@ -682,7 +837,9 @@ export async function createSimApp(config) {
       applyCameraPoseCompat(camera, preset.camera, instant ? 0 : presetFlightSec);
     }
 
+    renderer?.resize(state.resolutionScale, dprCap);
     resetRendererAccumulationCompat(renderer, true);
+    physicsTour.setPreset(preset.id);
 
     if (hud) {
       hud.syncState(state);
@@ -708,6 +865,149 @@ export async function createSimApp(config) {
       runtimeErrors.push(String(err?.message || err));
     }
   }
+
+  let physicsTour = null;
+  let profilerOpen = false;
+  let perfProfilerCheckbox = null;
+  const profilerOverlay = createGpuProfilerOverlay(document.body);
+  profilerOverlay.onClose(() => {
+    profilerOpen = false;
+    if (perfProfilerCheckbox) perfProfilerCheckbox.checked = false;
+    renderer?.setProfilerEnabled?.(false);
+  });
+
+  function toggleProfiler(forceVisible) {
+    profilerOpen = typeof forceVisible === 'boolean' ? forceVisible : !profilerOpen;
+    if (perfProfilerCheckbox) perfProfilerCheckbox.checked = profilerOpen;
+    profilerOverlay.setVisible(profilerOpen);
+    renderer?.setProfilerEnabled?.(profilerOpen);
+    if (profilerOpen && renderer?.getProfilerMetrics) {
+      profilerOverlay.update(renderer.getProfilerMetrics());
+    }
+    return profilerOpen;
+  }
+
+  const audioEngine = sonification
+    ? createSonificationEngine({
+        simId,
+        onStateChange: (audioState) => syncAudioUi(audioState),
+      })
+    : null;
+
+  function syncAudioUi(audioState) {
+    const active = Boolean(audioState?.enabled);
+    if (audioBtn) {
+      audioBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    }
+    if (drawerAudioBtn) {
+      drawerAudioBtn.classList.toggle('is-active', active);
+      drawerAudioBtn.textContent = active ? 'Mute Audio (M)' : 'Enable Audio (M)';
+    }
+    if (audioStatusEl) {
+      audioStatusEl.textContent = active
+        ? audioState.readout || `${sonification?.label || 'Sonification'} active`
+        : `${sonification?.label || 'Sonification'} muted`;
+    }
+  }
+
+  function syncTourUi(isOpen) {
+    if (tourBtn) tourBtn.setAttribute('aria-pressed', isOpen ? 'true' : 'false');
+    if (drawerTourBtn) {
+      drawerTourBtn.classList.toggle('is-active', isOpen);
+      drawerTourBtn.textContent = isOpen ? 'Hide Physics Tour (I)' : 'Physics Tour (I)';
+    }
+  }
+
+  function syncRecorderUi(recState) {
+    const isRec = Boolean(recState?.active);
+    if (recBtn) {
+      recBtn.classList.toggle('is-recording', isRec);
+      recBtn.setAttribute('aria-pressed', isRec ? 'true' : 'false');
+    }
+    if (drawerRecBtn) {
+      drawerRecBtn.classList.toggle('is-recording', isRec);
+      drawerRecBtn.textContent = isRec ? 'Stop Recording (V)' : 'Start Recording (V)';
+    }
+    if (recStatusEl) {
+      recStatusEl.textContent = isRec
+        ? recState.format === 'frames'
+          ? `Rendering frame ${recState.frameIndex}/${recState.totalFrames}…`
+          : `Recording ${recState.elapsedSec.toFixed(1)}s / ${recState.durationSec}s (${recState.mode})…`
+        : `${recState.evolutionLabel} ready`;
+    }
+    if (recPillEl && recPillTextEl) {
+      recPillEl.hidden = !isRec;
+      if (isRec) {
+        recPillTextEl.textContent =
+          recState.format === 'frames'
+            ? `REC PNG ${recState.frameIndex}/${recState.totalFrames}`
+            : `REC ${recState.elapsedSec.toFixed(1)}s / ${recState.durationSec}s`;
+      }
+    }
+  }
+
+  function getShareUrl(opts = {}) {
+    if (typeof window === 'undefined') return '';
+    const activePreset = getPresetById(state.presetId);
+    const baseParams = activePreset ? { ...baseDefaults, ...activePreset.params } : baseDefaults;
+    return buildShareableUrl(window.location.href, {
+      backend: activeBackend,
+      presetId: state.presetId || null,
+      cameraState: camera ? camera.getState() : null,
+      state,
+      baseParams,
+      tourOpen: Boolean(opts.includeTour ?? physicsTour?.isOpen?.()),
+    });
+  }
+
+  async function copyShareUrl() {
+    const shareUrl = getShareUrl();
+    if (!shareUrl) return '';
+    try {
+      window.history?.replaceState?.(null, '', shareUrl);
+    } catch {
+      // Ignore history API limits
+    }
+    try {
+      await navigator.clipboard?.writeText?.(shareUrl);
+      showToast('Shareable state URL copied to clipboard');
+    } catch {
+      showToast('URL updated in address bar');
+    }
+    return shareUrl;
+  }
+
+  const cinemaRecorder = createCinemaRecorder({
+    simId,
+    screenshotPrefix,
+    getCanvas: () => canvas,
+    getState: () => state,
+    getCamera: () => camera,
+    getRenderer: () => renderer,
+    getBackend: () => activeBackend,
+    getSimTime: () => simTime,
+    setSimTime: (v) => {
+      simTime = v;
+    },
+    stepSimulation: (dt) => {
+      if (typeof onTick === 'function') {
+        onTick(dt, ctx);
+      } else if (!state.paused) {
+        simTime += dt;
+      }
+      if (typeof updateCamera === 'function') {
+        updateCamera(camera, dt, state, ctx);
+      } else {
+        camera?.update(dt, { paused: state.paused, autoOrbit: state.autoOrbit });
+      }
+    },
+    renderImmediate: (opts) => ctx.renderImmediate(opts),
+    handleAction: (name, p) => handleAction(name, p),
+    applyParamChange: (k, v, o) => applyParamChange(k, v, o),
+    downloadBlob,
+    onStateChange: syncRecorderUi,
+    onToast: (msg) => showToast(msg),
+  });
 
   function handleAction(actionName, payload) {
     if (typeof onExtraAction === 'function') {
@@ -736,8 +1036,53 @@ export async function createSimApp(config) {
         handleScreenshot();
         break;
 
-      case 'toggleHud':
-        hud?.toggleHud();
+      case 'toggleHud': {
+        const hidden = hud?.toggleHud();
+        if (typeof hidden === 'boolean') {
+          profilerOverlay.setHudHidden(hidden);
+        }
+        break;
+      }
+
+      case 'toggleProfiler':
+        toggleProfiler(typeof payload === 'boolean' ? payload : undefined);
+        break;
+
+      case 'togglePhysicsTour':
+        physicsTour?.toggle(typeof payload === 'boolean' ? payload : undefined);
+        break;
+
+      case 'stepPhysicsTour':
+        physicsTour?.step(Number(payload) || 1);
+        break;
+
+      case 'toggleRecording':
+        if (cinemaRecorder.isRecording()) {
+          cinemaRecorder.stop();
+        } else {
+          void cinemaRecorder.start(payload && typeof payload === 'object' ? payload : {});
+        }
+        break;
+
+      case 'copyShareUrl':
+        void copyShareUrl();
+        break;
+
+      case 'toggleAudio':
+        if (audioEngine) {
+          const nextAudio = audioEngine.toggle(
+            typeof payload === 'boolean' ? payload : undefined
+          );
+          if (nextAudio) {
+            const audioPayload = sonification?.getFramePayload?.(ctx) || { state };
+            audioEngine.update(audioPayload);
+          }
+          showToast(
+            nextAudio
+              ? `${sonification?.label || 'Sonification'} enabled`
+              : `${sonification?.label || 'Sonification'} muted`
+          );
+        }
         break;
 
       default:
@@ -753,7 +1098,164 @@ export async function createSimApp(config) {
     onAction: handleAction,
   });
 
+  physicsTour = createPhysicsTour({
+    simId,
+    getPresetId: () => state.presetId || initialPreset.id,
+    getTelemetrySummary: () => {
+      const t = ctx.buildTelemetry?.();
+      if (!t) return '';
+      const fpsStr = Number.isFinite(t.fps) ? `${Math.round(t.fps)} FPS` : '';
+      return [backendLabel(activeBackend), fpsStr].filter(Boolean).join(' · ');
+    },
+    onOpenChange: (isOpen) => syncTourUi(isOpen),
+  });
+
   if (typeof document !== 'undefined') {
+    const makeDrawerSegmented = (parent, id, labelText, options, initialVal, onSelect) => {
+      const row = document.createElement('div');
+      row.className = 'control-row';
+      const labelId = `${id}-label`;
+      const lbl = document.createElement('span');
+      lbl.id = labelId;
+      lbl.className = 'control-label';
+      lbl.textContent = labelText;
+      const group = document.createElement('div');
+      group.id = id;
+      group.className = 'segmented-group';
+      group.style.setProperty('--seg-cols', String(options.length));
+      group.setAttribute('role', 'radiogroup');
+      group.setAttribute('aria-labelledby', labelId);
+
+      const buttons = [];
+      const matches = (a, b) =>
+        typeof a === 'number' ? Math.abs(a - Number(b)) < 1e-4 : String(a) === String(b);
+
+      const syncVal = (val) => {
+        for (const entry of buttons) {
+          entry.btn.setAttribute('aria-checked', matches(entry.value, val) ? 'true' : 'false');
+        }
+      };
+
+      for (const opt of options) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.id = `${id}-${opt.value}`;
+        btn.className = 'segmented-btn';
+        btn.setAttribute('role', 'radio');
+        btn.setAttribute('aria-checked', 'false');
+        btn.textContent = opt.label;
+        btn.addEventListener('click', () => {
+          syncVal(opt.value);
+          onSelect(opt.value);
+        });
+        buttons.push({ btn, value: opt.value });
+        group.appendChild(btn);
+      }
+
+      syncVal(initialVal);
+      row.append(lbl, group);
+      parent.appendChild(row);
+      return { set: syncVal };
+    };
+
+    const hudChromeEl = document.getElementById('hud-chrome');
+    if (hudChromeEl && !document.getElementById('rec-indicator')) {
+      recPillEl = document.createElement('div');
+      recPillEl.id = 'rec-indicator';
+      recPillEl.className = 'rec-indicator glass-surface';
+      recPillEl.hidden = true;
+      const dot = document.createElement('span');
+      dot.className = 'rec-dot';
+      dot.setAttribute('aria-hidden', 'true');
+      recPillTextEl = document.createElement('span');
+      recPillTextEl.className = 'tabular';
+      recPillTextEl.textContent = 'REC';
+      const stopBtn = document.createElement('button');
+      stopBtn.type = 'button';
+      stopBtn.className = 'rec-stop-btn';
+      stopBtn.textContent = 'Stop';
+      stopBtn.addEventListener('click', () => cinemaRecorder.stop());
+      recPillEl.append(dot, recPillTextEl, stopBtn);
+      hudChromeEl.appendChild(recPillEl);
+    }
+
+    const transportStrip = document.querySelector('.transport-strip');
+    const screenshotBtn = document.getElementById('btn-screenshot');
+    if (transportStrip && !document.getElementById('btn-physics-tour')) {
+      const makeDockIconBtn = (id, label, tooltipText, svgPathMarkup, actionName) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'tooltip-wrap';
+        const btn = document.createElement('button');
+        btn.id = id;
+        btn.type = 'button';
+        btn.className = 'transport-btn is-icon-only';
+        btn.setAttribute('aria-label', tooltipText);
+        btn.setAttribute('aria-pressed', 'false');
+        btn.innerHTML = `<svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">${svgPathMarkup}</svg>`;
+        btn.addEventListener('click', () => handleAction(actionName));
+        const tip = document.createElement('span');
+        tip.role = 'tooltip';
+        tip.className = 'action-tooltip';
+        tip.textContent = tooltipText;
+        wrap.append(btn, tip);
+        return { wrap, btn };
+      };
+
+      const tourDock = makeDockIconBtn(
+        'btn-physics-tour',
+        'Tour',
+        'Interactive Physics Tour (I)',
+        '<circle cx="10" cy="10" r="7.2" /><circle cx="10" cy="6.6" r="0.9" fill="currentColor" stroke="none" /><path d="M10 9.4v4.4" stroke-linecap="round" />',
+        'togglePhysicsTour'
+      );
+      tourBtn = tourDock.btn;
+
+      const recDock = makeDockIconBtn(
+        'btn-cinema-record',
+        'Rec',
+        'Cinema Recorder WebM / PNG Zip (V)',
+        '<rect x="3" y="5.5" width="9.8" height="9" rx="1.8" /><path d="M12.8 8.4l4.2-2.2v7.6l-4.2-2.2z" stroke-linejoin="round" />',
+        'toggleRecording'
+      );
+      recBtn = recDock.btn;
+
+      const shareDock = makeDockIconBtn(
+        'btn-share-link',
+        'Share',
+        'Copy Shareable URL State (L)',
+        '<path d="M8.5 11.5l3-3" stroke-linecap="round" /><path d="M7.2 8.2L5.6 9.8a3.2 3.2 0 1 0 4.5 4.5l1.6-1.6M12.8 11.8l1.6-1.6a3.2 3.2 0 0 0-4.5-4.5L8.3 7.3" stroke-linecap="round" />',
+        'copyShareUrl'
+      );
+
+      let audioDock = null;
+      if (audioEngine) {
+        audioDock = makeDockIconBtn(
+          'btn-audio-sonify',
+          'Audio',
+          `${sonification?.label || 'Audio Sonification'} (M)`,
+          '<path d="M3.5 8.2h2.8l3.9-3.2v10l-3.9-3.2H3.5z" stroke-linejoin="round" /><path d="M13.2 7.3a3.8 3.8 0 0 1 0 5.4M15.4 5.2a6.8 6.8 0 0 1 0 9.6" stroke-linecap="round" />',
+          'toggleAudio'
+        );
+        audioBtn = audioDock.btn;
+      }
+
+      const hideBtn = document.getElementById('btn-hide-hud');
+      if (hideBtn && hideBtn.parentElement === transportStrip) {
+        if (audioDock) transportStrip.insertBefore(audioDock.wrap, hideBtn);
+        transportStrip.insertBefore(tourDock.wrap, hideBtn);
+        transportStrip.insertBefore(recDock.wrap, hideBtn);
+        transportStrip.insertBefore(shareDock.wrap, hideBtn);
+      } else if (screenshotBtn && screenshotBtn.nextSibling) {
+        if (audioDock) transportStrip.insertBefore(audioDock.wrap, screenshotBtn.nextSibling);
+        transportStrip.insertBefore(tourDock.wrap, screenshotBtn.nextSibling);
+        transportStrip.insertBefore(recDock.wrap, tourDock.wrap.nextSibling);
+        transportStrip.insertBefore(shareDock.wrap, recDock.wrap.nextSibling);
+      } else {
+        if (audioDock) transportStrip.appendChild(audioDock.wrap);
+        transportStrip.append(tourDock.wrap, recDock.wrap, shareDock.wrap);
+      }
+    }
+
     const sectionsEl = document.getElementById('controls-sections');
     if (sectionsEl && !document.getElementById('section-performance')) {
       const details = document.createElement('details');
@@ -762,7 +1264,25 @@ export async function createSimApp(config) {
       const summary = document.createElement('summary');
       summary.textContent = 'Display & Performance';
       const body = document.createElement('div');
-      body.className = 'control-section-body';
+      body.className = 'section-body';
+
+      profileControlBinding = makeDrawerSegmented(
+        body,
+        'ctrl-quality-profile',
+        'Quality Profile',
+        Object.values(GRAPHICS_PROFILES).map((p) => ({ value: p.id, label: p.label })),
+        qualityProfile,
+        (v) => setQualityProfile(v, { persist: true })
+      );
+
+      dprControlBinding = makeDrawerSegmented(
+        body,
+        'ctrl-dpr-cap',
+        'DPR Cap',
+        DPR_CAP_OPTIONS.map((v) => ({ value: v, label: `${v.toFixed(1)}×` })),
+        dprCap,
+        (v) => setDprCap(v, { persist: true })
+      );
 
       const makeToggleRow = (id, labelText, initialChecked, onChange) => {
         const row = document.createElement('label');
@@ -797,10 +1317,165 @@ export async function createSimApp(config) {
         reducedGlass,
         (v) => setReducedGlass(v, { persist: true, syncUi: false })
       );
+      perfProfilerCheckbox = makeToggleRow(
+        'ctrl-gpu-profiler',
+        'GPU Pass Profiler (G)',
+        profilerOpen,
+        (v) => toggleProfiler(v)
+      );
+
+      const actionRow = document.createElement('div');
+      actionRow.className = 'drawer-action-row';
+      const shareBtn = document.createElement('button');
+      shareBtn.type = 'button';
+      shareBtn.id = 'btn-drawer-share';
+      shareBtn.className = 'drawer-action-btn';
+      shareBtn.textContent = 'Copy URL (L)';
+      shareBtn.addEventListener('click', () => handleAction('copyShareUrl'));
+
+      drawerTourBtn = document.createElement('button');
+      drawerTourBtn.type = 'button';
+      drawerTourBtn.id = 'btn-drawer-tour';
+      drawerTourBtn.className = 'drawer-action-btn';
+      drawerTourBtn.textContent = 'Physics Tour (I)';
+      drawerTourBtn.addEventListener('click', () => handleAction('togglePhysicsTour'));
+
+      actionRow.append(shareBtn, drawerTourBtn);
+      body.appendChild(actionRow);
 
       details.appendChild(summary);
       details.appendChild(body);
       sectionsEl.appendChild(details);
+    }
+
+    if (sectionsEl && !document.getElementById('section-cinema-recorder')) {
+      const recDetails = document.createElement('details');
+      recDetails.className = 'control-section';
+      recDetails.id = 'section-cinema-recorder';
+      const recSummary = document.createElement('summary');
+      recSummary.textContent = 'Cinema Recorder';
+      const recBody = document.createElement('div');
+      recBody.className = 'section-body';
+
+      const initialRec = cinemaRecorder.getState();
+      makeDrawerSegmented(
+        recBody,
+        'ctrl-rec-mode',
+        'Shot Mode',
+        RECORDER_MODES.map((m) => ({ value: m.id, label: m.label })),
+        initialRec.mode,
+        (v) => cinemaRecorder.configure({ mode: v })
+      );
+      makeDrawerSegmented(
+        recBody,
+        'ctrl-rec-format',
+        'Export Format',
+        RECORDER_FORMATS.map((f) => ({ value: f.id, label: f.label })),
+        initialRec.format,
+        (v) => cinemaRecorder.configure({ format: v })
+      );
+      makeDrawerSegmented(
+        recBody,
+        'ctrl-rec-duration',
+        'Duration',
+        RECORDER_DURATIONS.map((d) => ({ value: d, label: `${d}s` })),
+        initialRec.durationSec,
+        (v) => cinemaRecorder.configure({ durationSec: v })
+      );
+      makeDrawerSegmented(
+        recBody,
+        'ctrl-rec-fps',
+        'Frame Rate',
+        RECORDER_FPS_OPTIONS.map((f) => ({ value: f, label: `${f} fps` })),
+        initialRec.fps,
+        (v) => cinemaRecorder.configure({ fps: v })
+      );
+
+      const recActRow = document.createElement('div');
+      recActRow.className = 'drawer-action-row';
+      drawerRecBtn = document.createElement('button');
+      drawerRecBtn.type = 'button';
+      drawerRecBtn.id = 'btn-drawer-record';
+      drawerRecBtn.className = 'drawer-action-btn is-full';
+      drawerRecBtn.textContent = 'Start Recording (V)';
+      drawerRecBtn.addEventListener('click', () => handleAction('toggleRecording'));
+      recActRow.appendChild(drawerRecBtn);
+      recBody.appendChild(recActRow);
+
+      recStatusEl = document.createElement('p');
+      recStatusEl.id = 'rec-status-note';
+      recStatusEl.className = 'control-status-note tabular';
+      recStatusEl.textContent = `${initialRec.evolutionLabel} ready`;
+      recBody.appendChild(recStatusEl);
+
+      recDetails.append(recSummary, recBody);
+      sectionsEl.appendChild(recDetails);
+    }
+
+    if (audioEngine && sectionsEl && !document.getElementById('section-sonification')) {
+      const audDetails = document.createElement('details');
+      audDetails.className = 'control-section';
+      audDetails.id = 'section-sonification';
+      const audSummary = document.createElement('summary');
+      audSummary.textContent = sonification?.label || 'Audio Sonification';
+      const audBody = document.createElement('div');
+      audBody.className = 'section-body';
+
+      const audActRow = document.createElement('div');
+      audActRow.className = 'drawer-action-row';
+      drawerAudioBtn = document.createElement('button');
+      drawerAudioBtn.type = 'button';
+      drawerAudioBtn.id = 'btn-drawer-audio';
+      drawerAudioBtn.className = 'drawer-action-btn is-full';
+      drawerAudioBtn.textContent = 'Enable Audio (M)';
+      drawerAudioBtn.addEventListener('click', () => handleAction('toggleAudio'));
+      audActRow.appendChild(drawerAudioBtn);
+      audBody.appendChild(audActRow);
+
+      const volRow = document.createElement('div');
+      volRow.className = 'control-row';
+      const volLabelRow = document.createElement('div');
+      volLabelRow.className = 'control-label-row';
+      const volLabel = document.createElement('label');
+      volLabel.className = 'control-label';
+      volLabel.htmlFor = 'ctrl-audio-volume';
+      volLabel.textContent = 'Audio Volume';
+      const volOut = document.createElement('output');
+      volOut.className = 'control-value tabular';
+      volOut.htmlFor = 'ctrl-audio-volume';
+      const volSlider = document.createElement('input');
+      volSlider.type = 'range';
+      volSlider.id = 'ctrl-audio-volume';
+      volSlider.className = 'hud-slider';
+      volSlider.min = '0';
+      volSlider.max = '1';
+      volSlider.step = '0.01';
+      const initVol = audioEngine.getState().volume;
+      volSlider.value = String(initVol);
+      const syncVolRange = (val) => {
+        const pct = `${Math.round(Number(val) * 100)}%`;
+        volSlider.style.setProperty('--attr-min', '0');
+        volSlider.style.setProperty('--attr-max', '1');
+        volSlider.style.setProperty('--control-value', String(val));
+        volOut.textContent = pct;
+      };
+      syncVolRange(initVol);
+      volSlider.addEventListener('input', () => {
+        const v = audioEngine.setVolume(Number(volSlider.value));
+        syncVolRange(v);
+      });
+      volLabelRow.append(volLabel, volOut);
+      volRow.append(volLabelRow, volSlider);
+      audBody.appendChild(volRow);
+
+      audioStatusEl = document.createElement('p');
+      audioStatusEl.id = 'audio-status-note';
+      audioStatusEl.className = 'control-status-note tabular';
+      audioStatusEl.textContent = `${sonification?.label || 'Sonification'} muted`;
+      audBody.appendChild(audioStatusEl);
+
+      audDetails.append(audSummary, audBody);
+      sectionsEl.appendChild(audDetails);
     }
   }
 
@@ -809,7 +1484,7 @@ export async function createSimApp(config) {
 
   const onResize = () => {
     if (!switchingBackend) {
-      renderer?.resize(state.resolutionScale);
+      renderer?.resize(state.resolutionScale, dprCap);
     }
   };
   window.addEventListener('resize', onResize);
@@ -860,6 +1535,40 @@ export async function createSimApp(config) {
         e.preventDefault();
         handleAction('resetCamera');
         break;
+      case 'KeyI':
+        e.preventDefault();
+        handleAction('togglePhysicsTour');
+        break;
+      case 'KeyV':
+        e.preventDefault();
+        handleAction('toggleRecording');
+        break;
+      case 'KeyL':
+        e.preventDefault();
+        handleAction('copyShareUrl');
+        break;
+      case 'KeyM':
+        if (audioEngine) {
+          e.preventDefault();
+          handleAction('toggleAudio');
+        }
+        break;
+      case 'KeyG':
+        e.preventDefault();
+        handleAction('toggleProfiler');
+        break;
+      case 'BracketLeft':
+        if (physicsTour?.isOpen()) {
+          e.preventDefault();
+          handleAction('stepPhysicsTour', -1);
+        }
+        break;
+      case 'BracketRight':
+        if (physicsTour?.isOpen()) {
+          e.preventDefault();
+          handleAction('stepPhysicsTour', 1);
+        }
+        break;
       default:
         break;
     }
@@ -883,8 +1592,12 @@ export async function createSimApp(config) {
       const out = {
         ...state,
         backend: activeBackend,
+        dprCap,
+        qualityProfile,
         interactiveDragScale,
         reducedGlass,
+        physicsTourOpen: Boolean(physicsTour?.isOpen()),
+        recording: cinemaRecorder.isRecording(),
         camera: camera ? camera.getState() : null,
       };
       if (Array.isArray(state.skyRotation)) out.skyRotation = [...state.skyRotation];
@@ -902,6 +1615,90 @@ export async function createSimApp(config) {
 
     setReducedGlass(enabled) {
       return setReducedGlass(enabled, { persist: true, syncUi: true });
+    },
+
+    getGraphicsPrefs() {
+      return {
+        profileId: qualityProfile,
+        quality: state.quality ?? null,
+        resolutionScale: state.resolutionScale ?? null,
+        dprCap,
+        interactiveDragScale,
+        reducedGlass,
+      };
+    },
+
+    setQualityProfile(profileId) {
+      return setQualityProfile(profileId, { persist: true });
+    },
+
+    setDprCap(nextCap) {
+      return setDprCap(nextCap, { persist: true });
+    },
+
+    getShareUrl(opts) {
+      return getShareUrl(opts);
+    },
+
+    copyShareUrl() {
+      return copyShareUrl();
+    },
+
+    togglePhysicsTour(visible) {
+      return physicsTour.toggle(visible);
+    },
+
+    stepPhysicsTour(delta = 1) {
+      physicsTour.step(delta);
+      return physicsTour.getState();
+    },
+
+    getPhysicsTourState() {
+      return physicsTour.getState();
+    },
+
+    startRecording(opts) {
+      return cinemaRecorder.start(opts);
+    },
+
+    stopRecording() {
+      return cinemaRecorder.stop();
+    },
+
+    getRecordingState() {
+      return cinemaRecorder.getState();
+    },
+
+    toggleAudio(enabled) {
+      return audioEngine ? audioEngine.toggle(enabled) : false;
+    },
+
+    setAudioVolume(v) {
+      return audioEngine ? audioEngine.setVolume(v) : 0;
+    },
+
+    getAudioState() {
+      return audioEngine ? audioEngine.getState() : { supported: false, enabled: false, volume: 0 };
+    },
+
+    async captureRawPngDataUrl(timeOverride = null) {
+      if (!renderer || !camera) return null;
+      if (timeOverride !== null) {
+        resetRendererAccumulationCompat(renderer, true);
+        if (typeof renderer.frameIndex === 'number') {
+          renderer.frameIndex = 0;
+        }
+      }
+      const camMatrices = camera.getCameraMatrices ? camera.getCameraMatrices() : camera.getMatrices?.();
+      const tVal = timeOverride === null ? ctx.simTime : Number(timeOverride) || 0;
+      const blob = await renderer.capturePNG(state, camMatrices, tVal);
+      if (!blob) return null;
+      return await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('Failed to encode raw PNG DataURL.'));
+        reader.readAsDataURL(blob);
+      });
     },
 
     setState(patch = {}) {
@@ -944,7 +1741,19 @@ export async function createSimApp(config) {
     },
 
     toggleHud(visible) {
-      return hud.toggleHud(visible);
+      const hidden = hud.toggleHud(visible);
+      if (typeof hidden === 'boolean') {
+        profilerOverlay.setHudHidden(hidden);
+      }
+      return hidden;
+    },
+
+    toggleProfiler(visible) {
+      return toggleProfiler(visible);
+    },
+
+    getProfilerMetrics() {
+      return renderer?.getProfilerMetrics ? renderer.getProfilerMetrics() : null;
     },
 
     renderNow() {
@@ -988,12 +1797,18 @@ export async function createSimApp(config) {
         skyDimensions: renderer?.skyDimensions ? [...renderer.skyDimensions] : [0, 0],
         resolution: renderer ? [renderer.width, renderer.height] : [0, 0],
         dpr: renderer ? renderer.dpr : 1,
+        dprCap,
+        qualityProfile,
         fps: Math.round(fpsSmoothed * 10) / 10,
         samples: renderer ? renderer.sampleCount : 0,
         paused: state.paused,
         activePreset: state.presetId,
         interactiveDragScale,
         reducedGlass,
+        physicsTourOpen: Boolean(physicsTour?.isOpen()),
+        recording: cinemaRecorder.isRecording(),
+        profiler: renderer?.getProfilerMetrics ? renderer.getProfilerMetrics() : { enabled: profilerOpen },
+        ...(audioEngine ? { audio: audioEngine.getState() } : {}),
         runtimeErrors: [...runtimeErrors],
         errors: [...runtimeErrors, ...(renderer?.errors || [])],
         ...(typeof renderer?.getDiagnostics === 'function' && renderer.getDiagnostics() && typeof renderer.getDiagnostics() === 'object'
@@ -1009,6 +1824,25 @@ export async function createSimApp(config) {
 
   if (typeof extraApi === 'function') {
     Object.assign(api, extraApi(ctx, { api, applyParamChange, selectPreset, handleAction }));
+  }
+
+  // Apply deep-linked URL state (?preset=, ?tour=, #s=<base64url>) after renderer + extraApi boot
+  if (urlState.hasState) {
+    if (urlState.presetId && getPresetById(urlState.presetId)) {
+      selectPreset(urlState.presetId, {
+        instant: true,
+        preserveDisplayPrefs: graphicsPrefs.hasStoredPrefs,
+      });
+    }
+    if (urlState.params) {
+      api.setState(urlState.params);
+    }
+    if (urlState.camera) {
+      api.setCamera(urlState.camera);
+    }
+    if (urlState.tour === true) {
+      physicsTour.setOpen(true);
+    }
   }
 
   onReady?.({ api, ctx, handleAction, applyParamChange, selectPreset });
@@ -1035,13 +1869,23 @@ export async function createSimApp(config) {
     } else {
       camera.update(dt, { paused: state.paused, autoOrbit: state.autoOrbit });
     }
+    cinemaRecorder.tick(dt);
     const camData = getCameraMatricesCompat(camera);
+    if (audioEngine) {
+      const audioPayload = sonification?.getFramePayload?.(ctx, camData) || { state, camData };
+      audioEngine.update(audioPayload);
+      if (audioStatusEl && audioEngine.getState().enabled) {
+        audioStatusEl.textContent = audioEngine.getState().readout;
+      }
+    }
     const isDraggingCanvas =
       isPointerDragging ||
       Boolean(camera && ((camera._pointers && camera._pointers.size > 0) || camera._dragMode));
     const baseScale = Number(state.resolutionScale) || 1.0;
     const effectiveResolutionScale =
-      interactiveDragScale && isDraggingCanvas ? Math.max(0.25, baseScale * 0.75) : baseScale;
+      interactiveDragScale && isDraggingCanvas && !cinemaRecorder.isRecording()
+        ? Math.max(0.25, baseScale * 0.75)
+        : baseScale;
 
     let renderOpts;
     if (tickMeta) {
@@ -1095,6 +1939,9 @@ export async function createSimApp(config) {
     if (now - lastTelemetryPush >= TELEMETRY_INTERVAL_MS) {
       lastTelemetryPush = now;
       ctx.pushTelemetry();
+      if (profilerOpen && renderer?.getProfilerMetrics) {
+        profilerOverlay.update(renderer.getProfilerMetrics());
+      }
     }
 
     requestAnimationFrame(frame);

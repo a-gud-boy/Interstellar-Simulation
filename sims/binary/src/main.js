@@ -182,6 +182,14 @@ async function bootstrap() {
     },
     renderFrame: (renderer, state, camData, simTime, opts) =>
       renderer.render(state, camData, simTime, getActiveBinaryState(state), opts),
+    sonification: {
+      label: 'GW Chirp Synth',
+      getFramePayload: (ctx, camData) => ({
+        state: ctx.state,
+        camData,
+        binState: getActiveBinaryState(ctx.state),
+      }),
+    },
   });
 
   if (app) {

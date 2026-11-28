@@ -499,7 +499,7 @@ fn draw_floating_topbar(
                             ui.painter()
                                 .rect_filled(sep, CornerRadius::ZERO, hairline());
                             ui.label(tracked_job(
-                                "v0.1.4.1 · 8 ENGINES",
+                                "v0.1.4.2 · 9 ENGINES",
                                 FontId::new(10.5, egui::FontFamily::Monospace),
                                 TEXT_SECONDARY,
                                 0.5,

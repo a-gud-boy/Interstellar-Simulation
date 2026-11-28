@@ -77,6 +77,7 @@ export class SharedWebGPUPostPipeline {
     this.sLinearClamp = opts.sLinearClamp;
     this.opticsProfile = opts.opticsProfile || 'default';
     this.optics = resolvePostOpticsProfile(this.opticsProfile);
+    this.profiler = opts.profiler || null;
 
     this.sceneRt = null;
     this.taaRts = [null, null];
@@ -544,6 +545,7 @@ export class SharedWebGPUPostPipeline {
     const outputRt = this.taaRts[this.taaWriteIdx];
     const taaBg = this.taaBindGroups[this.taaReadIdx];
     if (this.taaPipeline && taaBg && outputRt) {
+      const ts = this.profiler?.timestampWritesFor('taa');
       const pass = encoder.beginRenderPass({
         colorAttachments: [
           {
@@ -553,6 +555,7 @@ export class SharedWebGPUPostPipeline {
             clearValue: { r: 0, g: 0, b: 0, a: 1 },
           },
         ],
+        ...(ts ? { timestampWrites: ts } : {}),
       });
       pass.setPipeline(this.taaPipeline);
       pass.setBindGroup(0, taaBg);
@@ -563,6 +566,10 @@ export class SharedWebGPUPostPipeline {
       this.taaReadIdx = this.taaWriteIdx;
       this.taaWriteIdx = tmp;
     }
+  }
+
+  setProfiler(profiler) {
+    this.profiler = profiler || null;
   }
 
   encodeBloomAndAnamorphic(encoder, state) {
@@ -579,6 +586,7 @@ export class SharedWebGPUPostPipeline {
     // 1. Bloom prefilter
     const preBg = this.bloomPreBindGroups[this.taaReadIdx];
     if (this.bloomPrePipeline && preBg && this.bloomDownRts[0]) {
+      const ts = this.profiler?.timestampWritesFor('bloom');
       const pass = encoder.beginRenderPass({
         colorAttachments: [
           {
@@ -588,6 +596,7 @@ export class SharedWebGPUPostPipeline {
             clearValue: { r: 0, g: 0, b: 0, a: 1 },
           },
         ],
+        ...(ts ? { timestampWrites: ts } : {}),
       });
       pass.setPipeline(this.bloomPrePipeline);
       pass.setBindGroup(0, preBg);
@@ -603,6 +612,7 @@ export class SharedWebGPUPostPipeline {
         const bg = this.bloomDownBindGroups[i];
         if (!bg || !dst) continue;
 
+        const ts = this.profiler?.timestampWritesFor('bloom');
         const pass = encoder.beginRenderPass({
           colorAttachments: [
             {
@@ -612,6 +622,7 @@ export class SharedWebGPUPostPipeline {
               clearValue: { r: 0, g: 0, b: 0, a: 1 },
             },
           ],
+          ...(ts ? { timestampWrites: ts } : {}),
         });
         pass.setPipeline(this.bloomDownPipeline);
         pass.setBindGroup(0, bg);
@@ -627,6 +638,7 @@ export class SharedWebGPUPostPipeline {
         const bg = this.bloomUpBindGroups[i];
         if (!bg || !dst) continue;
 
+        const ts = this.profiler?.timestampWritesFor('bloom');
         const pass = encoder.beginRenderPass({
           colorAttachments: [
             {
@@ -636,6 +648,7 @@ export class SharedWebGPUPostPipeline {
               clearValue: { r: 0, g: 0, b: 0, a: 1 },
             },
           ],
+          ...(ts ? { timestampWrites: ts } : {}),
         });
         pass.setPipeline(this.bloomUpPipeline);
         pass.setBindGroup(0, bg);
@@ -646,6 +659,7 @@ export class SharedWebGPUPostPipeline {
 
     // 4. 2-Pass Separable Horizontal Anamorphic Optical Streak
     if (needAnamorphic && this.anaPipeline && this.anaBindGroup0 && this.anaBindGroup1) {
+      const ts0 = this.profiler?.timestampWritesFor('bloom');
       const pass0 = encoder.beginRenderPass({
         colorAttachments: [
           {
@@ -655,12 +669,14 @@ export class SharedWebGPUPostPipeline {
             clearValue: { r: 0, g: 0, b: 0, a: 1 },
           },
         ],
+        ...(ts0 ? { timestampWrites: ts0 } : {}),
       });
       pass0.setPipeline(this.anaPipeline);
       pass0.setBindGroup(0, this.anaBindGroup0);
       pass0.draw(3);
       pass0.end();
 
+      const ts1 = this.profiler?.timestampWritesFor('bloom');
       const pass1 = encoder.beginRenderPass({
         colorAttachments: [
           {
@@ -670,6 +686,7 @@ export class SharedWebGPUPostPipeline {
             clearValue: { r: 0, g: 0, b: 0, a: 1 },
           },
         ],
+        ...(ts1 ? { timestampWrites: ts1 } : {}),
       });
       pass1.setPipeline(this.anaPipeline);
       pass1.setBindGroup(0, this.anaBindGroup1);
@@ -706,6 +723,7 @@ export class SharedWebGPUPostPipeline {
     this.device.queue.writeBuffer(this.compUniformBuf, 0, f);
 
     const view = targetView || this.context.getCurrentTexture().createView();
+    const ts = this.profiler?.timestampWritesFor('composite');
     const pass = encoder.beginRenderPass({
       colorAttachments: [
         {
@@ -715,6 +733,7 @@ export class SharedWebGPUPostPipeline {
           clearValue: { r: 0, g: 0, b: 0, a: 1 },
         },
       ],
+      ...(ts ? { timestampWrites: ts } : {}),
     });
     pass.setPipeline(this.compPipeline);
     pass.setBindGroup(0, compBg);

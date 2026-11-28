@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.1.4.2-beta] - 2026-11-28
+
+- **9th Engine — Tidal Disruption Event (`sims/tde`, WebGL2, WebGPU & Native Rust Desktop)**:
+  - Added relativistic Kerr–Newman tidal disruption ray-tracer (`u(M_BH, a*)` Hills radius, relativistic apsidal precession, self-intersection nozzle shock, fallback debris stream, and multi-temperature accretion disk) with 6 observatory presets (`Deep Plunge Disruption`, `Kerr Spin Precession`, `Hills Horizon Limit`, `Fallback Accretion Flare`, `Sub-Eddington Tail`, `IMBH Optical Tidal`), live `KeyT` time-stream toggle, and `home/previews/tde.webp`.
+- **Observatory Platform, Touring, Audio & Recording (Web + Desktop)**:
+  - Upgraded the Observatory Homepage (`index.html`, `home/app.js`) into a zero-GPU static launcher, added Guided Physics Tours (`shared/physicsTour.json`, `desktop/src/ui/hud/tour.rs`), shareable `#s=` URL state (`shared/engine/urlState.js`), persistent display/DPR profiles (`shared/engine/graphicsProfile.js`, `desktop/src/settings.rs`), Cinema Frame Sequence / Video Recorder (`shared/engine/cinemaRecorder.js`, `desktop/src/recorder.rs`), and interactive WebAudio gravitational/EM sonification (`KeyM`, `shared/engine/sonification.js`).
+- **Live GPU Telemetry, Visual Parity Bench, PWA & Packaging**:
+  - Added hardware-timed live GPU Pass Profiler overlay (`KeyG`, `shared/engine/gpuProfiler.js`, `desktop/src/renderer/profiler.rs`), cross-backend PSNR/SSIM/MAE parity harness (`scripts/parity-diff.mjs`, `desktop --export-parity`), lightweight PWA manifest + lazy-cache service worker (`manifest.webmanifest`, `sw.js`, `shared/engine/pwaRegister.js`), and multi-platform desktop packaging (`packaging/`, `scripts/render-packaging.mjs`).
+  - Bumped web and native desktop versions to `0.1.4.2 beta` (`desktop/Cargo.toml` `0.1.4-beta.2`).
+
 ## [v0.1.4.1-beta] - 2026-11-28
 
 - **Gravitational Lens & Cluster Caustic Ray-Tracer (`sims/lens-cluster`, WebGL2, WebGPU & Native Rust Desktop)**:

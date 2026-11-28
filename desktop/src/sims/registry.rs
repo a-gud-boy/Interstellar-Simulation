@@ -51,7 +51,7 @@ pub struct SimRegistryEntry {
     pub presets: [(&'static str, &'static str); 6],
 }
 
-pub const SIM_REGISTRY: [SimRegistryEntry; 8] = [
+pub const SIM_REGISTRY: [SimRegistryEntry; 9] = [
     SimRegistryEntry {
         id: SimId::Blackhole,
         index: "01",
@@ -499,6 +499,61 @@ pub const SIM_REGISTRY: [SimRegistryEntry; 8] = [
             ),
         ],
     },
+    SimRegistryEntry {
+        id: SimId::Tde,
+        index: "09",
+        cli_name: "tde",
+        switch_label: "TDE Shred",
+        window_title: "Tidal Disruption Event — Relativistic Kerr–Schild Stellar Shredding",
+        aliases: &["tde", "tidal", "disruption", "tidal-disruption", "hills"],
+        category: SimCategory::Astrophysics,
+        category_label: "Astrophysics",
+        title: "Tidal Disruption Event — Stellar Shredding & Nozzle Shock",
+        short_title: "TDE",
+        tagline: "Precessing tidal debris stream, nozzle shock & Hills limit",
+        description: "3D Outgoing Kerr–Schild ray-tracer modeling relativistic tidal stellar disruption: elliptical precessing debris streams, unbound escaping tail, nozzle self-intersection shock, Rees–Phinney t^(−5/3) circularization disk, Blandford–Znajek polar jet, and the Hills direct-capture limit.",
+        equation: "r_t = R_*(M_BH/M_*)^(1/3) · L ∝ t^(−5/3) · Δφ = 6πr_g/r_p",
+        metric_name: "3D Outgoing Kerr–Schild + TDE Stream",
+        accent_rgb: [0xfb, 0x71, 0x85],
+        accent_bright_rgb: [0xfd, 0xa4, 0xaf],
+        special_control: "T triggers Disruption Evolution Sweep",
+        highlights: [
+            "1PN+Kerr Apsidal Precession",
+            "Nozzle Self-Intersection Shock",
+            "Hills Limit & t^(−5/3) Fallback",
+        ],
+        specs: [
+            ("Disruption", "Hills Limit & β"),
+            ("Fallback", "t^(−5/3) Lightcurve"),
+            ("Spacetime", "3D Outgoing Kerr"),
+        ],
+        presets: [
+            (
+                "Self-Intersection Shock",
+                "Apsidally precessed returning stream collides with incoming fallback gas to ignite a 24,000 K UV-optical nozzle shock.",
+            ),
+            (
+                "Pericenter Tidal Rip",
+                "Early post-pericenter passage stretching the stellar core along its Roche axis into bound and unbound arms.",
+            ),
+            (
+                "Deep β=4.5 Kerr Plunge",
+                "Extreme penetration factor around a rapid-spin black hole generating large relativistic precession and rapid circularization.",
+            ),
+            (
+                "Super-Eddington Flare",
+                "Peak Rees–Phinney fallback rate inflating an optically thick UV-optical reprocessing envelope and hot accretion torus.",
+            ),
+            (
+                "Swift J1644 Jetted TDE",
+                "Rapidly spinning SMBH launching a relativistic Blandford–Znajek collimated magnetic polar jet through the debris funnel.",
+            ),
+            (
+                "Hills Limit Threshold",
+                "Above ~10^8 solar masses for a solar star, the tidal radius shrinks inside the horizon and the star is swallowed whole.",
+            ),
+        ],
+    },
 ];
 
 pub const fn registry_entry(id: SimId) -> &'static SimRegistryEntry {
@@ -511,6 +566,7 @@ pub const fn registry_entry(id: SimId) -> &'static SimRegistryEntry {
         SimId::Pulsar => &SIM_REGISTRY[5],
         SimId::Starflight => &SIM_REGISTRY[6],
         SimId::LensCluster => &SIM_REGISTRY[7],
+        SimId::Tde => &SIM_REGISTRY[8],
     }
 }
 

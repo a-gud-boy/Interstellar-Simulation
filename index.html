@@ -4,11 +4,13 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#05070e" />
   <meta
     name="description"
-    content="Interstellar Observatory — Eight real-time WebGL2 & WebGPU relativistic GPU ray-tracing simulators: Kerr Black Hole, Morris–Thorne Wormhole, Binary Black Holes, Alcubierre Warp Drive, Volumetric Supernova Remnant, Magnetar Pulsar, Relativistic Starflight, and Gravitational Lensing Observatory."
+    content="Interstellar Observatory — Nine real-time WebGL2 & WebGPU relativistic GPU ray-tracing simulators: Kerr Black Hole, Morris–Thorne Wormhole, Binary Black Holes, Alcubierre Warp Drive, Volumetric Supernova Remnant, Magnetar Pulsar, Relativistic Starflight, Gravitational Lensing Observatory, and Tidal Disruption Event."
   />
   <title>Interstellar Observatory — Relativistic Spacetime GPU Simulators</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/svg+xml" href="./shared/assets/app-icon.svg" />
   <link rel="icon" href="./favicon.ico" sizes="48x48" />
   <style>
@@ -43,7 +45,8 @@
         params.delete('sim');
         params.delete('hub');
         const qs = params.toString();
-        window.location.replace(`./${target.dir}/${qs ? `?${qs}` : ''}`);
+        const hash = window.location.hash || '';
+        window.location.replace(`./${target.dir}/${qs ? `?${qs}` : ''}${hash}`);
       } else {
         document.documentElement.classList.remove('is-redirecting');
       }
@@ -87,7 +90,7 @@
           <span class="brand-accent">OBSERVATORY</span>
         </span>
         <span class="brand-divider" aria-hidden="true"></span>
-        <span class="brand-version">v0.1.4.1 · 8 ENGINES</span>
+        <span class="brand-version">v0.1.4.2 · 9 ENGINES</span>
       </a>
 
       <div
@@ -145,7 +148,7 @@
       <section class="mission-brief" aria-label="Active Simulation Telemetry">
         <div class="eyebrow-row">
           <span class="eyebrow-dot" aria-hidden="true"></span>
-          <span id="hero-eyebrow" class="hero-eyebrow">01 / 08 · GENERAL RELATIVITY</span>
+          <span id="hero-eyebrow" class="hero-eyebrow">01 / 09 · GENERAL RELATIVITY</span>
         </div>
 
         <h1 id="hero-sim-title" class="hero-title">Gargantua</h1>
@@ -196,7 +199,7 @@
           </button>
           <div class="idle-status-pill" aria-label="Zero idle GPU overhead on homepage">
             <span class="status-dot" aria-hidden="true"></span>
-            <span>0% Idle GPU · 48 Presets</span>
+            <span>0% Idle GPU · 54 Presets</span>
           </div>
         </div>
       </section>
@@ -212,7 +215,7 @@
         id="catalog-grid"
         class="filmstrip-grid"
         role="list"
-        aria-label="8 Relativistic Simulation Engines"
+        aria-label="9 Relativistic Simulation Engines"
       ></div>
 
       <noscript>
@@ -225,6 +228,7 @@
           <li><a href="./sims/pulsar/">06 · Magnetar Pulsar</a></li>
           <li><a href="./sims/starflight/">07 · Relativistic Starflight</a></li>
           <li><a href="./sims/lens-cluster/">08 · Gravitational Lens Cluster</a></li>
+          <li><a href="./sims/tde/">09 · Tidal Disruption Event</a></li>
         </ul>
       </noscript>
     </footer>
@@ -235,7 +239,7 @@
     <div class="dialog-surface">
       <header class="dialog-header">
         <div>
-          <p id="dossier-badge" class="dialog-eyebrow">01 / 08 · GENERAL RELATIVITY</p>
+          <p id="dossier-badge" class="dialog-eyebrow">01 / 09 · GENERAL RELATIVITY</p>
           <h2 id="dossier-title" class="dialog-title">Gargantua — Kerr Black Hole</h2>
           <p id="dossier-tagline" class="dialog-tagline"></p>
         </div>
@@ -330,7 +334,12 @@
           <div class="keycap-row"><kbd>1 – 6</kbd><span>Load physics preset</span></div>
           <div class="keycap-row"><kbd>Space</kbd><span>Pause / 128× cinema still</span></div>
           <div class="keycap-row"><kbd>O</kbd><span>Toggle orbital cruise</span></div>
-          <div class="keycap-row"><kbd>T</kbd><span>Toggle live telemetry strip</span></div>
+          <div class="keycap-row"><kbd>T</kbd><span>Sim action (Traverse / Bridge / Detonate / Flip / Drag)</span></div>
+          <div class="keycap-row"><kbd>I</kbd><span>Interactive Physics Tour overlay</span></div>
+          <div class="keycap-row"><kbd>V</kbd><span>Record Cinema WebM / PNG sequence</span></div>
+          <div class="keycap-row"><kbd>L</kbd><span>Copy shareable URL state</span></div>
+          <div class="keycap-row"><kbd>M</kbd><span>Audio sonification (Binary GW / Pulsar)</span></div>
+          <div class="keycap-row"><kbd>G</kbd><span>Toggle GPU pass profiler overlay</span></div>
           <div class="keycap-row"><kbd>R</kbd><span>Reset camera &amp; accumulation</span></div>
           <div class="keycap-row"><kbd>P</kbd><span>Save PNG capture</span></div>
           <div class="keycap-row"><kbd>H</kbd><span>Hide / restore HUD overlay</span></div>
@@ -339,7 +348,7 @@
         <div class="controls-section">
           <div class="dossier-section-head">
             <span>Direct Query Routing &amp; CLI Launchers</span>
-            <span class="dossier-section-note">?sim=&lt;alias&gt;&amp;backend=webgpu supported</span>
+            <span class="dossier-section-note">?sim=&lt;alias&gt;&amp;preset=&lt;id&gt;&amp;backend=webgpu#s=… supported</span>
           </div>
           <div class="cli-snippets">
             <div class="dossier-cli-row">

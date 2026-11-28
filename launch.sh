@@ -31,6 +31,7 @@ Simulation Options:
   --pulsar, --magnetar  Open Magnetar & Millisecond Pulsar Simulator
   --starflight, --sf    Open Relativistic Starflight Simulator
   --lens-cluster, --lens Open Gravitational Lensing Observatory
+  --tde, --tidal        Open Tidal Disruption Event Observatory
   --sim <name>          Select target: home | any canonical ID or alias in shared/sims.json
 
 Backend Options:

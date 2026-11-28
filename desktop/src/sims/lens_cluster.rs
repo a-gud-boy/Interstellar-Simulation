@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::renderer::post::{PostFrameParams, PostTuning, run_fs_pass};
+use crate::renderer::post::{PostFrameParams, PostTuning, run_fs_pass_timed};
 use crate::renderer::{SharedGpuAssets, SimBglKind};
 use crate::shaders;
 use crate::sims::{
@@ -2191,7 +2191,7 @@ impl Simulation for LensClusterSim {
         self.bind_group = assets.build_standard_bind_group("lens-cluster-bg", &self.ubo, None);
     }
 
-    fn encode_frame(
+    fn encode_frame_timed(
         &mut self,
         assets: &SharedGpuAssets,
         encoder: &mut wgpu::CommandEncoder,
@@ -2202,6 +2202,7 @@ impl Simulation for LensClusterSim {
         jitter: [f32; 2],
         _dt: f32,
         _hard_reset: bool,
+        timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
     ) {
         let is_progressive = self.paused && !self.camera.moved;
         let ubo_data = self.build_uniforms(
@@ -2214,12 +2215,13 @@ impl Simulation for LensClusterSim {
         assets
             .queue
             .write_buffer(&self.ubo, 0, bytemuck::bytes_of(&ubo_data));
-        run_fs_pass(
+        run_fs_pass_timed(
             encoder,
             "lens-cluster-raytrace",
             scene_view,
             &self.pipeline,
             &self.bind_group,
+            timestamp_writes,
         );
     }
 }

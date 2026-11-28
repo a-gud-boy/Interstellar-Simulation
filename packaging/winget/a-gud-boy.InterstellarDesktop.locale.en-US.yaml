@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+PackageIdentifier: a-gud-boy.InterstellarDesktop
+PackageVersion: 0.1.4-beta.2
+PackageLocale: en-US
+Publisher: Interstellar Simulation Contributors
+PublisherUrl: https://github.com/a-gud-boy/Interstellar-Simulation
+PublisherSupportUrl: https://github.com/a-gud-boy/Interstellar-Simulation/issues
+PackageName: Interstellar Observatory
+PackageUrl: https://github.com/a-gud-boy/Interstellar-Simulation
+License: MIT
+ShortDescription: Nine real-time relativistic GPU ray-tracing simulators built with Rust and wgpu.
+Tags:
+  - astrophysics
+  - relativity
+  - black-hole
+  - webgpu
+  - wgpu
+  - raytracing
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

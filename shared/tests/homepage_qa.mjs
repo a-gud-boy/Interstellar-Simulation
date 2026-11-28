@@ -3,7 +3,7 @@
  * Interstellar Observatory Homepage — Automated Hardware Chrome QA, Low-Resource Audit & Visual Capture Suite
  *
  * Verifies:
- *  1. Homepage Load & Zero Errors (1440x810): 0 console/runtime/HTTP errors, 7 cards, all preview <img> loaded, 0 horizontal overflow
+ *  1. Homepage Load & Zero Errors (1440x810): 0 console/runtime/HTTP errors, 8 cards, all preview <img> loaded, 0 horizontal overflow
  *  2. Strict Low-Resource Audit: 0 <canvas> elements, 0 idle rAF ticks over 1500ms, 0 milkyway_4k.jpg requests, total transfer < 1.2 MB
  *  3. Interactive UX Flows: hero spotlight switcher, category filter pills, global WebGL2 <-> WebGPU toggle,
  *     Quick-Inspect <dialog> dossier (open, 6 presets + equation, close button + Escape),
@@ -156,7 +156,7 @@ async function main() {
     await cdp.send('Page.navigate', { url: homeUrl });
 
     await waitForCondition(
-      `document.readyState === 'complete' && document.querySelectorAll('#catalog-grid .sim-card').length === 8 && document.getElementById('stage-bg-img')?.complete && document.getElementById('stage-bg-img')?.naturalWidth > 0`
+      `document.readyState === 'complete' && document.querySelectorAll('#catalog-grid .sim-card').length === 9 && document.getElementById('stage-bg-img')?.complete && document.getElementById('stage-bg-img')?.naturalWidth > 0`
     );
     await sleep(300);
 
@@ -257,7 +257,7 @@ async function main() {
     await waitForCondition(`document.getElementById('stage-bg-img')?.getAttribute('src')?.includes('blackhole.webp')`);
     await sleep(160);
 
-    // 3b. Category filter pills (General Relativity -> 2 cards; All -> 7 cards)
+    // 3b. Category filter pills (General Relativity -> 3 cards; All -> 8 cards)
     await evalJS(`document.querySelector('#category-filter-bar button[data-category="gr"]')?.click()`);
     await sleep(150);
     const filterGR = await evalJS(`(() => {
@@ -363,7 +363,7 @@ async function main() {
     const returnedHomeCheck = await waitForCondition(`(() => {
       const gpuBtn = document.querySelector('#backend-radiogroup button[data-backend="webgpu"]');
       const cards = document.querySelectorAll('#catalog-grid .sim-card');
-      if (window.location.pathname === '/' && cards.length === 8 && gpuBtn) {
+      if (window.location.pathname === '/' && cards.length === 9 && gpuBtn) {
         return {
           pathname: window.location.pathname,
           search: window.location.search,
@@ -397,7 +397,7 @@ async function main() {
     await cdp.send('Page.navigate', { url: `http://127.0.0.1:${port}/?hub` });
     const hubCheck = await waitForCondition(`(() => {
       const cards = document.querySelectorAll('#catalog-grid .sim-card');
-      if (window.location.pathname === '/' && window.location.search.includes('hub') && cards.length === 8) {
+      if (window.location.pathname === '/' && window.location.search.includes('hub') && cards.length === 9) {
         return {
           pathname: window.location.pathname,
           search: window.location.search,
@@ -421,7 +421,7 @@ async function main() {
     });
     await cdp.send('Page.navigate', { url: `http://127.0.0.1:${port}/` });
     await waitForCondition(
-      `document.readyState === 'complete' && document.querySelectorAll('#catalog-grid .sim-card').length === 8 && document.getElementById('stage-bg-img')?.complete && document.getElementById('stage-bg-img')?.naturalWidth > 0`
+      `document.readyState === 'complete' && document.querySelectorAll('#catalog-grid .sim-card').length === 9 && document.getElementById('stage-bg-img')?.complete && document.getElementById('stage-bg-img')?.naturalWidth > 0`
     );
     await sleep(300);
 
@@ -506,7 +506,7 @@ async function main() {
     check(exceptions.length === 0, 'Zero uncaught runtime exceptions', exceptions.join(' | '));
     check(failedRequests.length === 0, 'Zero failed HTTP/network requests', failedRequests.join(' | '));
 
-    check(loadStats.cardCount === 8, 'All 8 simulator filmstrip cards rendered', loadStats.cardIds.join(', '));
+    check(loadStats.cardCount === 9, 'All 9 simulator filmstrip cards rendered', loadStats.cardIds.join(', '));
     check(
       loadStats.allImgsLoaded === true,
       'All homepage preview <img> elements decoded cleanly (complete && naturalWidth > 0)',
@@ -554,8 +554,8 @@ async function main() {
         filterGR.ids.includes('blackhole') &&
         filterGR.ids.includes('binary') &&
         filterGR.ids.includes('lens-cluster') &&
-        filterAll.count === 8,
-      'Category filter pills filter General Relativity to 3 sims (blackhole, binary, lens-cluster) and restore all 8',
+        filterAll.count === 9,
+      'Category filter pills filter General Relativity to 3 sims (blackhole, binary, lens-cluster) and restore all 9',
       `GR=[${filterGR.ids.join(', ')}], All=${filterAll.count}`
     );
 
@@ -585,7 +585,7 @@ async function main() {
         simLaunchDiag?.allShadersCompiled === true &&
         simLaunchDiag?.homeHref === '../../?backend=webgpu' &&
         simLaunchDiag?.homeHasSimHrefAttr === false &&
-        simLaunchDiag?.simSwitchCount === 8,
+        simLaunchDiag?.simSwitchCount === 9,
       'Launching simulator from homepage boots in WebGPU with #sim-switch-home synced cleanly',
       JSON.stringify(simLaunchDiag)
     );
@@ -609,7 +609,7 @@ async function main() {
     );
 
     check(
-      hubCheck?.pathname === '/' && hubCheck?.cardCount === 8 && hubCheck?.canvasCount === 0,
+      hubCheck?.pathname === '/' && hubCheck?.cardCount === 9 && hubCheck?.canvasCount === 0,
       'Backwards-compatible /?hub renders the Observatory Homepage cleanly',
       JSON.stringify(hubCheck)
     );

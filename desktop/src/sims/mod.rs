@@ -5,6 +5,7 @@ pub mod pulsar;
 pub mod registry;
 pub mod starflight;
 pub mod supernova;
+pub mod tde;
 pub mod warp;
 pub mod wormhole;
 
@@ -23,10 +24,11 @@ pub enum SimId {
     Pulsar,
     Starflight,
     LensCluster,
+    Tde,
 }
 
 impl SimId {
-    pub const ALL: [SimId; 8] = [
+    pub const ALL: [SimId; 9] = [
         SimId::Blackhole,
         SimId::Wormhole,
         SimId::BinaryBh,
@@ -35,6 +37,7 @@ impl SimId {
         SimId::Pulsar,
         SimId::Starflight,
         SimId::LensCluster,
+        SimId::Tde,
     ];
 
     pub fn switch_label(self) -> &'static str {
@@ -206,6 +209,25 @@ impl SimTheme {
                 )),
                 slider_track: Color32::from_rgba_unmultiplied(255, 255, 255, 56),
             },
+            SimId::Tde => Self {
+                glass_bg: Color32::from_rgba_unmultiplied(12, 8, 16, 158),
+                glass_bg_elevated: Color32::from_rgba_unmultiplied(16, 10, 22, 219),
+                glass_border: Color32::from_rgba_unmultiplied(253, 164, 175, 36),
+                glass_border_strong: Color32::from_rgba_unmultiplied(253, 164, 175, 64),
+                text_primary: Color32::from_rgb(0xf8, 0xee, 0xf2),
+                text_secondary: Color32::from_rgb(0xc6, 0xb0, 0xb8),
+                text_muted: Color32::from_rgba_unmultiplied(238, 210, 220, 173),
+                accent: Color32::from_rgb(0xfb, 0x71, 0x85),
+                accent_bright: Color32::from_rgb(0xfd, 0xa4, 0xaf),
+                accent_soft: Color32::from_rgba_unmultiplied(251, 113, 133, 46),
+                accent_border: Color32::from_rgba_unmultiplied(251, 113, 133, 138),
+                warm: Some((
+                    Color32::from_rgb(0xfb, 0xbf, 0x24),
+                    Color32::from_rgba_unmultiplied(251, 191, 36, 41),
+                    Color32::from_rgba_unmultiplied(251, 191, 36, 122),
+                )),
+                slider_track: Color32::from_rgba_unmultiplied(255, 255, 255, 56),
+            },
         }
     }
 }
@@ -360,6 +382,21 @@ pub trait Simulation {
     fn step(&mut self, dt: f32, input: &SimInput) -> StepOutcome;
     fn rebuild_bind_groups(&mut self, assets: &mut SharedGpuAssets);
     #[allow(clippy::too_many_arguments)]
+    fn encode_frame_timed(
+        &mut self,
+        assets: &SharedGpuAssets,
+        encoder: &mut wgpu::CommandEncoder,
+        scene_view: &wgpu::TextureView,
+        render_width: u32,
+        render_height: u32,
+        frame_index: u32,
+        jitter: [f32; 2],
+        dt: f32,
+        hard_reset: bool,
+        timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
+    );
+
+    #[allow(clippy::too_many_arguments)]
     fn encode_frame(
         &mut self,
         assets: &SharedGpuAssets,
@@ -371,7 +408,20 @@ pub trait Simulation {
         jitter: [f32; 2],
         dt: f32,
         hard_reset: bool,
-    );
+    ) {
+        self.encode_frame_timed(
+            assets,
+            encoder,
+            scene_view,
+            render_width,
+            render_height,
+            frame_index,
+            jitter,
+            dt,
+            hard_reset,
+            None,
+        );
+    }
 }
 
 pub fn create_simulation(id: SimId, assets: &mut SharedGpuAssets) -> Box<dyn Simulation> {
@@ -384,6 +434,7 @@ pub fn create_simulation(id: SimId, assets: &mut SharedGpuAssets) -> Box<dyn Sim
         SimId::Pulsar => Box::new(pulsar::PulsarSim::new(assets)),
         SimId::Starflight => Box::new(starflight::StarflightSim::new(assets)),
         SimId::LensCluster => Box::new(lens_cluster::LensClusterSim::new(assets)),
+        SimId::Tde => Box::new(tde::TdeSim::new(assets)),
     }
 }
 

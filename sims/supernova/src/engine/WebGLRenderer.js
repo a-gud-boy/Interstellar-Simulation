@@ -18,6 +18,7 @@ import {
   halton,
   formatShaderError,
 } from '../../../../shared/engine/SharedWebGLPostPipeline.js';
+import { createWebGLPassProfiler } from '../../../../shared/engine/gpuProfiler.js';
 import { evalSedovTaylor, evalSupernovaCentralTempK } from './Physics.js';
 import {
   createProceduralSkyTextureWebGL,
@@ -62,6 +63,7 @@ export class WebGLRenderer {
     this.width = 0;
     this.height = 0;
     this.dpr = 1;
+    this.maxDpr = MAX_DPR;
     this.resolutionScale = 1.0;
 
     this.frameIndex = 0;
@@ -148,7 +150,9 @@ export class WebGLRenderer {
 
     this.volumeNoiseTex = this._bakeVolumeNoise();
 
+    this.profiler = createWebGLPassProfiler(gl);
     this.post = new SharedWebGLPostPipeline({
+      profiler: this.profiler,
       gl,
       emptyVao: this.emptyVao,
       hdrSpec: this._hdrSpec,
@@ -296,9 +300,10 @@ export class WebGLRenderer {
     return tex;
   }
 
-  resize(resolutionScale = this.resolutionScale) {
+  resize(resolutionScale = this.resolutionScale, maxDpr = this.maxDpr) {
     const scale = Math.max(0.25, Math.min(1.0, Number(resolutionScale) || 1.0));
-    const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+    const dprCap = Math.max(0.5, Math.min(3.0, Number(maxDpr) || MAX_DPR));
+    const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
     const cssW = Math.max(1, this.canvas.clientWidth || window.innerWidth || 1280);
     const cssH = Math.max(1, this.canvas.clientHeight || window.innerHeight || 720);
 
@@ -309,6 +314,7 @@ export class WebGLRenderer {
       nextW === this.width &&
       nextH === this.height &&
       Math.abs(scale - this.resolutionScale) < 1e-4 &&
+      Math.abs(dprCap - this.maxDpr) < 1e-4 &&
       this.post?.getSceneFbo()
     ) {
       return false;
@@ -317,6 +323,7 @@ export class WebGLRenderer {
     this.width = nextW;
     this.height = nextH;
     this.dpr = dpr;
+    this.maxDpr = dprCap;
     this.resolutionScale = scale;
 
     if (this.canvas.width !== nextW || this.canvas.height !== nextH) {
@@ -396,6 +403,14 @@ export class WebGLRenderer {
 
   markPostDirty() {
     this._postDirty = true;
+  }
+
+  setProfilerEnabled(enabled) {
+    this.profiler?.setEnabled(enabled);
+  }
+
+  getProfilerMetrics() {
+    return this.profiler ? this.profiler.getMetrics() : null;
   }
 
   getAllShadersCompiled() {
@@ -538,7 +553,9 @@ export class WebGLRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.blueNoiseTex);
     gl.uniform1i(this._getUniform(prog, 'uBlueNoise'), 4);
 
+    this.profiler?.beginPass('raymarch');
     this._drawFullscreen();
+    this.profiler?.endPass();
   }
 
   render(state, camMatrices, simTime = 0, options = {}) {
@@ -574,15 +591,20 @@ export class WebGLRenderer {
         const blendFactor = this._hardReset ? 1.0 : 1.0 / this.sampleCount;
         this._hardReset = false;
 
+        this.profiler?.beginFrame();
+
         this._runSupernovaPass(state, cam, simTime, jitterX, jitterY, true);
         this.post.runTaa(this.width, this.height, blendFactor, true);
         this.post.runBloomAndAnamorphic(state, this.width, this.height);
         this.post.runComposite(state, this.width, this.height, simTime, this.frameIndex);
+        this.profiler?.endFrame();
         this._postDirty = false;
         return true;
       } else if (this._postDirty || opts.forceComposite) {
+        this.profiler?.beginFrame();
         this.post.runBloomAndAnamorphic(state, this.width, this.height);
         this.post.runComposite(state, this.width, this.height, simTime, this.frameIndex);
+        this.profiler?.endFrame();
         this._postDirty = false;
         return true;
       }
@@ -607,10 +629,13 @@ export class WebGLRenderer {
     const jitterX = blendFactor >= 0.999 ? 0.0 : halton(jitterIdx, 2) - 0.5;
     const jitterY = blendFactor >= 0.999 ? 0.0 : halton(jitterIdx, 3) - 0.5;
 
+    this.profiler?.beginFrame();
+
     this._runSupernovaPass(state, cam, simTime, jitterX, jitterY, false);
     this.post.runTaa(this.width, this.height, blendFactor, false);
     this.post.runBloomAndAnamorphic(state, this.width, this.height);
     this.post.runComposite(state, this.width, this.height, simTime, this.frameIndex);
+        this.profiler?.endFrame();
     this._postDirty = false;
     return true;
   }
@@ -633,6 +658,7 @@ export class WebGLRenderer {
     this._disposed = true;
     const gl = this.gl;
     try {
+      this.profiler?.dispose();
       this.post?.dispose();
       if (this.supernovaUniformBuf) gl.deleteBuffer(this.supernovaUniformBuf);
       if (this.volumeNoiseTex) gl.deleteTexture(this.volumeNoiseTex);

@@ -193,6 +193,15 @@ const TARGETS = [
         exportName: 'LENS_CLUSTER_WGSL',
       }),
   },
+  {
+    target: 'sims/tde/src/shaders/tde.wgsl.js',
+    render: () =>
+      renderSingleExport({
+        target: 'sims/tde/src/shaders/tde.wgsl.js',
+        source: 'sims/tde/src/shaders/tde.wgsl',
+        exportName: 'TDE_WGSL',
+      }),
+  },
 ];
 
 function summarizeFirstDiff(expected, actual) {

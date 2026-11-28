@@ -38,7 +38,7 @@ All simulators maintain strict parity across **WebGL2** (`*.frag.js` / `WebGLRen
 ## Verification
 
 ```bash
-# Shared contracts + all 7 simulator physics/shader checks
+# Shared contracts + all 9 simulator physics/shader checks
 node scripts/run-tests.mjs --physics
 
 # Native Rust physics parity & WGSL shader validation

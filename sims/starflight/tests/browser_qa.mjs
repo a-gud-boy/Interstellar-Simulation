@@ -613,9 +613,9 @@ async function main() {
     const sWebGLBack = await captureShot('07_webgl2_after_switch.png');
     const statsWebGLAfterSwitch = await analyzePng(sWebGLBack.base64);
 
-    // 7. Direct ?backend=webgpu + 7-Simulator Switcher E2E Loop
+    // 7. Direct ?backend=webgpu + 8-Simulator Switcher E2E Loop
     const directUrl = `http://127.0.0.1:${port}/sims/starflight/?backend=webgpu`;
-    console.log(`7. Navigating directly to ${directUrl} + testing 7-sim switcher E2E...`);
+    console.log(`7. Navigating directly to ${directUrl} + testing 8-sim switcher E2E...`);
     await cdp.send('Page.navigate', { url: directUrl });
     const diagDirectWebGPU = await waitForReadyBackend('webgpu');
     await waitFrames(12);
@@ -636,6 +636,7 @@ async function main() {
         warpHref: findHref('sims/warp'),
         snHref: findHref('sims/supernova'),
         pulHref: findHref('sims/pulsar'),
+        lensHref: findHref('sims/lens-cluster'),
       };
     })()`);
 
@@ -665,18 +666,18 @@ async function main() {
 
     inExternalPulsarHop = true;
     await clickSimLink('sims/pulsar');
-    let pulsarHopCheck = { pathname: '', search: '', starflightHref: null };
+    let pulsarHopCheck = { pathname: '', search: '', lensHref: null };
     {
       const start = Date.now();
       while (Date.now() - start < 8000) {
         pulsarHopCheck = await evalJS(`(() => ({
           pathname: window.location.pathname,
           search: window.location.search,
-          starflightHref: document.querySelector('nav[aria-label="Simulation switcher"] a[data-sim-href*="sims/starflight"]')?.getAttribute('href') || null,
+          lensHref: document.querySelector('nav[aria-label="Simulation switcher"] a[data-sim-href*="sims/lens-cluster"]')?.getAttribute('href') || null,
         }))()`);
         if (
           pulsarHopCheck.pathname.includes('/sims/pulsar/') &&
-          pulsarHopCheck.starflightHref?.includes('?backend=webgpu')
+          pulsarHopCheck.lensHref?.includes('?backend=webgpu')
         ) {
           break;
         }
@@ -686,15 +687,19 @@ async function main() {
       pulsarHopCheck = await evalJS(`(() => ({
         pathname: window.location.pathname,
         search: window.location.search,
-        starflightHref: document.querySelector('nav[aria-label="Simulation switcher"] a[data-sim-href*="sims/starflight"]')?.getAttribute('href') || null,
+        lensHref: document.querySelector('nav[aria-label="Simulation switcher"] a[data-sim-href*="sims/lens-cluster"]')?.getAttribute('href') || null,
       }))()`);
     }
 
     inExternalPulsarHop = false;
-    await clickSimLink('sims/starflight');
-    const diagStarflightFromPulsar = await waitForReadyBackend('webgpu', '__STARFLIGHT__', '/sims/starflight/');
+    await clickSimLink('sims/lens-cluster');
+    const diagLensClusterSwitch = await waitForReadyBackend('webgpu', '__LENS_CLUSTER__', '/sims/lens-cluster/');
     await waitFrames(10);
-    await captureShot('08_e2e_starflight_after_7sim_loop.png');
+
+    await clickSimLink('sims/starflight');
+    const diagStarflightFromLens = await waitForReadyBackend('webgpu', '__STARFLIGHT__', '/sims/starflight/');
+    await waitFrames(10);
+    await captureShot('08_e2e_starflight_after_8sim_loop.png');
 
     // Root index.html ?sim=starflight&backend=webgpu redirect
     await cdp.send('Page.navigate', { url: `http://127.0.0.1:${port}/?sim=starflight&backend=webgpu` });
@@ -757,7 +762,8 @@ async function main() {
         diagWarpSwitch,
         diagSupernovaSwitch,
         pulsarHopCheck,
-        diagStarflightFromPulsar,
+        diagLensClusterSwitch,
+        diagStarflightFromLens,
       },
       errors: { consoleErrors, externalPulsarErrors, consoleWarnings, exceptions, failedRequests },
     };
@@ -935,7 +941,7 @@ async function main() {
     );
     check(
       switcherCheck?.hasNav &&
-        switcherCheck?.count >= 8 &&
+        switcherCheck?.count >= 9 &&
         switcherCheck?.noTabRole &&
         switcherCheck?.currentId === 'sim-switch-starflight' &&
         switcherCheck?.bhHref?.includes('?backend=webgpu') &&
@@ -943,8 +949,9 @@ async function main() {
         switcherCheck?.binHref?.includes('?backend=webgpu') &&
         switcherCheck?.warpHref?.includes('?backend=webgpu') &&
         switcherCheck?.snHref?.includes('?backend=webgpu') &&
-        switcherCheck?.pulHref?.includes('?backend=webgpu'),
-      '7-simulator navbar switcher uses aria-current="page" and propagates ?backend=webgpu'
+        switcherCheck?.pulHref?.includes('?backend=webgpu') &&
+        switcherCheck?.lensHref?.includes('?backend=webgpu'),
+      '8-simulator navbar switcher uses aria-current="page" and propagates ?backend=webgpu'
     );
     check(
       diagBlackholeSwitch?.backend === 'webgpu' &&
@@ -954,10 +961,12 @@ async function main() {
         diagSupernovaSwitch?.backend === 'webgpu' &&
         pulsarHopCheck?.pathname?.includes('/sims/pulsar/') &&
         pulsarHopCheck?.search?.includes('backend=webgpu') &&
-        pulsarHopCheck?.starflightHref?.includes('?backend=webgpu') &&
-        diagStarflightFromPulsar?.backend === 'webgpu' &&
-        diagStarflightFromPulsar?.allShadersCompiled === true,
-      'E2E 7-simulator switcher preserves ?backend=webgpu across Starflight -> Black Hole -> Wormhole -> Binary BH -> Warp Drive -> Supernova -> Pulsar -> Starflight'
+        pulsarHopCheck?.lensHref?.includes('?backend=webgpu') &&
+        diagLensClusterSwitch?.backend === 'webgpu' &&
+        diagLensClusterSwitch?.allShadersCompiled === true &&
+        diagStarflightFromLens?.backend === 'webgpu' &&
+        diagStarflightFromLens?.allShadersCompiled === true,
+      'E2E 8-simulator switcher preserves ?backend=webgpu across Starflight -> Black Hole -> Wormhole -> Binary BH -> Warp Drive -> Supernova -> Pulsar -> Lens Cluster -> Starflight'
     );
 
     console.log(`\nQA REPORT WRITTEN: ${path.join(SHOT_DIR, 'qa_report.json')}`);

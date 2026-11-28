@@ -1,0 +1,39 @@
+/* Theme & layout overrides for Tidal Disruption Event Simulator (shared HUD in ../../shared/ui/base.css) */
+:root {
+  --glass-bg: rgba(10, 11, 18, 0.62);
+  --glass-bg-elevated: rgba(14, 15, 24, 0.86);
+  --glass-border: rgba(251, 113, 133, 0.16);
+  --glass-border-strong: rgba(251, 113, 133, 0.28);
+  --glass-saturate: 132%;
+  --glass-shadow: 0 10px 32px rgba(0, 0, 0, 0.54);
+
+  --text-primary: #f6f1f5;
+  --text-secondary: #c2b0be;
+  --text-muted: rgba(236, 212, 224, 0.68);
+
+  --accent: #fb7185;
+  --accent-bright: #fda4af;
+  --accent-soft: rgba(251, 113, 133, 0.18);
+  --accent-border: rgba(251, 113, 133, 0.54);
+
+  --status-dot-bg: var(--accent-bright);
+  --status-dot-shadow: 0 0 10px rgba(251, 113, 133, 0.92), 0 0 4px rgba(147, 197, 253, 0.6);
+  --badge-muted-bg: var(--accent-warm-soft);
+  --badge-muted-border: var(--accent-warm-border);
+  --badge-muted-color: var(--accent-warm);
+  --sim-switch-hover-bg: rgba(251, 113, 133, 0.12);
+  --pill-hover-bg: rgba(28, 16, 26, 0.80);
+  --pill-open-bg: rgba(56, 18, 32, 0.80);
+  --slider-thumb-glow: 0 0 8px rgba(251, 113, 133, 0.58);
+  --keycap-active-border: var(--accent-warm-border);
+  --keycap-active-color: var(--accent-warm);
+
+  --scrollbar-thumb: rgba(251, 113, 133, 0.28);
+  --section-divider: rgba(251, 113, 133, 0.12);
+  --telemetry-divider: rgba(251, 113, 133, 0.14);
+
+  --hud-top-left-max-w: min(650px, calc(100dvw - 460px));
+  --hud-top-left-max-w-1520: min(620px, calc(100dvw - 460px));
+  --hud-top-left-max-w-1380: min(510px, calc(100dvw - 450px));
+  --hud-hint-bottom: calc(var(--hud-pad) + 58px);
+}

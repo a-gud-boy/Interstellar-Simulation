@@ -106,6 +106,14 @@ async function bootstrap() {
       const isMotion = Boolean(camMoving || (!ctx.state.paused && tel.omegaVis > 0));
       return { forceComposite: false, dt: ctx.state.paused ? 0 : dt, isMotion, telemetry: tel };
     },
+    sonification: {
+      label: 'Pulsar Pulse Train',
+      getFramePayload: (ctx, camData) => ({
+        state: ctx.state,
+        camData,
+        pulsarTel: computePulsarTelemetry(ctx.state),
+      }),
+    },
   });
 
   if (app) {

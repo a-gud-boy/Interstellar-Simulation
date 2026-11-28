@@ -17,11 +17,15 @@ use winit::window::{Window, WindowId};
 
 use interstellar_desktop::APP_VERSION;
 use interstellar_desktop::assets::{icon, sky};
+use interstellar_desktop::recorder::{CinemaRecorder, RecorderMode};
 use interstellar_desktop::renderer::post::{MAX_PROGRESSIVE_SAMPLES, MAX_RENDER_DPR, PostPipeline};
+use interstellar_desktop::renderer::profiler::{GpuPassProfiler, PassCategory};
 use interstellar_desktop::renderer::{
     SharedGpuAssets, format_adapter_label, readback_rgba8_texture,
 };
+use interstellar_desktop::settings::DesktopSettings;
 use interstellar_desktop::sims::{SimId, SimInput, Simulation, create_simulation};
+use interstellar_desktop::ui::tour_data::preset_tour;
 use interstellar_desktop::ui::{
     HomeAction, HomeState, HudAction, HudState, configure_fonts, draw_homepage, draw_hud,
 };
@@ -38,10 +42,14 @@ struct CliArgs {
     width: u32,
     height: u32,
     vsync: bool,
+    vsync_explicit: bool,
     max_fps: u32,
     max_fps_explicit: bool,
     max_dpr: f32,
+    max_dpr_explicit: bool,
     smoke_frames: Option<u32>,
+    export_parity: Option<PathBuf>,
+    parity_sims: Option<String>,
 }
 
 fn parse_bool_flag(s: &str) -> Option<bool> {
@@ -68,59 +76,83 @@ fn parse_cli_args() -> CliArgs {
         width: 1280,
         height: 720,
         vsync: true,
+        vsync_explicit: false,
         max_fps: DEFAULT_MAX_FPS,
         max_fps_explicit: false,
         max_dpr: MAX_RENDER_DPR,
+        max_dpr_explicit: false,
         smoke_frames: None,
+        export_parity: None,
+        parity_sims: None,
     };
+    let mut width_explicit = false;
+    let mut height_explicit = false;
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         if arg == "--home" || arg == "--hub" {
             out.start_sim = None;
         } else if arg == "--sim" {
             if let Some(val) = it.next() {
-                match parse_sim_arg(&val) {
-                    Ok(sim) => out.start_sim = sim,
-                    Err(bad) => {
-                        eprintln!(
-                            "[interstellar-desktop] Unknown --sim '{bad}', opening homepage."
-                        );
+                if val.contains(',') || val.eq_ignore_ascii_case("all") {
+                    out.parity_sims = Some(val);
+                } else {
+                    match parse_sim_arg(&val) {
+                        Ok(sim) => out.start_sim = sim,
+                        Err(bad) => {
+                            eprintln!(
+                                "[interstellar-desktop] Unknown --sim '{bad}', opening homepage."
+                            );
+                        }
                     }
                 }
             }
         } else if let Some(val) = arg.strip_prefix("--sim=") {
-            if let Ok(sim) = parse_sim_arg(val) {
+            if val.contains(',') || val.eq_ignore_ascii_case("all") {
+                out.parity_sims = Some(val.to_string());
+            } else if let Ok(sim) = parse_sim_arg(val) {
                 out.start_sim = sim;
             }
+        } else if arg == "--export-parity" {
+            if let Some(val) = it.next() {
+                out.export_parity = Some(PathBuf::from(val));
+            }
+        } else if let Some(val) = arg.strip_prefix("--export-parity=") {
+            out.export_parity = Some(PathBuf::from(val));
         } else if arg == "--width" {
             if let Some(val) = it.next()
                 && let Ok(w) = val.parse::<u32>()
             {
                 out.width = w.clamp(640, 7680);
+                width_explicit = true;
             }
         } else if let Some(val) = arg.strip_prefix("--width=") {
             if let Ok(w) = val.parse::<u32>() {
                 out.width = w.clamp(640, 7680);
+                width_explicit = true;
             }
         } else if arg == "--height" {
             if let Some(val) = it.next()
                 && let Ok(h) = val.parse::<u32>()
             {
                 out.height = h.clamp(360, 4320);
+                height_explicit = true;
             }
         } else if let Some(val) = arg.strip_prefix("--height=") {
             if let Ok(h) = val.parse::<u32>() {
                 out.height = h.clamp(360, 4320);
+                height_explicit = true;
             }
         } else if arg == "--vsync" {
             if let Some(val) = it.next()
                 && let Some(b) = parse_bool_flag(&val)
             {
                 out.vsync = b;
+                out.vsync_explicit = true;
             }
         } else if let Some(val) = arg.strip_prefix("--vsync=") {
             if let Some(b) = parse_bool_flag(val) {
                 out.vsync = b;
+                out.vsync_explicit = true;
             }
         } else if arg == "--max-fps" {
             if let Some(val) = it.next()
@@ -139,10 +171,12 @@ fn parse_cli_args() -> CliArgs {
                 && let Ok(d) = val.parse::<f32>()
             {
                 out.max_dpr = d.clamp(1.0, 4.0);
+                out.max_dpr_explicit = true;
             }
         } else if let Some(val) = arg.strip_prefix("--max-dpr=") {
             if let Ok(d) = val.parse::<f32>() {
                 out.max_dpr = d.clamp(1.0, 4.0);
+                out.max_dpr_explicit = true;
             }
         } else if arg == "--smoke-frames" {
             if let Some(val) = it.next()
@@ -163,16 +197,25 @@ fn parse_cli_args() -> CliArgs {
                  USAGE:\n  interstellar-desktop [OPTIONS]\n\n\
                  OPTIONS:\n  \
                    --home, --hub           Open Observatory Homepage (default)\n  \
-                   --sim <name>            home | blackhole | wormhole | binary | warp | supernova | pulsar | starflight | lens-cluster\n  \
+                   --sim <name>            home | blackhole | wormhole | binary | warp | supernova | pulsar | starflight | lens-cluster | tde\n  \
                    --width <px>            Initial window width (default: 1280)\n  \
                    --height <px>           Initial window height (default: 720)\n  \
                    --vsync <on|off>        Initial VSync mode (default: on)\n  \
                    --max-fps <n>           Maximum frame rate cap (default: {DEFAULT_MAX_FPS})\n  \
                    --max-dpr <f>           Render target DPR cap (default: {MAX_RENDER_DPR:.1})\n  \
                    --smoke-frames <n>      Render N live windowed frames and exit cleanly\n  \
+                   --export-parity <dir>   Headless clean-canvas PNG export for parity diffing\n  \
                    --version, -V           Print version information\n"
             );
             std::process::exit(0);
+        }
+    }
+    if out.export_parity.is_some() {
+        if !width_explicit {
+            out.width = 960;
+        }
+        if !height_explicit {
+            out.height = 540;
         }
     }
     out
@@ -343,6 +386,7 @@ enum AppScreen {
 struct SimRuntime {
     assets: SharedGpuAssets,
     post: PostPipeline,
+    profiler: GpuPassProfiler,
     sim: Box<dyn Simulation>,
     glass_tex_id: egui::TextureId,
 }
@@ -367,6 +411,8 @@ struct RuntimeState {
     prestarted_sky_rx: Option<Receiver<sky::RgbaImageData>>,
 
     hud: HudState,
+    settings: DesktopSettings,
+    recorder: Option<CinemaRecorder>,
     input: InputTracker,
     frame_interval: Duration,
     max_fps_explicit: bool,
@@ -415,6 +461,9 @@ impl RuntimeState {
         {
             required_features |= wgpu::Features::RG11B10UFLOAT_RENDERABLE;
         }
+        if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            required_features |= wgpu::Features::TIMESTAMP_QUERY;
+        }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("interstellar-desktop-device"),
             required_features,
@@ -428,6 +477,28 @@ impl RuntimeState {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
+        let settings = DesktopSettings::load();
+        let effective_vsync = if cli.vsync_explicit {
+            cli.vsync
+        } else if settings.has_saved {
+            settings.vsync
+        } else {
+            cli.vsync
+        };
+        let effective_max_dpr = if cli.max_dpr_explicit {
+            cli.max_dpr
+        } else if settings.has_saved {
+            settings.dpr_cap
+        } else {
+            cli.max_dpr
+        };
+        let effective_drag_scale = cli.smoke_frames.is_none()
+            && if settings.has_saved {
+                settings.interactive_drag_scale
+            } else {
+                true
+            };
+
         let caps = surface.get_capabilities(&adapter);
         let surface_format = caps
             .formats
@@ -435,7 +506,7 @@ impl RuntimeState {
             .copied()
             .find(|f| !f.is_srgb())
             .unwrap_or(caps.formats[0]);
-        let present_mode = pick_present_mode(&caps.present_modes, cli.vsync);
+        let present_mode = pick_present_mode(&caps.present_modes, effective_vsync);
         let alpha_mode = caps.alpha_modes[0];
 
         let surface_config = wgpu::SurfaceConfiguration {
@@ -499,14 +570,19 @@ impl RuntimeState {
             prestarted_sky_rx: Some(sky_rx),
             hud: {
                 let mut hud = HudState::default();
-                hud.vsync = cli.vsync;
+                hud.vsync = effective_vsync;
+                hud.quality_profile = settings.quality_profile;
+                hud.dpr_cap = effective_max_dpr;
+                hud.interactive_drag_scale = effective_drag_scale;
                 hud
             },
+            settings,
+            recorder: None,
             input: InputTracker::default(),
             frame_interval: Duration::from_secs_f64(1.0 / cli.max_fps.max(15) as f64),
             max_fps_explicit: cli.max_fps_explicit,
-            max_dpr: cli.max_dpr,
-            interactive_drag_scale_enabled: cli.smoke_frames.is_none(),
+            max_dpr: effective_max_dpr,
+            interactive_drag_scale_enabled: effective_drag_scale,
             drag_settle_until: None,
             interactive_scale_active: false,
             next_frame_at: now,
@@ -529,10 +605,12 @@ impl RuntimeState {
     }
 
     fn enter_home(&mut self) {
+        self.stop_recording(false);
         self.screen = AppScreen::Home;
         self.input.clear();
         self.hud.hud_hidden = false;
         self.hud.drawer_open = false;
+        self.hud.physics_tour_open = false;
         self.hud.switcher_open = false;
         self.hud.switcher_query.clear();
         self.hud.switcher_focus_search = false;
@@ -542,6 +620,7 @@ impl RuntimeState {
     }
 
     fn enter_sim(&mut self, sim_id: SimId, preset: Option<usize>) {
+        self.stop_recording(false);
         let win_w = self.surface_config.width.max(1);
         let win_h = self.surface_config.height.max(1);
         let scale_factor = self.window.scale_factor() as f32;
@@ -563,6 +642,10 @@ impl RuntimeState {
             if let Some(idx) = preset {
                 sim.apply_preset(idx);
             }
+            if self.settings.has_saved {
+                sim.set_i32("quality", self.settings.quality_tier);
+                sim.set_i32("resolutionScale", self.settings.resolution_scale);
+            }
             if sim.get_i32("skyMode") == 2 && assets.ensure_procedural_sky_a() {
                 sim.rebuild_bind_groups(&mut assets);
             }
@@ -583,9 +666,11 @@ impl RuntimeState {
                 &post.glass_backdrop_rt.view,
                 wgpu::FilterMode::Linear,
             );
+            let profiler = GpuPassProfiler::new(&self.device, &self.queue);
             self.sim_rt = Some(SimRuntime {
                 assets,
                 post,
+                profiler,
                 sim,
                 glass_tex_id,
             });
@@ -596,6 +681,11 @@ impl RuntimeState {
             }
             if let Some(idx) = preset {
                 sr.sim.apply_preset(idx);
+            }
+            if self.settings.has_saved {
+                sr.sim.set_i32("quality", self.settings.quality_tier);
+                sr.sim
+                    .set_i32("resolutionScale", self.settings.resolution_scale);
             }
             if sr.sim.get_i32("skyMode") == 2 && sr.assets.ensure_procedural_sky_a() {
                 sr.sim.rebuild_bind_groups(&mut sr.assets);
@@ -625,6 +715,7 @@ impl RuntimeState {
         self.home.inspect_sim = None;
         self.hud.hud_hidden = false;
         self.hud.drawer_open = false;
+        self.hud.physics_tour_step = 0;
         self.hud.switcher_open = false;
         self.hud.switcher_query.clear();
         self.hud.switcher_focus_search = false;
@@ -689,6 +780,80 @@ impl RuntimeState {
         self.hud.vsync = vsync;
         self.surface_config.present_mode = pick_present_mode(&self.supported_present_modes, vsync);
         self.surface.configure(&self.device, &self.surface_config);
+    }
+
+    fn start_recording(&mut self) {
+        if self.recorder.is_some() {
+            return;
+        }
+        let Some(sr) = &mut self.sim_rt else {
+            return;
+        };
+        sr.sim.set_paused(false);
+        if self.hud.recorder_mode == RecorderMode::Turntable {
+            let _ = sr.sim.set_i32("dragMode", 0);
+        } else if self.hud.recorder_mode == RecorderMode::Evolution {
+            match sr.sim.id() {
+                SimId::Supernova | SimId::Wormhole => sr.sim.trigger_special_action(),
+                SimId::BinaryBh => {
+                    let _ = sr.sim.set_i32("inspiralEnabled", 1);
+                }
+                SimId::LensCluster => {
+                    let _ = sr.sim.set_f32("sourceOrbitSpeed", 0.65);
+                }
+                SimId::WarpDrive => {
+                    let _ = sr.sim.set_f32("warpSpeed", 0.6);
+                }
+                SimId::Starflight => {
+                    let _ = sr.sim.set_i32("flightMode", 0);
+                    let _ = sr.sim.set_f32("rapidity", 0.25);
+                }
+                _ => {}
+            }
+        }
+
+        let base_dir = screenshot_dir();
+        match CinemaRecorder::start(
+            &base_dir,
+            sr.sim.id().cli_name(),
+            self.hud.recorder_mode,
+            self.hud.recorder_fps,
+            self.hud.recorder_duration_sec,
+        ) {
+            Ok(rec) => {
+                self.hud.recording_active = true;
+                self.hud.recording_frame = 0;
+                self.hud.recording_total_frames = rec.total_frames;
+                let msg = format!(
+                    "Recording {} PNG sequence ({} frames)…",
+                    rec.mode.slug(),
+                    rec.total_frames
+                );
+                self.recorder = Some(rec);
+                self.hud.show_toast(msg);
+                self.needs_redraw = true;
+            }
+            Err(err) => {
+                let msg = format!("Recorder failed to start: {err}");
+                eprintln!("[interstellar-desktop] {msg}");
+                self.hud.show_toast(msg);
+            }
+        }
+    }
+
+    fn stop_recording(&mut self, show_toast: bool) {
+        let Some(rec) = self.recorder.take() else {
+            return;
+        };
+        let (out_dir, count) = rec.finish();
+        self.hud.recording_active = false;
+        self.hud.recording_frame = 0;
+        self.hud.recording_total_frames = 0;
+        if show_toast {
+            let msg = format!("Saved {} PNG frames → {}", count, out_dir.display());
+            println!("[interstellar-desktop] {msg}");
+            self.hud.show_toast(msg);
+        }
     }
 
     fn capture_png(&mut self) {
@@ -765,6 +930,7 @@ impl RuntimeState {
                     if let Some(sr) = &mut self.sim_rt {
                         sr.sim.apply_preset(idx);
                         sr.post.reset_accumulation(true);
+                        self.hud.physics_tour_step = 0;
                     }
                 }
                 HudAction::TogglePause => {
@@ -810,6 +976,108 @@ impl RuntimeState {
                 }
                 HudAction::SetVsync(v) => {
                     self.apply_vsync(v);
+                    self.settings.vsync = v;
+                    self.settings.has_saved = true;
+                    self.settings.save();
+                }
+                HudAction::SetQualityProfile(profile) => {
+                    self.settings.apply_profile(profile);
+                    self.settings.has_saved = true;
+                    self.max_dpr = self.settings.dpr_cap;
+                    self.interactive_drag_scale_enabled = self.settings.interactive_drag_scale;
+                    self.hud.quality_profile = profile;
+                    self.hud.dpr_cap = self.settings.dpr_cap;
+                    self.hud.interactive_drag_scale = self.settings.interactive_drag_scale;
+                    if let Some(sr) = &mut self.sim_rt {
+                        sr.sim.set_i32("quality", self.settings.quality_tier);
+                        sr.sim
+                            .set_i32("resolutionScale", self.settings.resolution_scale);
+                        sr.post.reset_accumulation(true);
+                    }
+                    let base_scale =
+                        (self.settings.resolution_scale as f32 / 100.0).clamp(0.5, 1.0);
+                    self.sync_post_resize(base_scale);
+                    self.settings.save();
+                    self.hud
+                        .show_toast(format!("Quality profile: {}", profile.as_str()));
+                }
+                HudAction::SetDprCap(cap) => {
+                    let clamped = cap.clamp(1.0, 3.0);
+                    self.max_dpr = clamped;
+                    self.hud.dpr_cap = clamped;
+                    self.settings.dpr_cap = clamped;
+                    self.settings.quality_profile = self.settings.infer_profile();
+                    self.hud.quality_profile = self.settings.quality_profile;
+                    self.settings.has_saved = true;
+                    let base_scale = self
+                        .sim_rt
+                        .as_ref()
+                        .map(|sr| {
+                            (sr.sim.get_i32("resolutionScale") as f32 / 100.0).clamp(0.5, 1.0)
+                        })
+                        .unwrap_or(1.0);
+                    self.sync_post_resize(base_scale);
+                    if let Some(sr) = &mut self.sim_rt {
+                        sr.post.reset_accumulation(true);
+                    }
+                    self.settings.save();
+                }
+                HudAction::SetInteractiveDragScale(enabled) => {
+                    self.interactive_drag_scale_enabled = enabled;
+                    self.hud.interactive_drag_scale = enabled;
+                    self.settings.interactive_drag_scale = enabled;
+                    if !enabled {
+                        self.drag_settle_until = None;
+                        self.interactive_scale_active = false;
+                    }
+                    self.settings.has_saved = true;
+                    self.settings.save();
+                }
+                HudAction::ToggleProfiler => {
+                    self.hud.profiler_open = !self.hud.profiler_open;
+                    if let Some(sr) = &mut self.sim_rt {
+                        sr.profiler.set_enabled(self.hud.profiler_open);
+                        self.hud.profiler_snapshot = sr.profiler.snapshot();
+                    }
+                }
+                HudAction::TogglePhysicsTour => {
+                    self.hud.physics_tour_open = !self.hud.physics_tour_open;
+                    if self.hud.physics_tour_open {
+                        self.hud.physics_tour_step = 0;
+                    }
+                }
+                HudAction::StepPhysicsTour(delta) => {
+                    if let Some(sr) = &self.sim_rt {
+                        let preset_id = sr
+                            .sim
+                            .active_preset_index()
+                            .and_then(|i| sr.sim.presets().get(i))
+                            .map(|p| p.id)
+                            .unwrap_or("");
+                        let len = preset_tour(sr.sim.id(), preset_id).callouts.len().max(1);
+                        let cur = self.hud.physics_tour_step as isize;
+                        let next = (cur + delta as isize).rem_euclid(len as isize) as usize;
+                        self.hud.physics_tour_step = next;
+                    }
+                }
+                HudAction::SelectTourCallout(idx) => {
+                    self.hud.physics_tour_step = idx;
+                }
+                HudAction::ToggleRecording => {
+                    if self.recorder.is_some() {
+                        self.stop_recording(true);
+                    } else {
+                        self.start_recording();
+                    }
+                }
+                HudAction::SetRecorderMode(mode) => {
+                    self.hud.recorder_mode = mode;
+                }
+                HudAction::SetRecorderDuration(dur) => {
+                    self.hud.recorder_duration_sec = dur.clamp(2, 30);
+                }
+                HudAction::SetRecorderFps(fps) => {
+                    self.hud.recorder_fps = fps.clamp(15, 60);
                 }
                 HudAction::ControlChanged {
                     reset_primary,
@@ -828,6 +1096,16 @@ impl RuntimeState {
                         self.sync_post_resize(base_scale);
                     }
                     if let Some(sr) = &mut self.sim_rt {
+                        let cur_q = sr.sim.get_i32("quality");
+                        let cur_res = sr.sim.get_i32("resolutionScale");
+                        if resolution_changed || cur_q != self.settings.quality_tier {
+                            self.settings.quality_tier = cur_q.clamp(0, 2);
+                            self.settings.resolution_scale = cur_res;
+                            self.settings.quality_profile = self.settings.infer_profile();
+                            self.hud.quality_profile = self.settings.quality_profile;
+                            self.settings.has_saved = true;
+                            self.settings.save();
+                        }
                         if reset_primary {
                             sr.post.reset_accumulation(true);
                         } else {
@@ -901,6 +1179,15 @@ impl RuntimeState {
             KeyCode::KeyH => actions.push(HudAction::ToggleHud),
             KeyCode::KeyT => actions.push(HudAction::TriggerSpecial),
             KeyCode::KeyC => actions.push(HudAction::ToggleDrawer),
+            KeyCode::KeyG => actions.push(HudAction::ToggleProfiler),
+            KeyCode::KeyI => actions.push(HudAction::TogglePhysicsTour),
+            KeyCode::KeyV => actions.push(HudAction::ToggleRecording),
+            KeyCode::BracketLeft if self.hud.physics_tour_open => {
+                actions.push(HudAction::StepPhysicsTour(-1));
+            }
+            KeyCode::BracketRight if self.hud.physics_tour_open => {
+                actions.push(HudAction::StepPhysicsTour(1));
+            }
             KeyCode::Escape if self.hud.drawer_open => actions.push(HudAction::ToggleDrawer),
             _ => {}
         }
@@ -1015,6 +1302,9 @@ impl RuntimeState {
         let mut cmd_bufs = extra_cmds;
         cmd_bufs.push(encoder.finish());
         self.queue.submit(cmd_bufs);
+        if let Some(sr) = &mut self.sim_rt {
+            sr.profiler.after_submit();
+        }
         self.queue.present(frame);
 
         if suboptimal {
@@ -1079,12 +1369,25 @@ impl RuntimeState {
         } else {
             self.interactive_scale_active = false;
         }
-        let drag_scale_factor = if self.interactive_scale_active {
+        let drag_scale_factor = if self.interactive_scale_active && self.recorder.is_none() {
             0.75
         } else {
             1.0
         };
-        let sim_input = self.input.take_sim_input(vp_w, vp_h);
+        let mut sim_input = self.input.take_sim_input(vp_w, vp_h);
+        let mut step_dt = dt;
+        let rec_mode_u = if let Some(rec) = &self.recorder {
+            step_dt = rec.fixed_dt();
+            if rec.mode == RecorderMode::Turntable {
+                sim_input.primary_drag = true;
+                sim_input.secondary_drag = false;
+                sim_input.shift_down = false;
+                sim_input.drag_delta = [rec.turntable_drag_delta(vp_w, vp_h), 0.0];
+            }
+            Some((rec.mode, rec.progress_u()))
+        } else {
+            None
+        };
 
         let (frame, suboptimal) = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(tex) => (tex, false),
@@ -1141,7 +1444,22 @@ impl RuntimeState {
                 );
             }
 
-            let outcome = sr.sim.step(dt, &sim_input);
+            if let Some((RecorderMode::Evolution, u)) = rec_mode_u {
+                match sr.sim.id() {
+                    SimId::WarpDrive => {
+                        let _ = sr.sim.set_f32("warpSpeed", 0.6 + 2.9 * u);
+                    }
+                    SimId::Starflight => {
+                        let _ = sr.sim.set_f32("rapidity", 0.25 + 3.95 * u);
+                    }
+                    SimId::Tde => {
+                        let _ = sr.sim.set_f32("tdePhase", 0.08 + 0.88 * u);
+                    }
+                    _ => {}
+                }
+            }
+
+            let outcome = sr.sim.step(step_dt, &sim_input);
             if outcome.reset_accumulation {
                 sr.post.reset_accumulation(true);
             }
@@ -1168,8 +1486,15 @@ impl RuntimeState {
                         label: Some("desktop-frame-encoder"),
                     });
 
+            sr.profiler.set_enabled(self.hud.profiler_open);
+            let prof_active = self.hud.profiler_open && (plan.run_raytrace || plan.run_post);
+            if prof_active {
+                sr.profiler.begin_frame();
+            }
+
             if plan.run_raytrace {
-                sr.sim.encode_frame(
+                let ts_ray = sr.profiler.timestamp_writes_for(PassCategory::Raymarch);
+                sr.sim.encode_frame_timed(
                     &sr.assets,
                     &mut encoder,
                     &sr.post.scene_rt.view,
@@ -1177,22 +1502,36 @@ impl RuntimeState {
                     sr.post.render_height,
                     sr.post.frame_index,
                     plan.jitter,
-                    dt,
+                    step_dt,
                     hard_reset,
+                    ts_ray,
                 );
-                sr.post.encode_taa(&sr.assets.queue, &mut encoder, &plan);
+                sr.post.encode_taa_timed(
+                    &sr.assets.queue,
+                    &mut encoder,
+                    &plan,
+                    Some(&mut sr.profiler),
+                );
             }
 
             let show_glass = !self.hud.hud_hidden;
             if plan.run_post {
-                sr.post.encode_post_and_composite(
+                sr.post.encode_post_and_composite_timed(
                     &sr.assets.queue,
                     &mut encoder,
                     &post_params,
                     show_glass,
+                    Some(&mut sr.profiler),
                 );
             } else if show_glass && sr.post.glass_blur_dirty {
                 sr.post.encode_glass_blur(&mut encoder);
+            }
+
+            if prof_active {
+                sr.profiler.end_frame(&mut encoder);
+            }
+            if self.hud.profiler_open {
+                self.hud.profiler_snapshot = sr.profiler.snapshot();
             }
 
             let sample_count = sr.post.sample_count;
@@ -1287,8 +1626,11 @@ impl RuntimeState {
                 && !outcome.camera_moved
                 && !sr.assets.is_sky_loading();
 
+            let free_textures = std::mem::take(&mut full_output.textures_delta.free);
+            full_output.textures_delta.clear();
+
             (
-                std::mem::take(&mut full_output.textures_delta.free),
+                free_textures,
                 cmd_bufs,
                 repaint_delay,
                 plan.run_raytrace,
@@ -1298,7 +1640,31 @@ impl RuntimeState {
         };
 
         self.queue.submit(cmd_bufs);
+        if let Some(sr) = &mut self.sim_rt {
+            sr.profiler.after_submit();
+        }
         self.queue.present(frame);
+
+        let mut rec_done = false;
+        if let Some(rec) = &mut self.recorder
+            && let Some(sr) = &self.sim_rt
+        {
+            let w = sr.post.composite_rt.width;
+            let h = sr.post.composite_rt.height;
+            let rgba = readback_rgba8_texture(
+                &sr.assets.device,
+                &sr.assets.queue,
+                &sr.post.composite_rt.texture,
+                w,
+                h,
+            );
+            rec_done = rec.push_frame(w, h, rgba);
+            self.hud.recording_frame = rec.frame_index;
+            self.hud.recording_total_frames = rec.total_frames;
+        }
+        if rec_done {
+            self.stop_recording(true);
+        }
 
         if suboptimal {
             self.reconfigure_surface(size.width, size.height);
@@ -1330,6 +1696,7 @@ impl RuntimeState {
             .min();
 
         let sim_still_active = !sim_idle_ready
+            || self.recorder.is_some()
             || self.input.any_key_held()
             || self.input.is_dragging()
             || self.drag_settle_until.is_some()
@@ -1653,13 +2020,181 @@ mod win_timer {
     }
 }
 
+fn run_export_parity(cli: &CliArgs, out_dir: &std::path::Path) {
+    std::fs::create_dir_all(out_dir).expect("Failed to create parity export directory");
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::PRIMARY,
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+        ..Default::default()
+    }))
+    .or_else(|_| {
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            compatible_surface: None,
+            force_fallback_adapter: true,
+            ..Default::default()
+        }))
+    })
+    .expect("No GPU adapter available for --export-parity");
+
+    let adapter_info = adapter.get_info();
+    let mut required_features = wgpu::Features::empty();
+    if adapter
+        .features()
+        .contains(wgpu::Features::RG11B10UFLOAT_RENDERABLE)
+    {
+        required_features |= wgpu::Features::RG11B10UFLOAT_RENDERABLE;
+    }
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("export-parity-device"),
+        required_features,
+        required_limits: wgpu::Limits::default(),
+        memory_hints: wgpu::MemoryHints::Performance,
+        trace: wgpu::Trace::Off,
+        experimental_features: wgpu::ExperimentalFeatures::disabled(),
+    }))
+    .expect("Failed to create device for --export-parity");
+
+    let device = Arc::new(device);
+    let queue = Arc::new(queue);
+    let mut assets = SharedGpuAssets::new(
+        device.clone(),
+        queue.clone(),
+        adapter_info,
+        true,
+        None,
+        None,
+    );
+
+    let targets: Vec<SimId> = if let Some(csv) = &cli.parity_sims {
+        if csv.eq_ignore_ascii_case("all") {
+            SimId::ALL.to_vec()
+        } else {
+            csv.split(',')
+                .filter_map(|s| SimId::from_cli_name(s.trim()))
+                .collect()
+        }
+    } else if let Some(one) = cli.start_sim {
+        vec![one]
+    } else {
+        SimId::ALL.to_vec()
+    };
+
+    let mut post = PostPipeline::new(
+        &assets.device,
+        &assets.queue,
+        assets.s_linear_clamp.clone(),
+        wgpu::TextureFormat::Rgba8Unorm,
+        cli.width,
+        cli.height,
+        1.0,
+        1.5,
+        1.0,
+    );
+
+    let mut manifest_entries = Vec::new();
+    for sim_id in targets {
+        let mut sim = create_simulation(sim_id, &mut assets);
+        sim.apply_preset(0);
+        sim.set_paused(true);
+        let input = SimInput {
+            viewport_w: cli.width as f32,
+            viewport_h: cli.height as f32,
+            ..Default::default()
+        };
+        let _ = sim.step(0.0, &input);
+        for _ in 0..40 {
+            let _ = sim.step(0.05, &input);
+        }
+        if sim.get_i32("skyMode") == 2 && assets.ensure_procedural_sky_a() {
+            sim.rebuild_bind_groups(&mut assets);
+        }
+        post.reset_accumulation(true);
+        let mut post_params = sim.post_params(false, 0.0);
+        post_params.paused = true;
+
+        let plan = interstellar_desktop::renderer::post::FramePlan {
+            run_raytrace: true,
+            run_post: true,
+            jitter: [0.0, 0.0],
+            blend_factor: 1.0,
+            is_progressive: true,
+        };
+        let mut encoder = assets
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("parity-export-enc"),
+            });
+        sim.encode_frame(
+            &assets,
+            &mut encoder,
+            &post.scene_rt.view,
+            post.render_width,
+            post.render_height,
+            1,
+            [0.0, 0.0],
+            0.0,
+            true,
+        );
+        post.encode_taa(&assets.queue, &mut encoder, &plan);
+        post.encode_post_and_composite(&assets.queue, &mut encoder, &post_params, false);
+        assets.queue.submit([encoder.finish()]);
+        let _ = assets.device.poll(wgpu::PollType::wait_indefinitely());
+
+        let rgba = readback_rgba8_texture(
+            &assets.device,
+            &assets.queue,
+            &post.composite_rt.texture,
+            post.render_width,
+            post.render_height,
+        );
+        let filename = format!("{}.png", sim_id.cli_name());
+        image::save_buffer(
+            out_dir.join(&filename),
+            &rgba,
+            post.render_width,
+            post.render_height,
+            image::ColorType::Rgba8,
+        )
+        .expect("Failed to write parity PNG");
+        println!(
+            "[export-parity] {} -> {} ({}x{})",
+            sim_id.cli_name(),
+            filename,
+            post.render_width,
+            post.render_height
+        );
+        manifest_entries.push(format!(
+            "  {{\"id\":\"{}\",\"file\":\"{}\",\"width\":{},\"height\":{}}}",
+            sim_id.cli_name(),
+            filename,
+            post.render_width,
+            post.render_height
+        ));
+    }
+
+    let manifest = format!("[\n{}\n]\n", manifest_entries.join(",\n"));
+    std::fs::write(out_dir.join("manifest.json"), manifest)
+        .expect("Failed to write parity manifest.json");
+}
+
 fn main() {
+    let cli = parse_cli_args();
+    if let Some(ref parity_dir) = cli.export_parity {
+        run_export_parity(&cli, parity_dir);
+        return;
+    }
+
     #[cfg(target_os = "windows")]
     let _win_timer = win_timer::TimerPeriodGuard::new();
     #[cfg(target_os = "linux")]
     icon::ensure_linux_desktop_integration();
 
-    let cli = parse_cli_args();
     let event_loop = EventLoop::<AppEvent>::with_user_event()
         .build()
         .expect("Failed to initialize winit EventLoop");

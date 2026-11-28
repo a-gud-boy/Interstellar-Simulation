@@ -7,17 +7,34 @@ pub mod controls;
 pub mod home;
 pub mod hud;
 pub mod theme;
+pub mod tour_data;
 
 pub use home::{HomeAction, HomeState, draw_homepage};
 pub use theme::configure_fonts;
 
+use crate::recorder::RecorderMode;
 use crate::renderer::SharedGpuAssets;
+use crate::renderer::profiler::PassTimingsSnapshot;
+use crate::settings::QualityProfile;
 use crate::sims::{HudMetadata, SimId, Simulation};
 
 pub struct HudState {
     pub drawer_open: bool,
     pub hud_hidden: bool,
     pub vsync: bool,
+    pub quality_profile: QualityProfile,
+    pub dpr_cap: f32,
+    pub interactive_drag_scale: bool,
+    pub profiler_open: bool,
+    pub profiler_snapshot: PassTimingsSnapshot,
+    pub physics_tour_open: bool,
+    pub physics_tour_step: usize,
+    pub recorder_mode: RecorderMode,
+    pub recorder_duration_sec: u32,
+    pub recorder_fps: u32,
+    pub recording_active: bool,
+    pub recording_frame: u32,
+    pub recording_total_frames: u32,
     pub switcher_open: bool,
     pub switcher_query: String,
     pub switcher_focus_search: bool,
@@ -34,6 +51,19 @@ impl Default for HudState {
             drawer_open: false,
             hud_hidden: false,
             vsync: true,
+            quality_profile: QualityProfile::Balanced,
+            dpr_cap: 1.5,
+            interactive_drag_scale: true,
+            profiler_open: false,
+            profiler_snapshot: PassTimingsSnapshot::default(),
+            physics_tour_open: false,
+            physics_tour_step: 0,
+            recorder_mode: RecorderMode::Turntable,
+            recorder_duration_sec: 8,
+            recorder_fps: 30,
+            recording_active: false,
+            recording_frame: 0,
+            recording_total_frames: 0,
             switcher_open: false,
             switcher_query: String::new(),
             switcher_focus_search: false,
@@ -83,7 +113,7 @@ impl HudState {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum HudAction {
     GoHome,
     SwitchSim(SimId),
@@ -97,6 +127,17 @@ pub enum HudAction {
     ToggleHud,
     ToggleDrawer,
     SetVsync(bool),
+    SetQualityProfile(QualityProfile),
+    SetDprCap(f32),
+    SetInteractiveDragScale(bool),
+    ToggleProfiler,
+    TogglePhysicsTour,
+    StepPhysicsTour(i32),
+    SelectTourCallout(usize),
+    ToggleRecording,
+    SetRecorderMode(RecorderMode),
+    SetRecorderDuration(u32),
+    SetRecorderFps(u32),
     ControlChanged {
         reset_primary: bool,
         resolution_changed: bool,
@@ -150,11 +191,44 @@ pub fn draw_hud(
         );
     }
 
-    hud::draw_bottom_left_hint(ctx, meta.hint_text, screen_size);
+    if hud.profiler_open {
+        hud::draw_gpu_profiler_card(
+            ctx,
+            &hud.profiler_snapshot,
+            &theme,
+            screen_size,
+            glass_tex_id,
+            &mut actions,
+        );
+    }
+
+    if hud.physics_tour_open {
+        let preset_id = sim
+            .active_preset_index()
+            .and_then(|idx| sim.presets().get(idx))
+            .map(|p| p.id)
+            .unwrap_or("");
+        hud::draw_physics_tour(
+            ctx,
+            sim.id(),
+            preset_id,
+            hud,
+            &theme,
+            screen_size,
+            glass_tex_id,
+            &mut actions,
+        );
+    }
+
+    hud::draw_recording_pill(ctx, hud, screen_size, glass_tex_id, &mut actions);
+    if !hud.physics_tour_open {
+        hud::draw_bottom_left_hint(ctx, meta.hint_text, screen_size);
+    }
     hud::draw_bottom_dock(
         ctx,
         sim,
         &meta,
+        hud.physics_tour_open,
         &theme,
         screen_size,
         glass_tex_id,

@@ -8,6 +8,8 @@ on:
     paths:
       - desktop/**
       - home/previews/**
+      - packaging/**
+      - scripts/render-packaging.mjs
       - shared/assets/milkyway_4k.jpg
       - shared/assets/app-icon*
       - shared/sims.json
@@ -36,8 +38,16 @@ jobs:
         with:
           workspaces: desktop
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify packaging manifests match Cargo.toml version
+        run: node scripts/render-packaging.mjs --check
+
       - name: Install Vulkan software ICD (Lavapipe) for headless wgpu validation
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libfuse2t64 || sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers
 
       - name: Run deterministic physics parity & WGSL shader validation tests
         run: cargo test --manifest-path desktop/Cargo.toml --test physics_parity --test shader_validation
@@ -45,17 +55,25 @@ jobs:
       - name: Build Linux release binary
         run: cargo build --release --manifest-path desktop/Cargo.toml
 
-      - name: Package Linux release tarball
+      - name: Package Linux release tarball & AppImage
         run: |
           mkdir -p desktop/target/release-bundle
           tar -czf desktop/target/release-bundle/Interstellar-linux-x86_64.tar.gz \
             -C desktop/target/release interstellar-desktop
+          chmod +x packaging/linux/build-appimage.sh
+          ./packaging/linux/build-appimage.sh --dir-only
+          curl -fsSL -o /tmp/appimagetool-x86_64.AppImage \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x /tmp/appimagetool-x86_64.AppImage
+          APPIMAGETOOL=/tmp/appimagetool-x86_64.AppImage ./packaging/linux/build-appimage.sh
 
       - name: Upload Linux build artifact
         uses: actions/upload-artifact@v4
         with:
           name: interstellar-desktop-linux-x86_64
-          path: desktop/target/release-bundle/Interstellar-linux-x86_64.tar.gz
+          path: |
+            desktop/target/release-bundle/Interstellar-linux-x86_64.tar.gz
+            desktop/target/release-bundle/Interstellar-linux-x86_64.AppImage
           if-no-files-found: error
 
       - name: Publish Linux bundle to GitHub Release
@@ -64,7 +82,9 @@ jobs:
         with:
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
-          files: desktop/target/release-bundle/Interstellar-linux-x86_64.tar.gz
+          files: |
+            desktop/target/release-bundle/Interstellar-linux-x86_64.tar.gz
+            desktop/target/release-bundle/Interstellar-linux-x86_64.AppImage
 
   build-windows:
     name: Build Windows (x86_64 MSVC)

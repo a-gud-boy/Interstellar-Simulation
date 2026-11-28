@@ -157,6 +157,24 @@ export const SIMULATORS = Object.freeze([
     aliases: Object.freeze(["lens-cluster", "lens", "lensing", "cluster", "einstein-ring", "einstein"]),
     description: "JWST deep-field gravitational lensing observatory with exact Point-Mass, SIE elliptical, and NFW dark-matter cluster halos, analytical magnification caustics, Fermat arrival-time contours, and interactive source-plane dragging.",
   }),
+  Object.freeze({
+    id: "tde",
+    dir: "sims/tde",
+    index: "09",
+    shortLabel: "TDE Shred",
+    title: "Tidal Disruption Event — Stellar Shredding & Nozzle Shock",
+    ariaLabel: "Switch to Tidal Disruption Event Observatory",
+    debugHandle: "__TDE__",
+    accentVar: "--accent-tde",
+    cardClass: "tde",
+    category: "astro",
+    categoryLabel: "Astrophysics",
+    tagline: "Precessing tidal debris stream, nozzle shock & Hills limit",
+    accent: "#fb7185",
+    accentBright: "#fda4af",
+    aliases: Object.freeze(["tde", "tidal", "disruption", "tidal-disruption", "hills"]),
+    description: "3D Outgoing Kerr–Schild ray-tracer modeling relativistic tidal stellar disruption: elliptical precessing debris streams, unbound escaping tail, nozzle self-intersection shock, Rees–Phinney t^(−5/3) circularization disk, Blandford–Znajek polar jet, and the Hills direct-capture limit.",
+  }),
 ]);
 
 /**

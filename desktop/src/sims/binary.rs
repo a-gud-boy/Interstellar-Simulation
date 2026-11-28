@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::renderer::post::{PostFrameParams, PostTuning, run_fs_pass};
+use crate::renderer::post::{PostFrameParams, PostTuning, run_fs_pass_timed};
 use crate::renderer::{SharedGpuAssets, SimBglKind};
 use crate::shaders;
 use crate::sims::blackhole::format_thousands;
@@ -1792,7 +1792,7 @@ impl Simulation for BinaryBhSim {
         ];
     }
 
-    fn encode_frame(
+    fn encode_frame_timed(
         &mut self,
         assets: &SharedGpuAssets,
         encoder: &mut wgpu::CommandEncoder,
@@ -1803,6 +1803,7 @@ impl Simulation for BinaryBhSim {
         jitter: [f32; 2],
         dt: f32,
         _hard_reset: bool,
+        timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
     ) {
         let bin = self.active_binary_state();
         let field_half_size = (self.disk_outer_radius * 1.15).max(bin.d as f32 * 3.8);
@@ -1845,12 +1846,13 @@ impl Simulation for BinaryBhSim {
         assets
             .queue
             .write_buffer(&self.ubo, 0, bytemuck::bytes_of(&ubo_data));
-        run_fs_pass(
+        run_fs_pass_timed(
             encoder,
             "binary-raytrace",
             scene_view,
             &self.pipeline,
             &self.bin_bgs[self.tidal_read_idx],
+            timestamp_writes,
         );
     }
 }

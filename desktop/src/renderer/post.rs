@@ -1,5 +1,6 @@
 use bytemuck::{Pod, Zeroable};
 
+use crate::renderer::profiler::{GpuPassProfiler, PassCategory};
 use crate::shaders;
 
 pub const BLOOM_MIP_COUNT: usize = 6;
@@ -104,6 +105,21 @@ impl PostTuning {
             ana_mix_weight: 0.40,
             bloom_weight: 0.095,
             ana_weight: 0.18,
+        }
+    }
+
+    pub fn tde() -> Self {
+        Self {
+            bloom_threshold: 1.22,
+            bloom_knee: 0.45,
+            bloom_clamp: 15.0,
+            ana_threshold: 1.92,
+            ana_inner_tint: [1.05, 0.94, 0.92],
+            ana_edge_start: 0.17,
+            ana_outer_tint: [0.74, 0.88, 1.20],
+            ana_mix_weight: 0.44,
+            bloom_weight: 0.092,
+            ana_weight: 0.24,
         }
     }
 }
@@ -741,6 +757,16 @@ impl PostPipeline {
         encoder: &mut wgpu::CommandEncoder,
         plan: &FramePlan,
     ) {
+        self.encode_taa_timed(queue, encoder, plan, None);
+    }
+
+    pub fn encode_taa_timed(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        plan: &FramePlan,
+        profiler: Option<&mut GpuPassProfiler>,
+    ) {
         let ubo: [f32; 4] = [
             1.0 / self.render_width as f32,
             1.0 / self.render_height as f32,
@@ -751,7 +777,8 @@ impl PostPipeline {
 
         let output_view = &self.taa_rts[self.taa_write_idx].view;
         let bg = &self.taa_bgs[self.taa_read_idx];
-        run_fs_pass(encoder, "taa-pass", output_view, &self.taa_pipeline, bg);
+        let ts = profiler.and_then(|p| p.timestamp_writes_for(PassCategory::Taa));
+        run_fs_pass_timed(encoder, "taa-pass", output_view, &self.taa_pipeline, bg, ts);
 
         std::mem::swap(&mut self.taa_read_idx, &mut self.taa_write_idx);
     }
@@ -762,6 +789,17 @@ impl PostPipeline {
         encoder: &mut wgpu::CommandEncoder,
         params: &PostFrameParams,
         update_glass_blur: bool,
+    ) {
+        self.encode_post_and_composite_timed(queue, encoder, params, update_glass_blur, None);
+    }
+
+    pub fn encode_post_and_composite_timed(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        params: &PostFrameParams,
+        update_glass_blur: bool,
+        mut profiler: Option<&mut GpuPassProfiler>,
     ) {
         let tuning = &params.tuning;
         let need_bloom = params.bloom_intensity > 0.001;
@@ -821,12 +859,16 @@ impl PostPipeline {
             }
 
             // 1. Bloom prefilter
-            run_fs_pass(
+            let ts_pre = profiler
+                .as_deref_mut()
+                .and_then(|p| p.timestamp_writes_for(PassCategory::Bloom));
+            run_fs_pass_timed(
                 encoder,
                 "bloom-prefilter",
                 &self.bloom_down_rts[0].view,
                 &self.bloom_pre_pipeline,
                 &self.bloom_pre_bgs[self.taa_read_idx],
+                ts_pre,
             );
 
             // 2. 6-level Jimenez 13-tap Downsample Chain
@@ -834,12 +876,16 @@ impl PostPipeline {
             for i in 1..=max_down {
                 let dst = &self.bloom_down_rts[i];
                 if let Some(bg) = &self.bloom_down_bgs[i] {
-                    run_fs_pass(
+                    let ts_d = profiler
+                        .as_deref_mut()
+                        .and_then(|p| p.timestamp_writes_for(PassCategory::Bloom));
+                    run_fs_pass_timed(
                         encoder,
                         "bloom-downsample",
                         &dst.view,
                         &self.bloom_down_pipeline,
                         bg,
+                        ts_d,
                     );
                 }
             }
@@ -847,31 +893,43 @@ impl PostPipeline {
             // 3. 9-tap tent upsample chain
             if need_bloom {
                 for i in (0..=(BLOOM_MIP_COUNT - 2)).rev() {
-                    run_fs_pass(
+                    let ts_u = profiler
+                        .as_deref_mut()
+                        .and_then(|p| p.timestamp_writes_for(PassCategory::Bloom));
+                    run_fs_pass_timed(
                         encoder,
                         "bloom-upsample",
                         &self.bloom_up_rts[i].view,
                         &self.bloom_up_pipeline,
                         &self.bloom_up_bgs[i],
+                        ts_u,
                     );
                 }
             }
 
             // 4. 2-pass horizontal anamorphic optical streak
             if need_ana {
-                run_fs_pass(
+                let ts_a0 = profiler
+                    .as_deref_mut()
+                    .and_then(|p| p.timestamp_writes_for(PassCategory::Bloom));
+                run_fs_pass_timed(
                     encoder,
                     "anamorphic-pass-0",
                     &self.ana_rt_a.view,
                     &self.ana_pipeline,
                     &self.ana_bg_0,
+                    ts_a0,
                 );
-                run_fs_pass(
+                let ts_a1 = profiler
+                    .as_deref_mut()
+                    .and_then(|p| p.timestamp_writes_for(PassCategory::Bloom));
+                run_fs_pass_timed(
                     encoder,
                     "anamorphic-pass-1",
                     &self.ana_rt_b.view,
                     &self.ana_pipeline,
                     &self.ana_bg_1,
+                    ts_a1,
                 );
             }
         }
@@ -893,12 +951,14 @@ impl PostPipeline {
             weights_pad: [tuning.bloom_weight, tuning.ana_weight, 0.0, 0.0],
         };
         queue.write_buffer(&self.comp_ubo, 0, bytemuck::bytes_of(&comp_ubo));
-        run_fs_pass(
+        let ts_comp = profiler.and_then(|p| p.timestamp_writes_for(PassCategory::Composite));
+        run_fs_pass_timed(
             encoder,
             "composite-pass",
             &self.composite_rt.view,
             &self.comp_pipeline,
             &self.comp_bgs[self.taa_read_idx],
+            ts_comp,
         );
 
         self.post_dirty = false;
@@ -1418,6 +1478,17 @@ pub fn run_fs_pass(
     pipeline: &wgpu::RenderPipeline,
     bind_group: &wgpu::BindGroup,
 ) {
+    run_fs_pass_timed(encoder, label, dst_view, pipeline, bind_group, None);
+}
+
+pub fn run_fs_pass_timed(
+    encoder: &mut wgpu::CommandEncoder,
+    label: &str,
+    dst_view: &wgpu::TextureView,
+    pipeline: &wgpu::RenderPipeline,
+    bind_group: &wgpu::BindGroup,
+    timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
+) {
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some(label),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1430,7 +1501,7 @@ pub fn run_fs_pass(
             depth_slice: None,
         })],
         depth_stencil_attachment: None,
-        timestamp_writes: None,
+        timestamp_writes,
         occlusion_query_set: None,
         multiview_mask: None,
     });

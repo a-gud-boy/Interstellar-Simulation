@@ -1,7 +1,9 @@
-pub const APP_VERSION: &str = "0.1.4.1 beta";
+pub const APP_VERSION: &str = "0.1.4.2 beta";
 
 pub mod assets;
+pub mod recorder;
 pub mod renderer;
+pub mod settings;
 pub mod sims;
 pub mod ui;
 
@@ -32,6 +34,7 @@ pub mod shaders {
     pub const STARFLIGHT: &str = include_str!("../../sims/starflight/src/shaders/starflight.wgsl");
     pub const LENS_CLUSTER: &str =
         include_str!("../../sims/lens-cluster/src/shaders/lens-cluster.wgsl");
+    pub const TDE: &str = include_str!("../../sims/tde/src/shaders/tde.wgsl");
 
     pub fn all_named() -> &'static [(&'static str, &'static str)] {
         &[
@@ -56,6 +59,7 @@ pub mod shaders {
             ("pulsar", PULSAR),
             ("starflight", STARFLIGHT),
             ("lens_cluster", LENS_CLUSTER),
+            ("tde", TDE),
         ]
     }
 }

@@ -1,6 +1,6 @@
 /**
  * firefoxQaRunner.mjs — Parameterized Headed Wayland Firefox NVIDIA WebGPU QA runner
- * shared by all 7 `sims/<id>/tests/firefox_qa.mjs` test suites.
+ * shared by all 8 `sims/<id>/tests/firefox_qa.mjs` test suites.
  */
 
 import fs from 'node:fs';

@@ -1,5 +1,7 @@
 mod dock;
+mod profiler;
 mod topbar;
+mod tour;
 
 use egui::epaint::{CornerRadius, StrokeKind};
 use egui::{
@@ -15,7 +17,9 @@ use crate::ui::theme::{
 use crate::ui::{HudAction, HudState};
 
 pub(crate) use dock::{draw_bottom_dock, draw_bottom_left_hint};
+pub(crate) use profiler::draw_gpu_profiler_card;
 pub(crate) use topbar::{draw_top_left_card, draw_top_right_bar};
+pub(crate) use tour::{draw_physics_tour, draw_recording_pill};
 
 pub(crate) fn draw_restore_hud_pill(
     ctx: &Context,

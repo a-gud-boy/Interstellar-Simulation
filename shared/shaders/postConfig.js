@@ -78,6 +78,24 @@ export const POST_OPTICS_PROFILES = Object.freeze({
     defaultBloomIntensity: 0.56,
     defaultAnamorphicIntensity: 0.36,
   }),
+  tde: Object.freeze({
+    coreTint: Object.freeze([1.05, 0.94, 0.92]),
+    outerTint: Object.freeze([0.74, 0.88, 1.20]),
+    fringeStart: 0.17,
+    fringeMix: 0.44,
+    bloomGain: 0.092,
+    anamorphicGain: 0.24,
+    prefilterThreshold: 1.22,
+    prefilterKnee: 0.45,
+    prefilterClampMax: 15.0,
+    upsampleRadius: 1.02,
+    upsampleWeight: 0.64,
+    anaThreshold: 1.92,
+    anaSpread0: 1.05,
+    anaSpread1: 1.15,
+    defaultBloomIntensity: 0.58,
+    defaultAnamorphicIntensity: 0.34,
+  }),
 });
 
 /**

@@ -144,6 +144,7 @@ export class SharedWebGLPostPipeline {
     this.optics = resolvePostOpticsProfile(opts.opticsProfile || 'default');
     this._getUniform = opts.getUniform;
     this._drawFullscreen = opts.drawFullscreen;
+    this.profiler = opts.profiler || null;
 
     const shaders = createPostShadersGLSL(opts.opticsProfile || 'default');
     const vs = opts.vertSrc;
@@ -328,6 +329,10 @@ export class SharedWebGLPostPipeline {
     gl.useProgram(null);
   }
 
+  setProfiler(profiler) {
+    this.profiler = profiler || null;
+  }
+
   getSceneFbo() {
     return this.sceneFbo;
   }
@@ -340,6 +345,7 @@ export class SharedWebGLPostPipeline {
     const historyRt = this.taaFbos[this.taaReadIdx];
     const outputRt = this.taaFbos[this.taaWriteIdx];
 
+    this.profiler?.beginPass('taa');
     gl.bindFramebuffer(gl.FRAMEBUFFER, outputRt.fbo);
     gl.viewport(0, 0, width, height);
     gl.useProgram(prog.program);
@@ -356,6 +362,7 @@ export class SharedWebGLPostPipeline {
     if (uProgressive) gl.uniform1i(uProgressive, isProgressive ? 1 : 0);
 
     this._drawFullscreen();
+    this.profiler?.endPass();
 
     const tmp = this.taaReadIdx;
     this.taaReadIdx = this.taaWriteIdx;
@@ -377,6 +384,7 @@ export class SharedWebGLPostPipeline {
     const hdrTex = this.taaFbos[this.taaReadIdx]?.texture;
     if (!hdrTex) return;
 
+    this.profiler?.beginPass('bloom');
     // 1. Bloom Prefilter (full-res HDR -> mip 0 half-res)
     const preProg = this.programs.bloomPrefilter;
     if (preProg) {
@@ -467,6 +475,7 @@ export class SharedWebGLPostPipeline {
       gl.uniform1i(uPass, 1);
       this._drawFullscreen();
     }
+    this.profiler?.endPass();
   }
 
   runComposite(state, width, height, simTime, frameIndex) {
@@ -482,6 +491,7 @@ export class SharedWebGLPostPipeline {
       ? Number(state.anamorphicIntensity)
       : this.optics.defaultAnamorphicIntensity;
 
+    this.profiler?.beginPass('composite');
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, width, height);
     gl.useProgram(prog.program);
@@ -502,6 +512,7 @@ export class SharedWebGLPostPipeline {
     gl.uniform1i(this._getUniform(prog, 'uFrameIndex'), frameIndex);
 
     this._drawFullscreen();
+    this.profiler?.endPass();
   }
 
   dispose() {

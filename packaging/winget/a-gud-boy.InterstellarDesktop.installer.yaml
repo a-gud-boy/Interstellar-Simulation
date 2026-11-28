@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+PackageIdentifier: a-gud-boy.InterstellarDesktop
+PackageVersion: 0.1.4-beta.2
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: interstellar-desktop.exe
+    PortableCommandAlias: interstellar-desktop
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/a-gud-boy/Interstellar-Simulation/releases/download/v0.1.4.2-beta/Interstellar-windows-x86_64.zip
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000 # Update to release ZIP sha256 on tagged publication
+ManifestType: installer
+ManifestVersion: 1.6.0

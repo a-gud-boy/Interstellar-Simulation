@@ -1,6 +1,6 @@
 # Interstellar Desktop (Native Rust + wgpu + egui)
 
-Native Linux, Windows, and macOS desktop port of all 7 dual-backend relativistic GPU ray-tracing simulators from the Interstellar Simulation suite, matching the web version 1:1 in physics, shaders, HDR post-processing, and Observatory HUD styling.
+Native Linux, Windows, and macOS desktop port of all 9 dual-backend relativistic GPU ray-tracing simulators from the Interstellar Simulation suite, matching the web version 1:1 in physics, shaders, HDR post-processing, and Observatory HUD styling.
 
 ## Included Simulators
 
@@ -11,6 +11,8 @@ Native Linux, Windows, and macOS desktop port of all 7 dual-backend relativistic
 - `supernova` — Volumetric Multi-Scattering Supernova Remnant & Nebula
 - `pulsar` — Magnetar & Millisecond Pulsar Magnetosphere & GR Lensing
 - `starflight` — Relativistic Starflight (SR Aberration, Doppler & Terrell Sky)
+- `lens-cluster` — Gravitational Lensing Observatory (Einstein Rings, Caustics & NFW Cluster)
+- `tde` — Tidal Disruption Event (Kerr Apsidal Stream Precession, Nozzle Shock & Hills Limit)
 
 ## Prerequisites
 
@@ -52,7 +54,7 @@ cargo build --release
 ```
 
 Notes:
-- Standalone PE32+ Windows GUI (`WINDOWS_GUI` subsystem, no console window on double-click) with `milkyway_4k.jpg`, all 7 WebP Observatory previews, and all 19 WGSL shaders embedded directly in the binary.
+- Standalone PE32+ Windows GUI (`WINDOWS_GUI` subsystem, no console window on double-click) with `milkyway_4k.jpg`, all 9 WebP Observatory previews, and all 22 WGSL shaders embedded directly in the binary.
 - Uses DirectX 12 or Vulkan via `wgpu 30` with static MSVC CRT (`+crt-static` and static `libucrt`), Windows system font discovery (`Inter`, `Segoe UI`, `Cascadia Mono`, `Consolas`, `Segoe UI Symbol`), and 1ms timer resolution (`timeBeginPeriod(1)`) for the 165 FPS frame cap.
 - Zero external DLL dependencies beyond built-in Windows OS DLLs (`KERNEL32.dll`, `USER32.dll`, `GDI32.dll`, `WINMM.dll`, `DXGI.dll`, etc.).
 
@@ -83,11 +85,12 @@ Notes:
 ### CLI Options
 
 - `--home`, `--hub`: Open the Observatory Homepage (default)
-- `--sim <name>`: `home`, `blackhole`, `wormhole`, `binary`, `warp`, `supernova`, `pulsar`, `starflight`
+- `--sim <name>`: `home`, `blackhole`, `wormhole`, `binary`, `warp`, `supernova`, `pulsar`, `starflight`, `lens-cluster`, `tde`
 - `--width <px>` / `--height <px>`: Initial window dimensions (default `1280x720`)
 - `--vsync <on|off>`: Toggle Fifo VSync vs Mailbox/Immediate presentation (frame-capped at `--max-fps`)
 - `--max-fps <n>`: Maximum frame rate limit (default `165`)
 - `--smoke-frames <n>`: Render `n` live windowed frames and exit cleanly
+- `--export-parity <dir>`: Render headless clean-canvas PNGs + `manifest.json` for cross-backend visual parity diffing (combine with `--sim <name|csv|all>`, defaults to 960×540 unless `--width`/`--height` set)
 
 ## Controls & Shortcuts
 
@@ -98,12 +101,24 @@ Notes:
 - **`W`/`A`/`S`/`D`/`Q`/`E` & Arrow Keys**: Smooth camera flight / roll
 - **`1`–`6`**: Select simulation presets
 - **`Space`**: Freeze simulation & trigger 128-sample Cinema Still progressive accumulation
-- **`T`**: Special action (`Traverse` in Wormhole, `Bridge` in Warp Drive, `Aft / Fwd` in Starflight)
+- **`T`**: Special action (`Traverse` in Wormhole, `Bridge` in Warp Drive, `Detonate` in Supernova, `Aft / Fwd` in Starflight, `Drag Source` in Lens Cluster, `Disrupt` in TDE)
+- **`I`**: Toggle Interactive Physics Tour overlay (`[` / `]` steps callouts)
+- **`G`**: Toggle live GPU Pass Profiler overlay (Hardware `TIMESTAMP_QUERY` pass timings & frame budget sparkline)
+- **`V`**: Start / Stop Cinema PNG Frame-Sequence Recorder (`screenshots/<sim>_<mode>_<ts>/`)
 - **`O`**: Toggle Auto-Orbit / Auto-Pan
-- **`C`**: Open/close Controls drawer
+- **`C`**: Open/close Controls drawer (persists `Eco / Balanced / Ultra` quality profile, DPR cap, and resolution scale)
 - **`P`**: Save composite PNG to `./screenshots/` (`~/Pictures/Interstellar/` on macOS)
 - **`R`**: Reset camera
 - **`H`**: Toggle HUD visibility (`Esc` closes Controls drawer or Quick-Inspect Dossier; top-right Home button returns to Observatory Homepage; `Cmd+Q`/`Cmd+W` quits on macOS)
+
+## Distribution & Packaging Channels
+
+Packaging manifests are kept synchronized with `desktop/Cargo.toml` via `node scripts/render-packaging.mjs --check` (or `--write`):
+
+- **Linux AppImage**: `./packaging/linux/build-appimage.sh` (or `--dir-only` to validate the `Interstellar.AppDir`, `.desktop`, and AppStream metainfo)
+- **Linux Flatpak**: `packaging/flatpak/io.github.a_gud_boy.InterstellarDesktop.yml`
+- **macOS Homebrew Cask**: `packaging/homebrew/interstellar-desktop.rb`
+- **Windows Winget**: `packaging/winget/a-gud-boy.InterstellarDesktop*.yaml`
 
 ## Verification
 

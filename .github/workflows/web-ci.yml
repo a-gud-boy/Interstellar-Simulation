@@ -6,9 +6,12 @@ on:
       - main
     paths:
       - "index.html"
+      - "manifest.webmanifest"
+      - "sw.js"
       - "home/**"
       - "shared/**"
       - "scripts/**"
+      - "packaging/**"
       - "sims/**"
       - "desktop/**"
       - ".github/workflows/web-ci.yml"
@@ -17,16 +20,19 @@ on:
       - main
     paths:
       - "index.html"
+      - "manifest.webmanifest"
+      - "sw.js"
       - "home/**"
       - "shared/**"
       - "scripts/**"
+      - "packaging/**"
       - "sims/**"
       - "desktop/**"
       - ".github/workflows/web-ci.yml"
 
 jobs:
   physics-check:
-    name: Shared & 7-Sim Physics Contracts
+    name: Shared & 9-Sim Physics Contracts
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -42,6 +48,12 @@ jobs:
 
       - name: Verify single-source WGSL wrappers
         run: node scripts/sync-wgsl.mjs --check
+
+      - name: Verify desktop packaging manifests
+        run: node scripts/render-packaging.mjs --check
+
+      - name: Check Service Worker syntax
+        run: node --check sw.js
 
       - name: Run shared & simulator physics checks
         run: node scripts/run-tests.mjs --physics
