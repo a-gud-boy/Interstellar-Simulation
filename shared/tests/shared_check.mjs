@@ -58,7 +58,7 @@ for (const full of sharedJsFiles) {
 }
 
 console.log('\n=== 2. Simulator Registry & Canonical Asset Deduplication ===');
-const { SIMULATORS, getSimById, resolveSimByAlias } = await import(
+const { SIM_CATEGORIES, SIMULATORS, getSimById, resolveSimByAlias } = await import(
   path.join(REPO_ROOT, 'shared/simRegistry.js')
 );
 
@@ -68,20 +68,32 @@ const handles = SIMULATORS.map((s) => s.debugHandle);
 const allAliases = SIMULATORS.flatMap((s) => s.aliases);
 
 assert(
-  SIMULATORS.length === 7 &&
-    new Set(ids).size === 7 &&
-    new Set(dirs).size === 7 &&
-    new Set(handles).size === 7 &&
-    new Set(allAliases).size === allAliases.length,
-  'SIMULATORS registry declares 7 unique IDs, dirs, debugHandles, and disjoint aliases',
+  Array.isArray(SIM_CATEGORIES) &&
+    SIM_CATEGORIES.length === 4 &&
+    SIM_CATEGORIES.every((c) => typeof c.id === 'string' && typeof c.label === 'string') &&
+    SIMULATORS.length === 8 &&
+    new Set(ids).size === SIMULATORS.length &&
+    new Set(dirs).size === SIMULATORS.length &&
+    new Set(handles).size === SIMULATORS.length &&
+    new Set(allAliases).size === allAliases.length &&
+    SIMULATORS.every(
+      (s) =>
+        typeof s.index === 'string' &&
+        typeof s.category === 'string' &&
+        typeof s.categoryLabel === 'string' &&
+        typeof s.tagline === 'string' &&
+        typeof s.accent === 'string' &&
+        typeof s.accentBright === 'string'
+    ),
+  `SIMULATORS & SIM_CATEGORIES declare ${SIMULATORS.length} unique IDs, categories, accents, taglines, and disjoint aliases`,
   ids.join(', ')
 );
 
 const missingDirs = dirs.filter((d) => !fs.existsSync(path.join(REPO_ROOT, d, 'index.html')));
 assert(
   missingDirs.length === 0,
-  'All 7 simulator directories exist with index.html',
-  missingDirs.length ? `missing: ${missingDirs.join(', ')}` : '7/7 OK'
+  `All ${SIMULATORS.length} simulator directories exist with index.html`,
+  missingDirs.length ? `missing: ${missingDirs.join(', ')}` : `${SIMULATORS.length}/${SIMULATORS.length} OK`
 );
 
 assert(
@@ -92,6 +104,7 @@ assert(
     resolveSimByAlias('snr')?.id === 'supernova' &&
     resolveSimByAlias('magnetar')?.id === 'pulsar' &&
     resolveSimByAlias('sf')?.id === 'starflight' &&
+    resolveSimByAlias('lens')?.id === 'lens-cluster' &&
     resolveSimByAlias('unknown', { strict: true }) === null &&
     resolveSimByAlias('')?.id === 'blackhole',
   'simRegistry resolveSimByAlias & getSimById resolve all aliases and strict fallback cleanly'
@@ -112,7 +125,13 @@ assert(
 
 console.log('\n=== 3. Shared HTML / CSS / Engine / Switcher Wiring Across All 7 Simulators ===');
 const baseCss = fs.readFileSync(path.join(REPO_ROOT, 'shared/ui/base.css'), 'utf8');
-assert(baseCss.includes('.sim-canvas') && baseCss.includes('.sim-switcher'), 'shared/ui/base.css defines .sim-canvas and .sim-switcher');
+assert(
+  baseCss.includes('.sim-canvas') &&
+    baseCss.includes('.sim-switcher') &&
+    baseCss.includes('.sim-switch-trigger') &&
+    baseCss.includes('.sim-switch-popover'),
+  'shared/ui/base.css defines .sim-canvas, .sim-switcher, .sim-switch-trigger, and .sim-switch-popover'
+);
 
 const simAppShellSrc = fs.readFileSync(path.join(REPO_ROOT, 'shared/engine/SimAppShell.js'), 'utf8');
 assert(
@@ -279,7 +298,7 @@ assert(
     !appShellSrc.includes('frameTimestamps.shift') &&
     appShellSrc.includes('reduced-glass') &&
     appShellSrc.includes('setInteractiveDragScale'),
-  'All 7 CameraController.js eliminate getBoundingClientRect reflows & SimAppShell uses O(1) fpsRing + perf toggles'
+  'All CameraController.js eliminate getBoundingClientRect reflows & SimAppShell uses O(1) fpsRing + perf toggles'
 );
 
 const sharedGlPostSrc = fs.readFileSync(path.join(REPO_ROOT, 'shared/engine/SharedWebGLPostPipeline.js'), 'utf8');
@@ -557,7 +576,7 @@ for (const sim of SIMULATORS) {
 
 assert(
   allPreviewsValid && totalPreviewBytes > 0 && totalPreviewBytes <= 900 * 1024,
-  'Total size of all 7 homepage preview WebPs is <= 900 KB',
+  `Total size of all ${SIMULATORS.length} homepage preview WebPs is <= 900 KB`,
   `${(totalPreviewBytes / 1024).toFixed(1)} KB (${previewDetails.join(', ')})`
 );
 
@@ -574,6 +593,29 @@ assert(
     rootHtml.includes("params.get('sim')") &&
     rootHtml.includes('window.location.replace'),
   'Root index.html preserves fast-path ?sim= redirect routing via shared/simRegistry.js'
+);
+
+const appIconSvgPath = path.join(REPO_ROOT, 'shared/assets/app-icon.svg');
+const appIconSvg = fs.existsSync(appIconSvgPath) ? fs.readFileSync(appIconSvgPath, 'utf8') : '';
+const iconAssets = [
+  'shared/assets/app-icon.svg',
+  'shared/assets/app-icon-256.png',
+  'favicon.ico',
+  'desktop/assets/app-icon.ico',
+  'desktop/assets/AppIcon.icns',
+];
+const missingIcons = iconAssets.filter((rel) => {
+  const full = path.join(REPO_ROOT, rel);
+  return !fs.existsSync(full) || fs.statSync(full).size === 0;
+});
+assert(
+  missingIcons.length === 0 &&
+    appIconSvg.includes('<svg') &&
+    appIconSvg.includes('viewBox="0 0 512 512"') &&
+    rootHtml.includes('./shared/assets/app-icon.svg') &&
+    rootHtml.includes('./favicon.ico'),
+  'Canonical SVG app icon and derived PNG/ICO/ICNS assets exist and are wired as default icon',
+  missingIcons.length ? `missing=[${missingIcons.join(', ')}]` : `${iconAssets.length}/${iconAssets.length} OK`
 );
 
 console.log(`\nSUMMARY: ${passed} passed, ${failed} failed`);

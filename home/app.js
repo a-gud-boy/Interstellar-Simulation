@@ -101,7 +101,7 @@ function renderHeroStage(sim) {
 
   const eyebrowEl = document.getElementById('hero-eyebrow');
   if (eyebrowEl) {
-    eyebrowEl.textContent = `${meta.index} / 07 · ${meta.categoryLabel.toUpperCase()}`;
+    eyebrowEl.textContent = `${meta.index} / ${String(SIMULATORS.length).padStart(2, '0')} · ${meta.categoryLabel.toUpperCase()}`;
   }
 
   const titleEl = document.getElementById('hero-sim-title');
@@ -332,7 +332,7 @@ function initCategoryFilters() {
       btn.setAttribute('data-category', cat.id);
       btn.setAttribute('role', 'tab');
       btn.setAttribute('aria-selected', cat.id === state.category ? 'true' : 'false');
-      btn.textContent = cat.id === 'all' ? 'All 7' : cat.label;
+      btn.textContent = cat.id === 'all' ? `All ${SIMULATORS.length}` : cat.label;
       btn.addEventListener('click', () => applyCategoryFilter(cat.id));
       return btn;
     })
@@ -362,7 +362,7 @@ function populateDossier(sim) {
 
   const badge = document.getElementById('dossier-badge');
   if (badge) {
-    badge.textContent = `${meta.index} / 07 · ${meta.categoryLabel.toUpperCase()} · ${meta.metricName.toUpperCase()}`;
+    badge.textContent = `${meta.index} / ${String(SIMULATORS.length).padStart(2, '0')} · ${meta.categoryLabel.toUpperCase()} · ${meta.metricName.toUpperCase()}`;
   }
 
   const title = document.getElementById('dossier-title');

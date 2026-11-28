@@ -1,0 +1,39 @@
+/* Theme & layout overrides for Gravitational Lensing Observatory (shared HUD in ../../shared/ui/base.css) */
+:root {
+  --glass-bg: rgba(8, 10, 18, 0.62);
+  --glass-bg-elevated: rgba(10, 12, 22, 0.86);
+  --glass-border: rgba(244, 182, 214, 0.14);
+  --glass-border-strong: rgba(244, 182, 214, 0.25);
+  --glass-saturate: 132%;
+  --glass-shadow: 0 10px 32px rgba(0, 0, 0, 0.52);
+
+  --text-primary: #f2eef8;
+  --text-secondary: #b4acc8;
+  --text-muted: rgba(216, 206, 236, 0.68);
+
+  --accent: #f472b6;
+  --accent-bright: #f9a8d4;
+  --accent-soft: rgba(244, 114, 182, 0.18);
+  --accent-border: rgba(244, 114, 182, 0.54);
+
+  --status-dot-bg: var(--accent-bright);
+  --status-dot-shadow: 0 0 10px rgba(244, 114, 182, 0.9), 0 0 4px rgba(56, 189, 248, 0.55);
+  --badge-muted-bg: var(--accent-warm-soft);
+  --badge-muted-border: var(--accent-warm-border);
+  --badge-muted-color: var(--accent-warm);
+  --sim-switch-hover-bg: rgba(244, 114, 182, 0.1);
+  --pill-hover-bg: rgba(24, 16, 36, 0.78);
+  --pill-open-bg: rgba(54, 18, 42, 0.78);
+  --slider-thumb-glow: 0 0 8px rgba(244, 114, 182, 0.55);
+  --keycap-active-border: var(--accent-warm-border);
+  --keycap-active-color: var(--accent-warm);
+
+  --scrollbar-thumb: rgba(244, 182, 214, 0.28);
+  --section-divider: rgba(244, 182, 214, 0.1);
+  --telemetry-divider: rgba(244, 182, 214, 0.12);
+
+  --hud-top-left-max-w: min(640px, calc(100dvw - 460px));
+  --hud-top-left-max-w-1520: min(620px, calc(100dvw - 460px));
+  --hud-top-left-max-w-1380: min(500px, calc(100dvw - 450px));
+  --hud-hint-bottom: calc(var(--hud-pad) + 58px);
+}

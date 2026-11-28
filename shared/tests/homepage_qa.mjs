@@ -156,7 +156,7 @@ async function main() {
     await cdp.send('Page.navigate', { url: homeUrl });
 
     await waitForCondition(
-      `document.readyState === 'complete' && document.querySelectorAll('#catalog-grid .sim-card').length === 7 && document.getElementById('stage-bg-img')?.complete && document.getElementById('stage-bg-img')?.naturalWidth > 0`
+      `document.readyState === 'complete' && document.querySelectorAll('#catalog-grid .sim-card').length === 8 && document.getElementById('stage-bg-img')?.complete && document.getElementById('stage-bg-img')?.naturalWidth > 0`
     );
     await sleep(300);
 
@@ -363,7 +363,7 @@ async function main() {
     const returnedHomeCheck = await waitForCondition(`(() => {
       const gpuBtn = document.querySelector('#backend-radiogroup button[data-backend="webgpu"]');
       const cards = document.querySelectorAll('#catalog-grid .sim-card');
-      if (window.location.pathname === '/' && cards.length === 7 && gpuBtn) {
+      if (window.location.pathname === '/' && cards.length === 8 && gpuBtn) {
         return {
           pathname: window.location.pathname,
           search: window.location.search,
@@ -397,7 +397,7 @@ async function main() {
     await cdp.send('Page.navigate', { url: `http://127.0.0.1:${port}/?hub` });
     const hubCheck = await waitForCondition(`(() => {
       const cards = document.querySelectorAll('#catalog-grid .sim-card');
-      if (window.location.pathname === '/' && window.location.search.includes('hub') && cards.length === 7) {
+      if (window.location.pathname === '/' && window.location.search.includes('hub') && cards.length === 8) {
         return {
           pathname: window.location.pathname,
           search: window.location.search,
@@ -421,7 +421,7 @@ async function main() {
     });
     await cdp.send('Page.navigate', { url: `http://127.0.0.1:${port}/` });
     await waitForCondition(
-      `document.readyState === 'complete' && document.querySelectorAll('#catalog-grid .sim-card').length === 7 && document.getElementById('stage-bg-img')?.complete && document.getElementById('stage-bg-img')?.naturalWidth > 0`
+      `document.readyState === 'complete' && document.querySelectorAll('#catalog-grid .sim-card').length === 8 && document.getElementById('stage-bg-img')?.complete && document.getElementById('stage-bg-img')?.naturalWidth > 0`
     );
     await sleep(300);
 
@@ -506,7 +506,7 @@ async function main() {
     check(exceptions.length === 0, 'Zero uncaught runtime exceptions', exceptions.join(' | '));
     check(failedRequests.length === 0, 'Zero failed HTTP/network requests', failedRequests.join(' | '));
 
-    check(loadStats.cardCount === 7, 'All 7 simulator filmstrip cards rendered', loadStats.cardIds.join(', '));
+    check(loadStats.cardCount === 8, 'All 8 simulator filmstrip cards rendered', loadStats.cardIds.join(', '));
     check(
       loadStats.allImgsLoaded === true,
       'All homepage preview <img> elements decoded cleanly (complete && naturalWidth > 0)',
@@ -550,11 +550,12 @@ async function main() {
     );
 
     check(
-      filterGR.count === 2 &&
+      filterGR.count === 3 &&
         filterGR.ids.includes('blackhole') &&
         filterGR.ids.includes('binary') &&
-        filterAll.count === 7,
-      'Category filter pills filter General Relativity to 2 sims (blackhole, binary) and restore all 7',
+        filterGR.ids.includes('lens-cluster') &&
+        filterAll.count === 8,
+      'Category filter pills filter General Relativity to 3 sims (blackhole, binary, lens-cluster) and restore all 8',
       `GR=[${filterGR.ids.join(', ')}], All=${filterAll.count}`
     );
 
@@ -584,7 +585,7 @@ async function main() {
         simLaunchDiag?.allShadersCompiled === true &&
         simLaunchDiag?.homeHref === '../../?backend=webgpu' &&
         simLaunchDiag?.homeHasSimHrefAttr === false &&
-        simLaunchDiag?.simSwitchCount === 7,
+        simLaunchDiag?.simSwitchCount === 8,
       'Launching simulator from homepage boots in WebGPU with #sim-switch-home synced cleanly',
       JSON.stringify(simLaunchDiag)
     );
@@ -608,7 +609,7 @@ async function main() {
     );
 
     check(
-      hubCheck?.pathname === '/' && hubCheck?.cardCount === 7 && hubCheck?.canvasCount === 0,
+      hubCheck?.pathname === '/' && hubCheck?.cardCount === 8 && hubCheck?.canvasCount === 0,
       'Backwards-compatible /?hub renders the Observatory Homepage cleanly',
       JSON.stringify(hubCheck)
     );

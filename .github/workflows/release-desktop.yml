@@ -9,6 +9,7 @@ on:
       - desktop/**
       - home/previews/**
       - shared/assets/milkyway_4k.jpg
+      - shared/assets/app-icon*
       - shared/sims.json
       - shared/shaders/*.wgsl
       - "sims/*/src/shaders/*.wgsl"

@@ -33,7 +33,7 @@ impl CategoryFilter {
 
     pub fn label(self) -> &'static str {
         match self {
-            CategoryFilter::All => "All 7",
+            CategoryFilter::All => "All 8",
             CategoryFilter::GeneralRelativity => "General Relativity",
             CategoryFilter::ExoticMetrics => "Exotic Metrics",
             CategoryFilter::Astrophysics => "Astrophysics",
@@ -102,7 +102,7 @@ const fn entry_from_registry(r: &SimRegistryEntry) -> CatalogEntry {
     }
 }
 
-pub const CATALOG: [CatalogEntry; 7] = [
+pub const CATALOG: [CatalogEntry; 8] = [
     entry_from_registry(&SIM_REGISTRY[0]),
     entry_from_registry(&SIM_REGISTRY[1]),
     entry_from_registry(&SIM_REGISTRY[2]),
@@ -110,6 +110,7 @@ pub const CATALOG: [CatalogEntry; 7] = [
     entry_from_registry(&SIM_REGISTRY[4]),
     entry_from_registry(&SIM_REGISTRY[5]),
     entry_from_registry(&SIM_REGISTRY[6]),
+    entry_from_registry(&SIM_REGISTRY[7]),
 ];
 
 pub fn catalog_entry(id: SimId) -> &'static CatalogEntry {
@@ -498,7 +499,7 @@ fn draw_floating_topbar(
                             ui.painter()
                                 .rect_filled(sep, CornerRadius::ZERO, hairline());
                             ui.label(tracked_job(
-                                "v0.1.4.0 · 7 ENGINES",
+                                "v0.1.4.1 · 8 ENGINES",
                                 FontId::new(10.5, egui::FontFamily::Monospace),
                                 TEXT_SECONDARY,
                                 0.5,
@@ -652,7 +653,7 @@ fn draw_mission_brief(
                 ui.painter().circle_filled(dc, 3.2, entry.accent_bright);
 
                 let eyebrow = format!(
-                    "{} / 07 · {}",
+                    "{} / 08 · {}",
                     entry.index,
                     entry.category_label.to_uppercase()
                 );
@@ -797,7 +798,7 @@ fn draw_mission_brief(
                 }
 
                 // Zero idle GPU readout pill
-                let status_txt = "0% Idle GPU · 42 Presets";
+                let status_txt = "0% Idle GPU · 48 Presets";
                 let sg = ui.painter().layout_job(tracked_job(
                     status_txt,
                     FontId::new(10.5, egui::FontFamily::Monospace),

@@ -1,14 +1,16 @@
-use egui::text::{LayoutJob, TextFormat};
+use egui::epaint::{CornerRadius, StrokeKind};
+use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{
-    Align, Align2, Area, Color32, Context, CursorIcon, FontId, Id, Order, Pos2, Sense, Shape,
-    Stroke, TextureId, Vec2,
+    Align, Align2, Area, Color32, Context, CursorIcon, FontId, Id, Order, Pos2, Rect, ScrollArea,
+    Sense, Shape, Stroke, TextureId, Vec2,
 };
 
+use crate::sims::registry::{SIM_REGISTRY, SimCategory, registry_entry};
 use crate::sims::{HudMetadata, SimId, SimTheme};
 use crate::ui::theme::{
-    HUD_PAD, build_glass_shapes, draw_badge, draw_eye_icon, draw_home_icon, draw_pill_button,
-    draw_sliders_icon, draw_standalone_glass_pill, paint_glass_panel, semibold_family, tracked_job,
-    with_alpha,
+    HUD_PAD, apply_dark_widget_visuals, build_glass_shapes, draw_badge, draw_chevron_down_icon,
+    draw_eye_icon, draw_home_icon, draw_sliders_icon, draw_standalone_glass_pill,
+    paint_glass_panel, semibold_family, tracked_job, with_alpha,
 };
 use crate::ui::{HudAction, HudState};
 
@@ -248,12 +250,14 @@ pub(crate) fn draw_top_left_card(
 pub(crate) fn draw_top_right_bar(
     ctx: &Context,
     active_id: SimId,
-    hud: &HudState,
+    hud: &mut HudState,
     theme: &SimTheme,
     screen_size: Vec2,
     glass_tex_id: Option<TextureId>,
     actions: &mut Vec<HudAction>,
 ) {
+    let mut trigger_rect: Option<Rect> = None;
+
     Area::new(Id::unique("hud_top_right"))
         .anchor(Align2::RIGHT_TOP, Vec2::new(-HUD_PAD, HUD_PAD))
         .order(Order::Foreground)
@@ -295,49 +299,80 @@ pub(crate) fn draw_top_right_bar(
                     actions.push(HudAction::GoHome);
                 }
 
-                // 7-Sim Switcher Glass Pill (exact 36px height: 3px top + 30px pills + 3px bottom)
-                let sw_bg = ui.painter().add(Shape::Noop);
-                let sw = egui::Frame::NONE
-                    .inner_margin(egui::Margin {
-                        left: 4,
-                        right: 4,
-                        top: 3,
-                        bottom: 3,
-                    })
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing = Vec2::new(1.5, 0.0);
-                        ui.horizontal_centered(|ui| {
-                            ui.spacing_mut().item_spacing = Vec2::new(1.5, 0.0);
-                            for id in SimId::ALL {
-                                let is_curr = id == active_id;
-                                let resp = draw_pill_button(
-                                    ui,
-                                    id.switch_label(),
-                                    is_curr,
-                                    is_curr,
-                                    theme,
-                                    30.0,
-                                    5.5,
-                                    None,
-                                    None,
-                                );
-                                if resp.clicked() && !is_curr {
-                                    actions.push(HudAction::SwitchSim(id));
-                                }
-                            }
-                        });
-                    });
-                ui.painter().set(
-                    sw_bg,
-                    build_glass_shapes(
-                        sw.response.rect,
-                        18.0,
-                        screen_size,
-                        glass_tex_id,
+                // Compact Simulation Selector Pill (fixed width regardless of catalog size)
+                let active_entry = registry_entry(active_id);
+                let font = FontId::new(12.0, semibold_family());
+                let label_galley = ui.painter().layout_job(tracked_job(
+                    active_entry.switch_label,
+                    font,
+                    Color32::PLACEHOLDER,
+                    0.25,
+                ));
+                let pill_w = 12.0 + 13.0 + label_galley.size().x + 20.0 + 10.0;
+                let (rect, resp) = ui.allocate_exact_size(Vec2::new(pill_w, 36.0), Sense::click());
+                if resp.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                }
+                let (fill, border, fg, chev_col) = if hud.switcher_open {
+                    (
+                        with_alpha(theme.accent_soft, 210),
+                        theme.accent_border,
+                        theme.accent_bright,
+                        theme.accent_bright,
+                    )
+                } else if resp.hovered() {
+                    (
+                        Color32::from_rgba_unmultiplied(20, 24, 34, 200),
+                        theme.glass_border_strong,
+                        theme.text_primary,
+                        theme.text_primary,
+                    )
+                } else {
+                    (
                         theme.glass_bg,
                         theme.glass_border,
-                    ),
+                        theme.text_primary,
+                        theme.text_secondary,
+                    )
+                };
+                paint_glass_panel(
+                    ui.painter(),
+                    rect,
+                    18.0,
+                    screen_size,
+                    glass_tex_id,
+                    fill,
+                    border,
                 );
+
+                let cy = rect.center().y;
+                let dot_center = Pos2::new(rect.left() + 15.0, cy);
+                let dot_col = if let Some((warm, _, _)) = theme.warm {
+                    warm
+                } else {
+                    theme.accent
+                };
+                ui.painter()
+                    .circle_filled(dot_center, 5.2, with_alpha(dot_col, 64));
+                ui.painter().circle_filled(dot_center, 3.0, dot_col);
+
+                let text_x = rect.left() + 25.0;
+                let lw = label_galley.size().x;
+                ui.painter().galley_with_override_text_color(
+                    Pos2::new(text_x, cy - label_galley.size().y * 0.5),
+                    label_galley,
+                    fg,
+                );
+                draw_chevron_down_icon(
+                    ui.painter(),
+                    Pos2::new(text_x + lw + 10.0, cy),
+                    chev_col,
+                    hud.switcher_open,
+                );
+                if resp.clicked() {
+                    actions.push(HudAction::ToggleSwitcher);
+                }
+                trigger_rect = Some(rect);
 
                 // Controls Pill (36px height)
                 if draw_standalone_glass_pill(
@@ -372,4 +407,383 @@ pub(crate) fn draw_top_right_bar(
                 }
             });
         });
+
+    if hud.switcher_open
+        && let Some(t_rect) = trigger_rect
+    {
+        draw_sim_switcher_popover(
+            ctx,
+            active_id,
+            t_rect,
+            hud,
+            theme,
+            screen_size,
+            glass_tex_id,
+            actions,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_sim_switcher_popover(
+    ctx: &Context,
+    active_id: SimId,
+    trigger_rect: Rect,
+    hud: &mut HudState,
+    theme: &SimTheme,
+    screen_size: Vec2,
+    glass_tex_id: Option<TextureId>,
+    actions: &mut Vec<HudAction>,
+) {
+    let pop_w = 340.0_f32.min((screen_size.x - HUD_PAD * 2.0).max(220.0));
+    let pop_x = (trigger_rect.right() - pop_w)
+        .clamp(HUD_PAD, (screen_size.x - HUD_PAD - pop_w).max(HUD_PAD));
+    let pop_y = trigger_rect.bottom() + 8.0;
+    let max_list_h = (screen_size.y - pop_y - HUD_PAD - 96.0).clamp(160.0, 440.0);
+
+    let area_resp = Area::new(Id::unique("hud_sim_switcher_popover"))
+        .fixed_pos(Pos2::new(pop_x, pop_y))
+        .order(Order::Foreground)
+        .fade_in(false)
+        .show(ctx, |ui| {
+            apply_dark_widget_visuals(ui, theme);
+            let bg_slot = ui.painter().add(Shape::Noop);
+            let inner = ui.scope(|ui| {
+                ui.set_min_width(pop_w);
+                ui.set_max_width(pop_w);
+                ui.spacing_mut().item_spacing = Vec2::ZERO;
+
+                // Header + Filter Input
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(12.0);
+                    ui.vertical(|ui| {
+                        let inner_w = pop_w - 24.0;
+                        ui.set_min_width(inner_w);
+                        ui.set_max_width(inner_w);
+                        ui.spacing_mut().item_spacing = Vec2::new(0.0, 7.0);
+
+                        ui.horizontal(|ui| {
+                            ui.set_width(inner_w);
+                            ui.label(tracked_job(
+                                "SIMULATIONS",
+                                FontId::new(10.5, semibold_family()),
+                                theme.text_primary,
+                                1.2,
+                            ));
+                            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(tracked_job(
+                                    &format!("{} engines", SIM_REGISTRY.len()),
+                                    FontId::proportional(10.5),
+                                    theme.text_muted,
+                                    0.1,
+                                ));
+                            });
+                        });
+
+                        let edit_resp = ui.add(
+                            egui::TextEdit::singleline(&mut hud.switcher_query)
+                                .hint_text("Filter simulations…")
+                                .desired_width(inner_w)
+                                .margin(egui::Margin::symmetric(10, 6)),
+                        );
+                        if hud.switcher_focus_search {
+                            edit_resp.request_focus();
+                            hud.switcher_focus_search = false;
+                        }
+                    });
+                    ui.add_space(12.0);
+                });
+                ui.add_space(10.0);
+
+                // Divider
+                let (div_rect, _) = ui.allocate_exact_size(Vec2::new(pop_w, 1.0), Sense::hover());
+                ui.painter().line_segment(
+                    [div_rect.left_center(), div_rect.right_center()],
+                    Stroke::new(1.0, theme.glass_border),
+                );
+
+                // Categorized Scrollable List
+                let query = hud.switcher_query.trim().to_ascii_lowercase();
+                let mut first_match: Option<SimId> = None;
+                let mut any_visible = false;
+                let mut close_after_click = false;
+
+                ScrollArea::vertical()
+                    .id_salt("sim_switcher_scroll")
+                    .max_height(max_list_h)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.add_space(6.0);
+                        let row_w = (pop_w - 16.0).max(160.0);
+                        let mut first_group = true;
+
+                        for cat in SimCategory::ALL {
+                            let matches: Vec<_> = SIM_REGISTRY
+                                .iter()
+                                .filter(|entry| {
+                                    if entry.category != cat {
+                                        return false;
+                                    }
+                                    if query.is_empty() {
+                                        return true;
+                                    }
+                                    entry.switch_label.to_ascii_lowercase().contains(&query)
+                                        || entry.title.to_ascii_lowercase().contains(&query)
+                                        || entry.tagline.to_ascii_lowercase().contains(&query)
+                                        || entry
+                                            .category_label
+                                            .to_ascii_lowercase()
+                                            .contains(&query)
+                                        || entry.aliases.iter().any(|a| a.contains(&query))
+                                })
+                                .collect();
+
+                            if matches.is_empty() {
+                                continue;
+                            }
+                            any_visible = true;
+
+                            ui.horizontal(|ui| {
+                                ui.add_space(8.0);
+                                ui.vertical(|ui| {
+                                    ui.set_min_width(row_w);
+                                    ui.set_max_width(row_w);
+                                    ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+
+                                    if !first_group {
+                                        ui.add_space(4.0);
+                                        let (gdiv, _) = ui.allocate_exact_size(
+                                            Vec2::new(row_w, 1.0),
+                                            Sense::hover(),
+                                        );
+                                        ui.painter().line_segment(
+                                            [gdiv.left_center(), gdiv.right_center()],
+                                            Stroke::new(
+                                                1.0,
+                                                Color32::from_rgba_unmultiplied(255, 255, 255, 20),
+                                            ),
+                                        );
+                                        ui.add_space(5.0);
+                                    }
+                                    first_group = false;
+
+                                    let cat_job = tracked_job(
+                                        &cat.label().to_ascii_uppercase(),
+                                        FontId::new(9.8, semibold_family()),
+                                        theme.text_muted,
+                                        0.9,
+                                    );
+                                    let (cat_rect, _) = ui.allocate_exact_size(
+                                        Vec2::new(row_w, 18.0),
+                                        Sense::hover(),
+                                    );
+                                    let cat_g = ui.painter().layout_job(cat_job);
+                                    ui.painter().galley(
+                                        Pos2::new(
+                                            cat_rect.left() + 8.0,
+                                            cat_rect.center().y - cat_g.size().y * 0.5,
+                                        ),
+                                        cat_g,
+                                        theme.text_muted,
+                                    );
+
+                                    for entry in matches {
+                                        first_match.get_or_insert(entry.id);
+                                        let is_curr = entry.id == active_id;
+                                        let (row_rect, row_resp) = ui.allocate_exact_size(
+                                            Vec2::new(row_w, 44.0),
+                                            Sense::click(),
+                                        );
+                                        if row_resp.hovered() {
+                                            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                                        }
+
+                                        let (bg, border) = if is_curr {
+                                            (theme.accent_soft, theme.accent_border)
+                                        } else if row_resp.hovered() {
+                                            (
+                                                Color32::from_rgba_unmultiplied(255, 255, 255, 20),
+                                                Color32::TRANSPARENT,
+                                            )
+                                        } else {
+                                            (Color32::TRANSPARENT, Color32::TRANSPARENT)
+                                        };
+                                        ui.painter().rect(
+                                            row_rect,
+                                            CornerRadius::same(8),
+                                            bg,
+                                            Stroke::new(1.0, border),
+                                            StrokeKind::Inside,
+                                        );
+
+                                        let entry_accent = Color32::from_rgb(
+                                            entry.accent_rgb[0],
+                                            entry.accent_rgb[1],
+                                            entry.accent_rgb[2],
+                                        );
+                                        let dot_pos = Pos2::new(
+                                            row_rect.left() + 13.0,
+                                            row_rect.top() + 15.0,
+                                        );
+                                        if is_curr {
+                                            ui.painter().circle_filled(
+                                                dot_pos,
+                                                5.5,
+                                                with_alpha(theme.accent, 68),
+                                            );
+                                            ui.painter().circle_filled(dot_pos, 3.3, theme.accent);
+                                        } else {
+                                            ui.painter().circle_filled(dot_pos, 3.3, entry_accent);
+                                        }
+
+                                        let text_left = row_rect.left() + 25.0;
+                                        let title_col = if is_curr {
+                                            theme.accent_bright
+                                        } else {
+                                            theme.text_primary
+                                        };
+                                        let title_g = ui.painter().layout_job(tracked_job(
+                                            entry.switch_label,
+                                            FontId::new(12.0, semibold_family()),
+                                            title_col,
+                                            0.15,
+                                        ));
+                                        ui.painter().galley(
+                                            Pos2::new(text_left, row_rect.top() + 7.0),
+                                            title_g,
+                                            title_col,
+                                        );
+
+                                        if is_curr {
+                                            let tag_g = ui.painter().layout_job(tracked_job(
+                                                "ACTIVE",
+                                                FontId::new(9.0, semibold_family()),
+                                                theme.accent_bright,
+                                                0.55,
+                                            ));
+                                            let tw = tag_g.size().x + 12.0;
+                                            let tag_rect = Rect::from_min_size(
+                                                Pos2::new(
+                                                    row_rect.right() - tw - 8.0,
+                                                    row_rect.top() + 6.5,
+                                                ),
+                                                Vec2::new(tw, 16.0),
+                                            );
+                                            ui.painter().rect(
+                                                tag_rect,
+                                                CornerRadius::same(8),
+                                                theme.accent_soft,
+                                                Stroke::new(1.0, theme.accent_border),
+                                                StrokeKind::Inside,
+                                            );
+                                            ui.painter().galley(
+                                                Pos2::new(
+                                                    tag_rect.left() + 6.0,
+                                                    tag_rect.center().y - tag_g.size().y * 0.5,
+                                                ),
+                                                tag_g,
+                                                theme.accent_bright,
+                                            );
+                                        }
+
+                                        let mut tag_job = LayoutJob {
+                                            wrap: TextWrapping {
+                                                max_width: (row_rect.right() - text_left - 10.0)
+                                                    .max(40.0),
+                                                max_rows: 1,
+                                                break_anywhere: true,
+                                                overflow_character: Some('…'),
+                                            },
+                                            ..Default::default()
+                                        };
+                                        tag_job.append(
+                                            entry.tagline,
+                                            0.0,
+                                            TextFormat {
+                                                font_id: FontId::proportional(10.8),
+                                                color: theme.text_muted,
+                                                ..Default::default()
+                                            },
+                                        );
+                                        let tagline_g = ui.painter().layout_job(tag_job);
+                                        ui.painter().galley(
+                                            Pos2::new(text_left, row_rect.top() + 24.0),
+                                            tagline_g,
+                                            theme.text_muted,
+                                        );
+
+                                        if row_resp.clicked() {
+                                            close_after_click = true;
+                                            if !is_curr {
+                                                actions.push(HudAction::SwitchSim(entry.id));
+                                            }
+                                        }
+                                    }
+                                });
+                                ui.add_space(8.0);
+                            });
+                        }
+
+                        if !any_visible {
+                            ui.add_space(12.0);
+                            ui.centered_and_justified(|ui| {
+                                ui.label(tracked_job(
+                                    "No matching simulations",
+                                    FontId::proportional(11.8),
+                                    theme.text_muted,
+                                    0.1,
+                                ));
+                            });
+                            ui.add_space(12.0);
+                        }
+
+                        ui.add_space(6.0);
+                    });
+
+                if close_after_click {
+                    hud.switcher_open = false;
+                    hud.switcher_query.clear();
+                    hud.switcher_focus_search = false;
+                } else if !query.is_empty()
+                    && ctx.input(|i| i.key_pressed(egui::Key::Enter))
+                    && let Some(target_id) = first_match
+                {
+                    hud.switcher_open = false;
+                    hud.switcher_query.clear();
+                    hud.switcher_focus_search = false;
+                    if target_id != active_id {
+                        actions.push(HudAction::SwitchSim(target_id));
+                    }
+                }
+            });
+
+            ui.painter().set(
+                bg_slot,
+                build_glass_shapes(
+                    inner.response.rect,
+                    12.0,
+                    screen_size,
+                    glass_tex_id,
+                    theme.glass_bg_elevated,
+                    theme.glass_border_strong,
+                ),
+            );
+        });
+
+    let pop_rect = area_resp.response.rect;
+    let esc_pressed = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    let clicked_outside = !hud.switcher_just_opened
+        && ctx.input(|i| {
+            i.pointer.any_pressed()
+                && i.pointer
+                    .interact_pos()
+                    .is_some_and(|p| !pop_rect.contains(p) && !trigger_rect.contains(p))
+        });
+    if esc_pressed || clicked_outside {
+        hud.switcher_open = false;
+        hud.switcher_query.clear();
+        hud.switcher_focus_search = false;
+    }
+    hud.switcher_just_opened = false;
 }

@@ -8,9 +8,11 @@ if [[ -f /usr/share/vulkan/icd.d/nvidia_icd.json && -z "${VK_ICD_FILENAMES:-}" ]
   export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/nvidia_icd.json"
 fi
 
-if [[ ! -x "${BIN}" ]]; then
-  echo "[interstellar-desktop] Building release binary..."
+if command -v cargo >/dev/null 2>&1; then
   cargo build --release --manifest-path "${SCRIPT_DIR}/Cargo.toml"
+elif [[ ! -x "${BIN}" ]]; then
+  echo "[interstellar-desktop] Error: release binary not found (${BIN}) and 'cargo' is not in PATH." >&2
+  exit 1
 fi
 
 exec "${BIN}" "$@"

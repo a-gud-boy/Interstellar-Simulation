@@ -13,6 +13,8 @@ pub const WARP_PREVIEW_WEBP: &[u8] = include_bytes!("../../../home/previews/warp
 pub const SUPERNOVA_PREVIEW_WEBP: &[u8] = include_bytes!("../../../home/previews/supernova.webp");
 pub const PULSAR_PREVIEW_WEBP: &[u8] = include_bytes!("../../../home/previews/pulsar.webp");
 pub const STARFLIGHT_PREVIEW_WEBP: &[u8] = include_bytes!("../../../home/previews/starflight.webp");
+pub const LENS_CLUSTER_PREVIEW_WEBP: &[u8] =
+    include_bytes!("../../../home/previews/lens-cluster.webp");
 
 pub fn preview_bytes(id: SimId) -> &'static [u8] {
     match id {
@@ -23,6 +25,7 @@ pub fn preview_bytes(id: SimId) -> &'static [u8] {
         SimId::Supernova => SUPERNOVA_PREVIEW_WEBP,
         SimId::Pulsar => PULSAR_PREVIEW_WEBP,
         SimId::Starflight => STARFLIGHT_PREVIEW_WEBP,
+        SimId::LensCluster => LENS_CLUSTER_PREVIEW_WEBP,
     }
 }
 

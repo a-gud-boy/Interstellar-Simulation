@@ -1,4 +1,4 @@
-pub const APP_VERSION: &str = "0.1.4.0 beta";
+pub const APP_VERSION: &str = "0.1.4.1 beta";
 
 pub mod assets;
 pub mod renderer;
@@ -30,6 +30,8 @@ pub mod shaders {
     pub const SUPERNOVA: &str = include_str!("../../sims/supernova/src/shaders/supernova.wgsl");
     pub const PULSAR: &str = include_str!("../../sims/pulsar/src/shaders/pulsar.wgsl");
     pub const STARFLIGHT: &str = include_str!("../../sims/starflight/src/shaders/starflight.wgsl");
+    pub const LENS_CLUSTER: &str =
+        include_str!("../../sims/lens-cluster/src/shaders/lens-cluster.wgsl");
 
     pub fn all_named() -> &'static [(&'static str, &'static str)] {
         &[
@@ -53,6 +55,7 @@ pub mod shaders {
             ("supernova", SUPERNOVA),
             ("pulsar", PULSAR),
             ("starflight", STARFLIGHT),
+            ("lens_cluster", LENS_CLUSTER),
         ]
     }
 }

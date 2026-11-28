@@ -140,6 +140,13 @@ fi
 
 chmod +x "${OUT_BIN}"
 
+ICON_SRC="${SCRIPT_DIR}/assets/AppIcon.icns"
+if [[ ! -f "${ICON_SRC}" ]]; then
+  echo "[interstellar-desktop] Error: missing macOS app icon '${ICON_SRC}'." >&2
+  exit 1
+fi
+cp "${ICON_SRC}" "${RESOURCES_DIR}/AppIcon.icns"
+
 cat > "${CONTENTS_DIR}/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -157,6 +164,8 @@ cat > "${CONTENTS_DIR}/Info.plist" <<EOF
   <string>${SHORT_VERSION}</string>
   <key>CFBundleExecutable</key>
   <string>${BIN_NAME}</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>LSMinimumSystemVersion</key>

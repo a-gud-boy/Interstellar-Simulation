@@ -1,0 +1,961 @@
+struct VSOut {
+  @builtin(position) pos: vec4f,
+  @location(0) uv: vec2f,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
+  let x = f32((vid & 1u) << 2u) - 1.0;
+  let y = f32((vid & 2u) << 1u) - 1.0;
+  var out: VSOut;
+  out.pos = vec4f(x, y, 0.0, 1.0);
+  out.uv = vec2f(x * 0.5 + 0.5, 0.5 - y * 0.5);
+  return out;
+}
+
+struct LensClusterUniforms {
+  resolution_time_frame : vec4<f32>,  // (width, height, simTime, float(frameIndex))
+  jitter_fov_prog       : vec4<f32>,  // (jitterX, jitterY, fovY, isProgressive)
+  camPos_unused         : vec4<f32>,  // (pos.x, pos.y, pos.z, 0.0)
+  camRight_model        : vec4<f32>,  // (right.x, right.y, right.z, float(lensModel))
+  camUp_thetaE          : vec4<f32>,  // (up.x, up.y, up.z, einsteinRadius)
+  camFwd_ellip          : vec4<f32>,  // (forward.x, forward.y, forward.z, ellipticity)
+  lensShapeParams       : vec4<f32>,  // (extShear, lensAngleRad, shearAngleRad, subhaloStrength)
+  sourceParams          : vec4<f32>,  // (sourceX, sourceY, sourceScale, quasarCore)
+  overlayParams         : vec4<f32>,  // (showCaustics, showFermat, dragMode, extraFieldGalaxies)
+  clusterOpticsParams   : vec4<f32>,  // (clusterLight, icmGlow, skyIntensity, float(skyMode))
+  skyQualityParams      : vec4<f32>,  // (skyRotX, skyRotY, float(quality), 0.0)
+};
+
+@group(0) @binding(0) var<uniform> u: LensClusterUniforms;
+@group(0) @binding(1) var uVolumeNoise: texture_3d<f32>;
+@group(0) @binding(2) var sVolume: sampler;
+@group(0) @binding(3) var uSkyMap: texture_2d<f32>;
+@group(0) @binding(4) var uProcSkyMap: texture_2d<f32>;
+@group(0) @binding(5) var sSky: sampler;
+@group(0) @binding(6) var uBlackbodyLut: texture_2d<f32>;
+@group(0) @binding(7) var sLut: sampler;
+@group(0) @binding(8) var uBlueNoise: texture_2d<f32>;
+
+const PI             : f32 = 3.14159265359;
+const TAU            : f32 = 6.28318530718;
+const INV_PI         : f32 = 0.31830988618;
+const INV_TAU        : f32 = 0.15915494309;
+const T_MIN          : f32 = 800.0;
+const T_MAX          : f32 = 40000.0;
+const INV_LOG_T_SPAN : f32 = 1.0 / 3.91202300543;
+const POINT_SOFT     : f32 = 0.015;
+const SIE_CORE       : f32 = 0.035;
+const NFW_CORE       : f32 = 0.04;
+const NFW_RS_RATIO   : f32 = 2.6;
+
+fn isBadFloat(x: f32) -> bool {
+  return (bitcast<u32>(x) & 0x7f800000u) == 0x7f800000u;
+}
+
+fn sanitizeHdr(v: vec3f) -> vec3f {
+  let clean = vec3f(
+    select(v.x, 0.0, isBadFloat(v.x)),
+    select(v.y, 0.0, isBadFloat(v.y)),
+    select(v.z, 0.0, isBadFloat(v.z))
+  );
+  return clamp(clean, vec3f(0.0), vec3f(32.0));
+}
+
+fn sampleBlackbody(tempK: f32) -> vec3f {
+  let t = clamp(tempK, T_MIN, T_MAX);
+  let uCoord = clamp(log(t / T_MIN) * INV_LOG_T_SPAN, 0.0, 1.0);
+  return textureSampleLevel(uBlackbodyLut, sLut, vec2f(uCoord, 0.5), 0.0).rgb;
+}
+
+fn hash21(p: vec2f) -> f32 {
+  var q = fract(p * vec2f(123.34, 456.21));
+  q = q + vec2f(dot(q, q + vec2f(45.32)));
+  return fract(q.x * q.y);
+}
+
+fn hash22(p: vec2f) -> vec2f {
+  let a = vec2f(dot(p, vec2f(127.1, 311.7)), dot(p, vec2f(269.5, 183.3)));
+  return fract(sin(a) * 43758.5453);
+}
+
+fn rotateSkyDir(d: vec3f, skyRot: vec2f) -> vec3f {
+  let cy = cos(skyRot.x);
+  let sy = sin(skyRot.x);
+  let r1 = vec3f(cy * d.x + sy * d.z, d.y, -sy * d.x + cy * d.z);
+  let cp = cos(skyRot.y);
+  let sp = sin(skyRot.y);
+  return vec3f(r1.x, cp * r1.y - sp * r1.z, sp * r1.y + cp * r1.z);
+}
+
+fn getSubhaloData(idx: i32) -> vec4f {
+  // xy: cluster offset (normalized to thetaE=2.85), z: bFrac, w: z-depth
+  switch (idx) {
+    case 0: { return vec4f(-1.25,  0.72, 0.24,  0.45); }
+    case 1: { return vec4f( 1.48, -0.58, 0.22, -0.55); }
+    case 2: { return vec4f( 0.55,  1.42, 0.18,  0.65); }
+    case 3: { return vec4f(-1.62, -1.05, 0.20, -0.40); }
+    case 4: { return vec4f( 2.15,  1.10, 0.16, -0.75); }
+    default: { return vec4f(-0.42, -1.85, 0.17,  0.60); }
+  }
+}
+
+fn getSubhaloShape(idx: i32) -> vec4f {
+  // x: coreFrac, y: ellip, z: angleRad, w: tempK
+  switch (idx) {
+    case 0: { return vec4f(0.14, 0.22,  0.42, 4100.0); }
+    case 1: { return vec4f(0.14, 0.28, -0.65, 3850.0); }
+    case 2: { return vec4f(0.12, 0.18,  1.10, 4350.0); }
+    case 3: { return vec4f(0.13, 0.30, -0.25, 3700.0); }
+    case 4: { return vec4f(0.12, 0.24,  0.80, 4500.0); }
+    default: { return vec4f(0.13, 0.20, -1.05, 3950.0); }
+  }
+}
+
+struct NfwVals {
+  g: f32,
+  F: f32,
+  hPsi: f32,
+};
+
+fn evalNfwFunctions(rawX: f32) -> NfwVals {
+  let x = max(rawX, 1e-4);
+  let lnHalfX = log(0.5 * x);
+  let d = x - 1.0;
+
+  var C : f32;
+  var F : f32;
+  if (abs(d) < 0.02) {
+    C = 1.0 + d * (-2.0 / 3.0 + d * (7.0 / 15.0 + d * (-12.0 / 35.0 + d * (83.0 / 315.0))));
+    F = (2.0 / 3.0 + d * (-7.0 / 15.0 + d * (12.0 / 35.0 - d * (83.0 / 315.0)))) / (2.0 + d);
+  } else if (x < 1.0) {
+    let oneMinusX2 = 1.0 - x * x;
+    let sq = sqrt(oneMinusX2);
+    let invX = 1.0 / x;
+    C = log(invX + sqrt(max(invX * invX - 1.0, 0.0))) / sq;
+    F = (C - 1.0) / oneMinusX2;
+  } else {
+    let x2Minus1 = x * x - 1.0;
+    let sq = sqrt(x2Minus1);
+    C = acos(1.0 / x) / sq;
+    F = (1.0 - C) / x2Minus1;
+  }
+
+  let g = lnHalfX + C;
+  let hPsi = lnHalfX * lnHalfX + (x * x - 1.0) * C * C;
+  return NfwVals(g, F, hPsi);
+}
+
+struct LensAcc {
+  psi: f32,
+  alpha: vec2f,
+  psiXX: f32,
+  psiYY: f32,
+  psiXY: f32,
+};
+
+fn addSoftenedSie(acc: ptr<function, LensAcc>, tx: f32, ty: f32, b: f32, q: f32, s: f32, angleRad: f32) {
+  let c = cos(angleRad);
+  let si = sin(angleRad);
+  let xp = c * tx + si * ty;
+  let yp = -si * tx + c * ty;
+
+  let qClamped = clamp(q, 0.25, 1.0);
+  let q2 = qClamped * qClamped;
+  let qp2 = 1.0 - q2;
+  let psiK = sqrt(q2 * (s * s + xp * xp) + yp * yp + 1e-8);
+
+  var axp : f32;
+  var ayp : f32;
+  var dPsi : f32;
+  var pxxp : f32;
+  var pyyp : f32;
+  var pxyp : f32;
+
+  if (qp2 < 1e-5) {
+    let denom = max(psiK + s, 1e-6);
+    let invD = 1.0 / denom;
+    let invPsi = 1.0 / max(psiK, 1e-6);
+    axp = b * xp * invD;
+    ayp = b * yp * invD;
+    dPsi = b * (psiK - s - s * log(0.5 * denom / max(s, 1e-5)));
+    pxxp = b * invD * (1.0 - xp * xp * invPsi * invD);
+    pyyp = b * invD * (1.0 - yp * yp * invPsi * invD);
+    pxyp = -b * xp * yp * invPsi * invD * invD;
+  } else {
+    let qp = sqrt(qp2);
+    let ps = max(psiK + s, 1e-6);
+    let pqs = max(psiK + q2 * s, 1e-6);
+    let bSqrtQ = b * sqrt(qClamped);
+    axp = (bSqrtQ / qp) * atan((qp * xp) / ps);
+    let arg = clamp((qp * yp) / pqs, -0.99995, 0.99995);
+    ayp = (bSqrtQ / qp) * 0.5 * log((1.0 + arg) / (1.0 - arg));
+
+    let dK = max(xp * xp + yp * yp + (1.0 + q2) * s * s + 2.0 * s * psiK, 1e-7);
+    let invPsiDk = 1.0 / max(psiK * dK, 1e-8);
+    let refDk = max((1.0 + q2) * s * s + 2.0 * s * qClamped * s, 1e-8);
+    dPsi = xp * axp + yp * ayp - 0.5 * bSqrtQ * s * log(max(dK / refDk, 1e-8));
+
+    pxxp = bSqrtQ * (q2 * s * s + yp * yp + s * psiK) * invPsiDk;
+    pyyp = bSqrtQ * (xp * xp + s * s + s * psiK) * invPsiDk;
+    pxyp = -bSqrtQ * xp * yp * invPsiDk;
+  }
+
+  (*acc).psi += dPsi;
+  (*acc).alpha.x += c * axp - si * ayp;
+  (*acc).alpha.y += si * axp + c * ayp;
+
+  let c2 = c * c;
+  let s2 = si * si;
+  let cs = c * si;
+  (*acc).psiXX += c2 * pxxp - 2.0 * cs * pxyp + s2 * pyyp;
+  (*acc).psiYY += s2 * pxxp + 2.0 * cs * pxyp + c2 * pyyp;
+  (*acc).psiXY += cs * (pxxp - pyyp) + (c2 - s2) * pxyp;
+}
+
+struct LensField {
+  psi: f32,
+  alpha: vec2f,
+  kappa: f32,
+  gamma: f32,
+  detA: f32,
+  lambdaT: f32,
+  lambdaR: f32,
+};
+
+fn evalLensField(
+  tx: f32,
+  ty: f32,
+  cRight: vec3f,
+  cUp: vec3f,
+  lensModel: i32,
+  thetaE: f32,
+  ellip: f32,
+  extShear: f32,
+  lensAngleRad: f32,
+  shearAngleRad: f32,
+  subhaloStrength: f32
+) -> LensField {
+  var acc: LensAcc;
+  acc.psi = 0.0;
+  acc.alpha = vec2f(0.0);
+  acc.psiXX = 0.0;
+  acc.psiYY = 0.0;
+  acc.psiXY = 0.0;
+
+  if (lensModel == 0) {
+    let eps = POINT_SOFT * thetaE;
+    let r2 = tx * tx + ty * ty + eps * eps;
+    let te2 = thetaE * thetaE;
+    let invR2 = 1.0 / r2;
+    let invR4 = invR2 * invR2;
+
+    acc.psi += 0.5 * te2 * log(r2 / max(eps * eps, 1e-8));
+    acc.alpha += te2 * vec2f(tx, ty) * invR2;
+    acc.psiXX += te2 * (r2 - 2.0 * tx * tx) * invR4;
+    acc.psiYY += te2 * (r2 - 2.0 * ty * ty) * invR4;
+    acc.psiXY += -2.0 * te2 * tx * ty * invR4;
+  } else if (lensModel == 1) {
+    let q = clamp(1.0 - ellip, 0.25, 1.0);
+    let s = SIE_CORE * thetaE;
+    addSoftenedSie(&acc, tx, ty, thetaE, q, s, lensAngleRad);
+  } else {
+    let c = cos(lensAngleRad);
+    let si = sin(lensAngleRad);
+    let xp = c * tx + si * ty;
+    let yp = -si * tx + c * ty;
+
+    let q = clamp(1.0 - ellip, 0.30, 1.0);
+    let q2 = q * q;
+    let q4 = q2 * q2;
+    let rs = NFW_RS_RATIO * thetaE;
+    let core = NFW_CORE * thetaE;
+    let xE = thetaE / rs;
+    let gXE = evalNfwFunctions(xE).g;
+    let fourKs = (thetaE * xE) / max(rs * gXE, 1e-6);
+
+    let R2 = q2 * xp * xp + yp * yp + core * core;
+    let R = sqrt(R2);
+    let uCoord = R / rs;
+    let nfw = evalNfwFunctions(uCoord);
+
+    let psiNorm = 0.5 * fourKs * rs * rs;
+    let a1 = fourKs * (nfw.g / (uCoord * uCoord));
+    let kappaRad = 0.5 * fourKs * nfw.F;
+    let a2 = (2.0 * (kappaRad - a1)) / max(R2, 1e-7);
+
+    acc.psi += psiNorm * nfw.hPsi;
+    let axp = a1 * q2 * xp;
+    let ayp = a1 * yp;
+    acc.alpha.x += c * axp - si * ayp;
+    acc.alpha.y += si * axp + c * ayp;
+
+    let pxxp = q2 * a1 + q4 * xp * xp * a2;
+    let pyyp = a1 + yp * yp * a2;
+    let pxyp = q2 * xp * yp * a2;
+
+    let c2 = c * c;
+    let s2 = si * si;
+    let cs = c * si;
+    acc.psiXX += c2 * pxxp - 2.0 * cs * pxyp + s2 * pyyp;
+    acc.psiYY += s2 * pxxp + 2.0 * cs * pxyp + c2 * pyyp;
+    acc.psiXY += cs * (pxxp - pyyp) + (c2 - s2) * pxyp;
+
+    if (subhaloStrength > 1e-4) {
+      let clusterScale = thetaE / 2.85;
+      for (var i = 0; i < 6; i++) {
+        let d0 = getSubhaloData(i);
+        let d1 = getSubhaloShape(i);
+        let gPos = vec3f(d0.x, d0.y, d0.w) * clusterScale;
+        let sx0 = dot(gPos, cRight);
+        let sy0 = dot(gPos, cUp);
+        let bSh = d0.z * thetaE * subhaloStrength;
+        let sSh = d1.x * thetaE;
+        let qSh = clamp(1.0 - d1.y, 0.45, 1.0);
+        addSoftenedSie(&acc, tx - sx0, ty - sy0, bSh, qSh, sSh, d1.z);
+      }
+    }
+  }
+
+  if (extShear > 1e-5) {
+    let g1 = extShear * cos(2.0 * shearAngleRad);
+    let g2 = extShear * sin(2.0 * shearAngleRad);
+    acc.psi += 0.5 * (g1 * (tx * tx - ty * ty) + 2.0 * g2 * tx * ty);
+    acc.alpha.x += g1 * tx + g2 * ty;
+    acc.alpha.y += g2 * tx - g1 * ty;
+    acc.psiXX += g1;
+    acc.psiYY -= g1;
+    acc.psiXY += g2;
+  }
+
+  let kappa = 0.5 * (acc.psiXX + acc.psiYY);
+  let g1Total = 0.5 * (acc.psiXX - acc.psiYY);
+  let g2Total = acc.psiXY;
+  let gamma = sqrt(g1Total * g1Total + g2Total * g2Total);
+  let a11 = 1.0 - acc.psiXX;
+  let a22 = 1.0 - acc.psiYY;
+  let a12 = -acc.psiXY;
+  let detA = a11 * a22 - a12 * a12;
+  let lambdaT = 1.0 - kappa - gamma;
+  let lambdaR = 1.0 - kappa + gamma;
+
+  return LensField(acc.psi, acc.alpha, kappa, gamma, detA, lambdaT, lambdaR);
+}
+
+// ============================================================================
+// 2. PROCEDURAL GRAND-DESIGN SPIRAL & JWST DEEP-FIELD SOURCE PLANE
+// ============================================================================
+
+fn evalSpiralGalaxy(
+  rel: vec2f,
+  scale: f32,
+  paRad: f32,
+  inclination: f32,
+  quasarCore: f32,
+  armTint: vec3f,
+  coreTempK: f32
+) -> vec3f {
+  let c = cos(paRad);
+  let s = sin(paRad);
+  let pRot = vec2f(c * rel.x + s * rel.y, (-s * rel.x + c * rel.y) / max(inclination, 0.25));
+  let p = pRot / max(scale, 0.08);
+  let r = length(p);
+  if (r > 3.6) {
+    return vec3f(0.0);
+  }
+
+  let theta = atan2(p.y, p.x);
+
+  // Warm central de Vaucouleurs bulge + stellar bar with smooth outer boundary fade
+  let outerFade = smoothstep(3.55, 1.85, r);
+  let barR = length(vec2f(p.x * 0.65, p.y * 1.45));
+  let bulge = exp(-2.7 * pow(r + 0.02, 0.72)) * outerFade;
+  let barGlow = 0.42 * exp(-barR * barR * 4.5) * outerFade;
+  let bulgeCol = sampleBlackbody(coreTempK) * (bulge * 2.2 + barGlow * 1.3);
+
+  // Logarithmic 2-arm + secondary harmonic spiral structure
+  let lnR = log(max(r, 0.06));
+  let armPhase1 = 2.0 * theta - 3.65 * lnR;
+  let armPhase2 = 4.0 * theta - 7.1 * lnR + 1.1;
+  let armMain = pow(max(0.5 + 0.5 * cos(armPhase1), 0.0), 3.0);
+  let armSub = pow(max(0.5 + 0.5 * cos(armPhase2), 0.0), 4.5);
+
+  // Dust lane slightly on trailing inner edge of spiral arms
+  let dustRidge = pow(max(0.5 + 0.5 * cos(armPhase1 + 0.62), 0.0), 5.0);
+  let diskEnv = smoothstep(0.08, 0.34, r) * exp(-1.15 * r) * outerFade;
+  let dustAtten = 1.0 - 0.52 * dustRidge * diskEnv;
+
+  let youngStars = (armMain * 1.25 + armSub * 0.48 + 0.16) * diskEnv * dustAtten;
+  let armCol = armTint * youngStars * 1.75;
+
+  // Magenta-pink HII star-forming nebular knots beaded along spiral arms
+  let knotCell = vec2f(theta * 3.82, r * 6.5);
+  let knotId = floor(knotCell);
+  let knotUv = fract(knotCell) - vec2f(0.5);
+  let knotRnd = hash22(knotId);
+  let knotDist = length(knotUv - (knotRnd - 0.5) * 0.42);
+  let onArm = smoothstep(0.45, 0.92, armMain);
+  let knotMask = exp(-knotDist * knotDist * 26.0) * onArm * diskEnv * step(0.46, knotRnd.x);
+  let hiiCol = vec3f(1.35, 0.24, 0.68) * knotMask * 1.9;
+
+  // Compact AGN / Quasar core with soft diffraction-halo bloom shoulder
+  let coreTight = exp(-(r * r) / 0.0055) * 5.2;
+  let coreHalo = exp(-r * 6.5) * 0.95;
+  let qCol = sampleBlackbody(9200.0) * (coreTight + coreHalo) * quasarCore;
+
+  return (bulgeCol + armCol + hiiCol + qCol);
+}
+
+fn evalEllipticalSource(rel: vec2f, scale: f32, paRad: f32, q: f32, tempK: f32, peakGain: f32) -> vec3f {
+  let c = cos(paRad);
+  let s = sin(paRad);
+  let p = vec2f(c * rel.x + s * rel.y, (-s * rel.x + c * rel.y) / max(q, 0.3)) / max(scale, 0.06);
+  let r = length(p);
+  if (r > 3.8) {
+    return vec3f(0.0);
+  }
+  let outerFade = smoothstep(3.7, 2.0, r);
+  let sersic = exp(-2.9 * pow(r + 0.03, 0.65)) * outerFade;
+  let core = exp(-r * r * 32.0) * 1.4 * outerFade;
+  return sampleBlackbody(tempK) * (sersic + core) * peakGain;
+}
+
+fn evalSourcePlane(
+  beta: vec2f,
+  sourcePos: vec2f,
+  sourceScale: f32,
+  quasarCore: f32,
+  extraGalaxies: f32
+) -> vec3f {
+  var col = vec3f(0.0);
+
+  // Primary draggable source galaxy
+  col += evalSpiralGalaxy(
+    beta - sourcePos,
+    sourceScale,
+    0.52,
+    0.66,
+    quasarCore,
+    vec3f(0.36, 0.68, 1.45),
+    4200.0
+  );
+
+  // Secondary JWST deep-field source galaxies (form giant multicolored concentric cluster arcs)
+  if (extraGalaxies > 0.01) {
+    // Cool sapphire tangential arc galaxy
+    col += extraGalaxies * evalSpiralGalaxy(
+      beta - vec2f(-0.78, 0.86),
+      sourceScale * 0.72,
+      -0.85,
+      0.56,
+      0.40,
+      vec3f(0.30, 0.62, 1.48),
+      4800.0
+    );
+    // Dusty high-z Lyman-break ruby-gold galaxy
+    col += extraGalaxies * evalEllipticalSource(
+      beta - vec2f(0.92, 0.52),
+      sourceScale * 0.44,
+      0.70,
+      0.58,
+      2650.0,
+      1.75
+    );
+    // Faint radial inner arc source
+    col += extraGalaxies * evalSpiralGalaxy(
+      beta - vec2f(0.16, -0.14),
+      sourceScale * 0.42,
+      1.30,
+      0.72,
+      0.32,
+      vec3f(0.95, 0.46, 0.78),
+      3900.0
+    );
+    // Outer field spiral outside strong lensing zone
+    col += extraGalaxies * evalSpiralGalaxy(
+      beta - vec2f(-3.85, -2.55),
+      0.78,
+      -0.42,
+      0.55,
+      0.30,
+      vec3f(0.38, 0.72, 1.35),
+      4400.0
+    );
+    // Outer field warm elliptical
+    col += extraGalaxies * evalEllipticalSource(
+      beta - vec2f(4.10, 2.35),
+      0.62,
+      0.95,
+      0.74,
+      3600.0,
+      1.25
+    );
+  }
+
+  return col;
+}
+
+// ============================================================================
+// 3. DEEP-FIELD BACKGROUND STARS & 4K SKY
+// ============================================================================
+
+fn evalDeepStars(uvSky: vec2f, starBoost: f32) -> vec3f {
+  var col = vec3f(0.0);
+  // Two crisp procedural stellar tiers on aspect-correct square tiles with smooth border fade
+  for (var layer = 0; layer < 2; layer++) {
+    let scale = select(48.0, 108.0, layer == 1);
+    let grid = vec2f(uvSky.x * scale * 2.0, uvSky.y * scale);
+    let id = floor(grid);
+    let f = fract(grid) - vec2f(0.5);
+    let rnd = hash22(id + vec2f(f32(layer) * 37.0, 11.3));
+    let prob = step(select(0.84, 0.88, layer == 1), rnd.x);
+    if (prob > 0.5) {
+      let jitter = (rnd - 0.5) * 0.42;
+      let d = length(f - jitter);
+      let cellFade = smoothstep(0.49, 0.24, max(abs(f.x), abs(f.y)));
+      let size = select(0.032, 0.024, layer == 1);
+      let core = exp(-(d * d) / (size * size));
+      let halo = exp(-d / (size * 2.1)) * 0.22;
+      let tempK = mix(2800.0, 16500.0, pow(fract(rnd.y * 13.7), 1.6));
+      let lum = pow(fract(rnd.x * 29.3), 2.2) * select(1.6, 1.05, layer == 1);
+      col += sampleBlackbody(tempK) * (core + halo) * lum * starBoost * cellFade;
+    }
+  }
+  return col;
+}
+
+// ============================================================================
+// 4. 3D FOREGROUND CLUSTER GALAXIES & VOLUMETRIC X-RAY ICM HAZE
+// ============================================================================
+
+fn evalClusterGalaxies3D(
+  ro: vec3f,
+  rd: vec3f,
+  lensModel: i32,
+  thetaE: f32,
+  ellip: f32,
+  lensAngleRad: f32,
+  clusterLight: f32,
+  subhaloStrength: f32
+) -> vec4f {
+  // Returns premultiplied foreground light (rgb) + transmittance alpha (1 - opacity)
+  var accumRgb = vec3f(0.0);
+  var transm = 1.0;
+
+  if (clusterLight <= 1e-4) {
+    return vec4f(accumRgb, transm);
+  }
+
+  // Central lens galaxy / compact relativistic star in Point Mass mode
+  let tCent = dot(-ro, rd);
+  if (tCent > 0.05) {
+    let pC = ro + rd * tCent;
+    let rC = length(pC);
+    if (lensModel == 0) {
+      // Point-Mass lens: bright compact relativistic compact core + faint lensing halo
+      let rCore = 0.08 * thetaE;
+      let starGlow = exp(-(rC * rC) / max(rCore * rCore, 1e-4)) * 2.6
+                   + exp(-rC / max(0.18 * thetaE, 0.05)) * 0.35;
+      let cCol = sampleBlackbody(8600.0) * starGlow * clusterLight;
+      let op = clamp(exp(-(rC * rC) / max(0.03 * thetaE * thetaE, 1e-4)) * 0.72, 0.0, 0.85);
+      accumRgb += cCol * transm;
+      transm *= (1.0 - op);
+    } else {
+      let cA = cos(lensAngleRad);
+      let sA = sin(lensAngleRad);
+      let qBcg = clamp(1.0 - ellip * 0.82, 0.38, 1.0);
+      let rotXY = vec2f(cA * pC.x + sA * pC.y, (-sA * pC.x + cA * pC.y) / qBcg);
+      let rEll = length(vec3f(rotXY.x, rotXY.y, pC.z / 0.75)) / max(0.42 * thetaE, 0.25);
+      if (rEll < 3.4) {
+        let fade = smoothstep(3.4, 2.0, rEll);
+        let sersic = exp(-3.1 * pow(rEll + 0.04, 0.58)) * fade;
+        let core = exp(-rEll * rEll * 22.0) * 1.55 * fade;
+        let bcgCol = sampleBlackbody(3650.0) * (sersic * 1.28 + core) * clusterLight;
+        let op = clamp(sersic * 0.45 * min(clusterLight, 1.4), 0.0, 0.82);
+        accumRgb += bcgCol * transm;
+        transm *= (1.0 - op);
+      }
+    }
+  }
+
+  // 6 3D member elliptical cluster galaxies around BCG in NFW Cluster mode
+  if (lensModel == 2 && subhaloStrength > 0.05) {
+    let clusterScale = thetaE / 2.85;
+    let memGain = clusterLight * smoothstep(0.0, 0.35, subhaloStrength);
+    for (var i = 0; i < 6; i++) {
+      let d0 = getSubhaloData(i);
+      let d1 = getSubhaloShape(i);
+      let gPos = vec3f(d0.x, d0.y, d0.w) * clusterScale;
+      let tG = dot(gPos - ro, rd);
+      if (tG > 0.05) {
+        let dVec = (ro + rd * tG) - gPos;
+        let cG = cos(d1.z);
+        let sG = sin(d1.z);
+        let qG = clamp(1.0 - d1.y, 0.45, 1.0);
+        let rLoc = vec2f(cG * dVec.x + sG * dVec.y, (-sG * dVec.x + cG * dVec.y) / qG);
+        let rad = length(vec3f(rLoc.x, rLoc.y, dVec.z * 1.15)) / max(0.22 * thetaE, 0.14);
+        if (rad < 3.2) {
+          let mFade = smoothstep(3.2, 1.9, rad);
+          let sersic = exp(-3.0 * pow(rad + 0.05, 0.62)) * mFade;
+          let core = exp(-rad * rad * 26.0) * 1.4 * mFade;
+          let memCol = sampleBlackbody(d1.w - 250.0) * (sersic * 1.08 + core) * memGain;
+          let op = clamp(sersic * 0.40 * min(memGain, 1.4), 0.0, 0.74);
+          accumRgb += memCol * transm;
+          transm *= (1.0 - op);
+        }
+      }
+    }
+  }
+
+  return vec4f(accumRgb, transm);
+}
+
+fn integrateIcmVolume(
+  ro: vec3f,
+  rd: vec3f,
+  thetaE: f32,
+  icmGlow: f32,
+  quality: i32,
+  bn: vec4f,
+  simTime: f32
+) -> vec4f {
+  if (icmGlow <= 1e-4) {
+    return vec4f(0.0, 0.0, 0.0, 1.0);
+  }
+  let rVol = max(3.4 * thetaE, 2.5);
+  let b = dot(ro, rd);
+  let c = dot(ro, ro) - rVol * rVol;
+  let disc = b * b - c;
+  if (disc <= 0.0) {
+    return vec4f(0.0, 0.0, 0.0, 1.0);
+  }
+  let sq = sqrt(disc);
+  let tNear = max(-b - sq, 0.05);
+  let tFar = max(-b + sq, tNear);
+  if (tFar <= tNear) {
+    return vec4f(0.0, 0.0, 0.0, 1.0);
+  }
+
+  var steps : i32 = 14;
+  if (quality <= 0) {
+    steps = 10;
+  } else if (quality >= 2) {
+    steps = 20;
+  }
+
+  let stepLen = (tFar - tNear) / f32(steps);
+  var accum = vec3f(0.0);
+  var transm : f32 = 1.0;
+
+  let invRVol = 1.0 / rVol;
+  let drift = vec3f(simTime * 0.008, -simTime * 0.005, simTime * 0.006);
+
+  for (var i = 0; i < 20; i++) {
+    if (i >= steps) {
+      break;
+    }
+    let t = tNear + (f32(i) + bn.x) * stepLen;
+    let p = ro + rd * t;
+    let uRad = length(p) * invRVol;
+    let radialFalloff = exp(-4.4 * uRad * uRad) * (1.0 - smoothstep(0.62, 1.0, uRad));
+
+    if (radialFalloff > 0.004) {
+      let nCoord = p * (0.14 / max(thetaE * 0.4, 0.5)) + drift;
+      let nSample = textureSampleLevel(uVolumeNoise, sVolume, nCoord, 0.0);
+      let filament = mix(nSample.r, nSample.g, 0.45);
+      let density = radialFalloff * (0.22 + 0.78 * filament) * icmGlow * 0.015;
+      // Chandra X-ray bremsstrahlung sapphire-indigo + cool cyan core
+      let xRayCol = mix(vec3f(0.08, 0.22, 0.78), vec3f(0.24, 0.58, 1.05), nSample.b);
+      let dTau = density * stepLen;
+      accum += xRayCol * dTau * transm;
+      transm *= exp(-dTau * 0.20);
+    }
+  }
+
+  return vec4f(accum, transm);
+}
+
+// ============================================================================
+// 5. SCIENTIFIC CAUSTICS & FERMAT ARRIVAL-TIME OVERLAYS
+// ============================================================================
+
+fn distPointToSegment2(p: vec2f, a: vec2f, b: vec2f) -> f32 {
+  let pa = p - a;
+  let ba = b - a;
+  let h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-8), 0.0, 1.0);
+  return length(pa - ba * h);
+}
+
+fn evalCausticDistance(
+  theta: vec2f,
+  cRight: vec3f,
+  cUp: vec3f,
+  lensModel: i32,
+  thetaE: f32,
+  ellip: f32,
+  extShear: f32,
+  lensAngleRad: f32,
+  shearAngleRad: f32,
+  subhaloStrength: f32
+) -> vec2f {
+  // Returns (tangentialCausticDist, radialCausticDist) in arcsec
+  var tanDist = 100.0;
+  var radDist = 100.0;
+
+  if (lensModel == 0) {
+    if (extShear < 0.005) {
+      // Point-Mass degenerate origin caustic crosshair
+      tanDist = length(theta);
+    } else {
+      // Chang-Refsdal diamond astroid caustic rotated by shearAngleRad
+      let cs = cos(shearAngleRad);
+      let ss = sin(shearAngleRad);
+      let amp = 2.0 * extShear * thetaE / max(sqrt(max(1.0 - extShear * extShear, 0.2)), 0.4);
+      var prevPt = vec2f(0.0);
+      for (var k = 0; k <= 24; k++) {
+        let ang = f32(k) * (TAU / 24.0);
+        let ca = cos(ang);
+        let sa = sin(ang);
+        let locPt = vec2f(amp * ca * ca * ca, -amp * sa * sa * sa);
+        let pt = vec2f(cs * locPt.x - ss * locPt.y, ss * locPt.x + cs * locPt.y);
+        if (k > 0) {
+          tanDist = min(tanDist, distPointToSegment2(theta, prevPt, pt));
+        }
+        prevPt = pt;
+      }
+    }
+    return vec2f(tanDist, radDist);
+  }
+
+  let q = clamp(1.0 - ellip, 0.25, 1.0);
+  let cL = cos(lensAngleRad);
+  let sL = sin(lensAngleRad);
+  var prevCaustic = vec2f(0.0);
+  let segs : i32 = 28;
+
+  for (var k = 0; k <= 28; k++) {
+    let phi = f32(k) * (TAU / f32(segs));
+    let cp = cos(phi);
+    let sp = sin(phi);
+    var rCrit : f32;
+    if (lensModel == 1) {
+      rCrit = (thetaE * sqrt(q)) / max(sqrt(q * q * cp * cp + sp * sp), 0.1);
+    } else {
+      // Approximate NFW critical radius modulated by ellipticity
+      rCrit = thetaE / max(sqrt(q * q * cp * cp + sp * sp), 0.2);
+      // 1 secant refinement along ray to tighten onto lambdaT = 0
+      let r1 = rCrit * 0.92;
+      let r2 = rCrit * 1.08;
+      let uDir = vec2f(cL * cp - sL * sp, sL * cp + cL * sp);
+      let l1 = evalLensField(uDir.x * r1, uDir.y * r1, cRight, cUp, lensModel, thetaE, ellip, extShear, lensAngleRad, shearAngleRad, 0.0).lambdaT;
+      let l2 = evalLensField(uDir.x * r2, uDir.y * r2, cRight, cUp, lensModel, thetaE, ellip, extShear, lensAngleRad, shearAngleRad, 0.0).lambdaT;
+      let tLerp = clamp(-l1 / select(l2 - l1, 1e-4, abs(l2 - l1) < 1e-4), -0.5, 1.5);
+      rCrit = mix(r1, r2, tLerp);
+    }
+    let dirWorld = vec2f(cL * cp - sL * sp, sL * cp + cL * sp);
+    let thetaC = dirWorld * rCrit;
+    let lf = evalLensField(
+      thetaC.x, thetaC.y,
+      cRight, cUp, lensModel, thetaE, ellip, extShear, lensAngleRad, shearAngleRad, 0.0
+    );
+    let betaC = thetaC - lf.alpha;
+    if (k > 0) {
+      tanDist = min(tanDist, distPointToSegment2(theta, prevCaustic, betaC));
+    }
+    prevCaustic = betaC;
+  }
+
+  // Approximate radial caustic circle for SIE / NFW
+  let radialCauR = select(thetaE * 0.36 * (0.65 + 0.35 * q), thetaE * 0.62 * q, lensModel == 1);
+  radDist = abs(length(theta) - radialCauR);
+
+  return vec2f(tanDist, radDist);
+}
+
+// ============================================================================
+// 6. MAIN FRAGMENT SHADER (UNIFORM CONTROL FLOW DERIVATIVES)
+// ============================================================================
+
+@fragment
+fn fs_main(in: VSOut) -> @location(0) vec4f {
+  let res = u.resolution_time_frame.xy;
+  let simTime = u.resolution_time_frame.z;
+  let frameIndex = i32(u.resolution_time_frame.w);
+
+  let jitter = u.jitter_fov_prog.xy;
+  let fovY = u.jitter_fov_prog.z;
+
+  let ro = u.camPos_unused.xyz;
+  let camRight = u.camRight_model.xyz;
+  let camUp = u.camUp_thetaE.xyz;
+  let camFwd = u.camFwd_ellip.xyz;
+
+  let lensModel = i32(round(u.camRight_model.w));
+  let thetaE = max(u.camUp_thetaE.w, 0.25);
+  let ellip = clamp(u.camFwd_ellip.w, 0.0, 0.72);
+
+  let extShear = clamp(u.lensShapeParams.x, 0.0, 0.40);
+  let lensAngleRad = u.lensShapeParams.y;
+  let shearAngleRad = u.lensShapeParams.z;
+  let subhaloStrength = clamp(u.lensShapeParams.w, 0.0, 3.0);
+
+  let sourcePos = u.sourceParams.xy;
+  let sourceScale = clamp(u.sourceParams.z, 0.12, 2.0);
+  let quasarCore = max(u.sourceParams.w, 0.0);
+
+  let showCaustics = u.overlayParams.x;
+  let showFermat = u.overlayParams.y;
+  let extraGalaxies = max(u.overlayParams.w, 0.0);
+
+  let clusterLight = max(u.clusterOpticsParams.x, 0.0);
+  let icmGlow = max(u.clusterOpticsParams.y, 0.0);
+  let skyIntensity = max(u.clusterOpticsParams.z, 0.0);
+  let skyMode = i32(round(u.clusterOpticsParams.w));
+
+  let skyRot = u.skyQualityParams.xy;
+  let quality = i32(round(u.skyQualityParams.z));
+
+  // Primary ray with Halton(2,3) sub-pixel TAA jitter
+  let pxCoord = in.pos.xy + jitter;
+  let ndc = vec2f(
+    (pxCoord.x / max(res.x, 1.0)) * 2.0 - 1.0,
+    1.0 - (pxCoord.y / max(res.y, 1.0)) * 2.0
+  );
+  let aspect = res.x / max(res.y, 1.0);
+  let tanHalfFov = tan(0.5 * fovY);
+  let rd = normalize(
+    camFwd +
+    camRight * (ndc.x * aspect * tanHalfFov) +
+    camUp * (ndc.y * tanHalfFov)
+  );
+
+  // Camera-facing lens plane orthonormal basis aligned cleanly with (1,0,0)/(0,1,0) at front view
+  let rLen = max(length(ro), 1e-4);
+  let cFwd = ro / rLen;
+  let rawRight = cross(vec3f(0.0, 1.0, 0.0), cFwd);
+  let cRight = select(vec3f(1.0, 0.0, 0.0), normalize(rawRight), length(rawRight) > 1e-4);
+  let cUp = cross(cFwd, cRight);
+
+  // Ray closest-approach impact vector in cluster frame (singularity-free over all 360 deg orbit)
+  let tImpact = -dot(ro, rd);
+  let pImpact = ro + rd * tImpact;
+  let theta = vec2f(dot(pImpact, cRight), dot(pImpact, cUp));
+
+  // Exact analytical thin-lens field & magnification Jacobian
+  let lf = evalLensField(
+    theta.x, theta.y,
+    cRight, cUp,
+    lensModel,
+    thetaE,
+    ellip,
+    extShear,
+    lensAngleRad,
+    shearAngleRad,
+    subhaloStrength
+  );
+
+  let beta = theta - lf.alpha;
+  let fermatTau = 0.5 * dot(theta - sourcePos, theta - sourcePos) - lf.psi;
+
+  // Screen-space derivatives computed UNCONDITIONALLY in uniform control flow
+  let fwTheta = max(length(fwidth(theta)), 1e-4);
+  let fwLambdaT = max(fwidth(lf.lambdaT), 1e-4);
+  let fwLambdaR = max(fwidth(lf.lambdaR), 1e-4);
+  let tauStep = max(0.14 * thetaE * thetaE, 0.12);
+  let tauNorm = fermatTau / tauStep;
+  let fwTauNorm = max(fwidth(tauNorm), 1e-4);
+
+  // Lensed background sky direction & seam/pole-safe equirectangular derivatives
+  let deflWorld = (cRight * lf.alpha.x + cUp * lf.alpha.y) * 0.022;
+  let rdLensed = normalize(rd - deflWorld);
+  let dir = normalize(rotateSkyDir(rdLensed, skyRot));
+  let azim = select(0.0, atan2(dir.z, dir.x), abs(dir.x) + abs(dir.z) > 1e-6);
+  let u1 = azim * INV_TAU + 0.5;
+  let vCoord = acos(clamp(dir.y, -1.0, 1.0)) * INV_PI;
+  let uv1 = vec2f(u1, vCoord);
+  let uv2 = vec2f(fract(u1 + 0.5), vCoord);
+
+  let dx1 = dpdx(uv1);
+  let dy1 = dpdy(uv1);
+  let dx2 = dpdx(uv2);
+  let dy2 = dpdy(uv2);
+  var dUVdx = vec2f(select(dx2.x, dx1.x, abs(dx1.x) < abs(dx2.x)), dx1.y);
+  var dUVdy = vec2f(select(dy2.x, dy1.x, abs(dy1.x) < abs(dy2.x)), dy1.y);
+  dUVdx = clamp(dUVdx, vec2f(-0.2), vec2f(0.2));
+  dUVdy = clamp(dUVdy, vec2f(-0.2), vec2f(0.2));
+  let sampleUv = vec2f(uv1.x, clamp(uv1.y, 0.002, 0.998));
+
+  // Sky textures sampled UNCONDITIONALLY in uniform control flow
+  let realSky = textureSampleGrad(uSkyMap, sSky, sampleUv, dUVdx, dUVdy).rgb;
+  let procSky = textureSampleGrad(uProcSkyMap, sSky, sampleUv, dUVdx, dUVdy).rgb;
+  let skySample = select(realSky, procSky, skyMode == 1);
+
+  let bnCoord = vec2i(in.pos.xy) & vec2i(127);
+  let bnRaw = textureLoad(uBlueNoise, bnCoord, 0);
+  let fIdx = f32(frameIndex & 1023);
+  let bn = fract(bnRaw + fIdx * vec4f(0.75487766, 0.56984029, 0.43015971, 0.61803399));
+
+  // Background radiance: deep-field sky + procedural stars + strongly lensed galaxies
+  let stars = evalDeepStars(sampleUv, 0.48 + 0.35 * skyIntensity);
+  let galaxies = evalSourcePlane(beta, sourcePos, sourceScale, quasarCore, extraGalaxies);
+  var radiance = skySample * skyIntensity * 0.20 + stars + galaxies;
+
+  // Volumetric X-ray ICM halo in front of / around cluster
+  let icm = integrateIcmVolume(ro, rd, thetaE, icmGlow, quality, bn, simTime);
+  radiance = radiance * icm.w + icm.xyz;
+
+  // Foreground 3D elliptical galaxies (BCG + 6 NFW member subhalos)
+  let fg = evalClusterGalaxies3D(
+    ro, rd, lensModel, thetaE, ellip, lensAngleRad, clusterLight, subhaloStrength
+  );
+  radiance = radiance * fg.w + fg.xyz;
+
+  // Scientific Overlay 1: Critical Curves (cyan tan / amber rad) & Source Caustics (rose)
+  if (showCaustics > 0.5) {
+    let tanCritDist = abs(lf.lambdaT) / fwLambdaT;
+    let tanCritMask = 1.0 - smoothstep(0.55, 1.55, tanCritDist);
+    radiance = mix(radiance, vec3f(0.24, 0.88, 1.45), tanCritMask * 0.88);
+
+    if (lensModel != 0) {
+      let radCritDist = abs(lf.lambdaR) / fwLambdaR;
+      let radCritMask = (1.0 - smoothstep(0.55, 1.55, radCritDist)) * smoothstep(0.05 * thetaE, 0.14 * thetaE, length(theta));
+      radiance = mix(radiance, vec3f(1.25, 0.72, 0.22), radCritMask * 0.78);
+    }
+
+    if (length(theta) < 2.2 * thetaE) {
+      let cauDists = evalCausticDistance(
+        theta, cRight, cUp,
+        lensModel, thetaE, ellip, extShear, lensAngleRad, shearAngleRad, subhaloStrength
+      );
+      let tanCauPx = cauDists.x / fwTheta;
+      let tanCauMask = 1.0 - smoothstep(0.6, 1.7, tanCauPx);
+      radiance = mix(radiance, vec3f(1.45, 0.34, 0.86), tanCauMask * 0.92);
+
+      if (lensModel != 0) {
+        let radCauPx = cauDists.y / fwTheta;
+        let radCauMask = 1.0 - smoothstep(0.6, 1.6, radCauPx);
+        radiance = mix(radiance, vec3f(1.15, 0.55, 0.24), radCauMask * 0.65);
+      }
+    }
+
+    // Draggable source-plane marker reticle at (sourceX, sourceY)
+    let dSrcPx = length(theta - sourcePos) / fwTheta;
+    let ringPx = abs(dSrcPx - 9.0);
+    let srcMarker = (1.0 - smoothstep(0.5, 1.5, ringPx)) + (1.0 - smoothstep(1.2, 2.5, dSrcPx)) * 0.65;
+    radiance = mix(radiance, vec3f(1.55, 0.88, 1.25), clamp(srcMarker, 0.0, 1.0) * 0.85);
+  }
+
+  // Scientific Overlay 2: Fermat Arrival-Time Iso-Contours tau(theta; beta)
+  if (showFermat > 0.5) {
+    let contourDist = abs(fract(tauNorm - 0.5) - 0.5) / fwTauNorm;
+    let fermatLine = 1.0 - smoothstep(0.50, 1.45, contourDist);
+    radiance = mix(radiance, vec3f(1.28, 0.98, 0.48), fermatLine * 0.68);
+
+    // Subtle highlight on stationary image loci |beta - beta_s| ~ 0
+    let gradErr = length(beta - sourcePos) / max(thetaE, 0.25);
+    let statGlow = exp(-(gradErr * gradErr) / 0.00055);
+    radiance += vec3f(0.42, 0.92, 0.85) * statGlow * 0.55;
+  }
+
+  return vec4f(sanitizeHdr(radiance), 1.0);
+}

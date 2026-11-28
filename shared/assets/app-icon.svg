@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" fill="none">
+  <defs>
+    <clipPath id="squircle-clip">
+      <rect x="16" y="16" width="480" height="480" rx="112" />
+    </clipPath>
+
+    <clipPath id="front-disk-clip">
+      <rect x="0" y="256" width="512" height="256" />
+    </clipPath>
+
+    <radialGradient id="bg-base" cx="40%" cy="32%" r="78%">
+      <stop offset="0%" stop-color="#121c33" />
+      <stop offset="54%" stop-color="#060913" />
+      <stop offset="100%" stop-color="#020307" />
+    </radialGradient>
+
+    <radialGradient id="ambient-gold" cx="54%" cy="48%" r="48%">
+      <stop offset="0%" stop-color="#f59e0b" stop-opacity="0.32" />
+      <stop offset="48%" stop-color="#f0b35a" stop-opacity="0.11" />
+      <stop offset="100%" stop-color="#f0b35a" stop-opacity="0" />
+    </radialGradient>
+
+    <radialGradient id="doppler-cyan" cx="28%" cy="54%" r="36%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.24" />
+      <stop offset="55%" stop-color="#38bdf8" stop-opacity="0.06" />
+      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0" />
+    </radialGradient>
+
+    <linearGradient id="lensed-arc-grad" x1="16%" y1="30%" x2="86%" y2="74%">
+      <stop offset="0%" stop-color="#e0f2fe" />
+      <stop offset="22%" stop-color="#fff4d6" />
+      <stop offset="54%" stop-color="#f7ca82" />
+      <stop offset="100%" stop-color="#c26819" />
+    </linearGradient>
+
+    <linearGradient id="photon-rim-grad" x1="16%" y1="44%" x2="86%" y2="56%">
+      <stop offset="0%" stop-color="#bae6fd" />
+      <stop offset="24%" stop-color="#fff7e2" />
+      <stop offset="62%" stop-color="#f7ca82" />
+      <stop offset="100%" stop-color="#d97706" />
+    </linearGradient>
+
+    <linearGradient id="disk-outer-grad" x1="6%" y1="50%" x2="94%" y2="50%">
+      <stop offset="0%" stop-color="#7dd3fc" stop-opacity="0.78" />
+      <stop offset="18%" stop-color="#fef3c7" stop-opacity="0.96" />
+      <stop offset="48%" stop-color="#f7ca82" stop-opacity="0.94" />
+      <stop offset="80%" stop-color="#e08424" stop-opacity="0.88" />
+      <stop offset="100%" stop-color="#9a3412" stop-opacity="0.64" />
+    </linearGradient>
+
+    <linearGradient id="disk-core-grad" x1="10%" y1="50%" x2="90%" y2="50%">
+      <stop offset="0%" stop-color="#e0f2fe" />
+      <stop offset="22%" stop-color="#fffbeb" />
+      <stop offset="56%" stop-color="#fde68a" />
+      <stop offset="86%" stop-color="#f0b35a" />
+      <stop offset="100%" stop-color="#c26819" />
+    </linearGradient>
+
+    <linearGradient id="flare-grad" x1="0%" y1="50%" x2="100%" y2="50%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0" />
+      <stop offset="25%" stop-color="#7dd3fc" stop-opacity="0.22" />
+      <stop offset="50%" stop-color="#fff7e2" stop-opacity="0.42" />
+      <stop offset="75%" stop-color="#f7ca82" stop-opacity="0.22" />
+      <stop offset="100%" stop-color="#f0b35a" stop-opacity="0" />
+    </linearGradient>
+
+    <linearGradient id="frame-rim" x1="12%" y1="8%" x2="88%" y2="92%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.24" />
+      <stop offset="45%" stop-color="#94a3b8" stop-opacity="0.08" />
+      <stop offset="100%" stop-color="#f7ca82" stop-opacity="0.24" />
+    </linearGradient>
+
+    <g id="accretion-disk">
+      <ellipse cx="256" cy="256" rx="208" ry="50" stroke="#f59e0b" stroke-width="30" stroke-opacity="0.18" />
+      <ellipse cx="256" cy="256" rx="206" ry="49" stroke="url(#disk-outer-grad)" stroke-width="20" />
+      <ellipse cx="256" cy="256" rx="196" ry="43" stroke="url(#disk-core-grad)" stroke-width="8.5" />
+    </g>
+  </defs>
+
+  <!-- App Icon Squircle Canvas -->
+  <g clip-path="url(#squircle-clip)">
+    <rect x="16" y="16" width="480" height="480" fill="url(#bg-base)" />
+    <rect x="16" y="16" width="480" height="480" fill="url(#ambient-gold)" />
+    <rect x="16" y="16" width="480" height="480" fill="url(#doppler-cyan)" />
+
+    <!-- Subtle Observatory Starfield -->
+    <circle cx="96" cy="108" r="2.6" fill="#e2e8f0" fill-opacity="0.82" />
+    <circle cx="404" cy="96" r="2.2" fill="#fde68a" fill-opacity="0.74" />
+    <circle cx="426" cy="396" r="2.8" fill="#bae6fd" fill-opacity="0.78" />
+    <circle cx="98" cy="402" r="2.0" fill="#cbd5e1" fill-opacity="0.62" />
+    <circle cx="152" cy="76" r="1.5" fill="#93c5fd" fill-opacity="0.58" />
+    <circle cx="360" cy="428" r="1.6" fill="#f7ca82" fill-opacity="0.58" />
+
+    <!-- Soft Panavision Anamorphic Streak -->
+    <ellipse cx="256" cy="256" rx="224" ry="5.5" transform="rotate(-15 256 256)" fill="url(#flare-grad)" />
+
+    <!-- Kerr Black Hole & Accretion System (tilted -15 deg) -->
+    <g transform="rotate(-15 256 256)">
+      <!-- Back Accretion Plane (seamlessly continuous behind shadow & lensed ring) -->
+      <use href="#accretion-disk" />
+
+      <!-- Diffuse Gravitational Lensing Halo -->
+      <circle cx="256" cy="256" r="130" stroke="#f0b35a" stroke-width="26" stroke-opacity="0.16" />
+
+      <!-- Lensed Upper & Lower Einstein Halo Rings -->
+      <circle cx="256" cy="256" r="124" stroke="url(#lensed-arc-grad)" stroke-width="14" stroke-opacity="0.94" />
+      <circle cx="256" cy="256" r="105" stroke="url(#photon-rim-grad)" stroke-width="5" stroke-opacity="0.86" />
+
+      <!-- Event Horizon Shadow -->
+      <circle cx="256" cy="256" r="90" fill="#010206" />
+      <circle cx="256" cy="256" r="91" stroke="url(#photon-rim-grad)" stroke-width="4.5" stroke-opacity="0.96" />
+
+      <!-- Front Sweeping Accretion Disk (identical geometry clipped cleanly at y >= 256) -->
+      <g clip-path="url(#front-disk-clip)">
+        <use href="#accretion-disk" />
+      </g>
+    </g>
+  </g>
+
+  <!-- Crisp Outer Squircle Rim -->
+  <rect x="17.5" y="17.5" width="477" height="477" rx="110.5" stroke="url(#frame-rim)" stroke-width="3" />
+</svg>

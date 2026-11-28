@@ -616,6 +616,29 @@ pub(crate) fn draw_chevron_icon(painter: &Painter, center: Pos2, color: Color32,
     }
 }
 
+pub(crate) fn draw_chevron_down_icon(painter: &Painter, center: Pos2, color: Color32, open: bool) {
+    let stroke = Stroke::new(1.5, color);
+    if open {
+        painter.line(
+            vec![
+                Pos2::new(center.x - 3.5, center.y + 1.5),
+                Pos2::new(center.x, center.y - 2.0),
+                Pos2::new(center.x + 3.5, center.y + 1.5),
+            ],
+            stroke,
+        );
+    } else {
+        painter.line(
+            vec![
+                Pos2::new(center.x - 3.5, center.y - 1.5),
+                Pos2::new(center.x, center.y + 2.0),
+                Pos2::new(center.x + 3.5, center.y - 1.5),
+            ],
+            stroke,
+        );
+    }
+}
+
 pub(crate) fn draw_home_icon(painter: &Painter, center: Pos2, color: Color32) {
     let stroke = Stroke::new(1.4, color);
     painter.line(

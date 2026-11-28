@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.1.4.1-beta] - 2026-11-28
+
+- **Gravitational Lens & Cluster Caustic Ray-Tracer (`sims/lens-cluster`, WebGL2, WebGPU & Native Rust Desktop)**:
+  - Added the 8th Observatory engine featuring exact Point-Mass, SIE elliptical, and NFW + subhalo dark-matter cluster halos, analytical magnification caustics (`det A = 1 / |μ|`), Fermat arrival-time contours, and interactive source-plane dragging (`T` toggles Drag Source ↔ Orbit View; `Shift+Drag` moves the background galaxy) with 6 observatory presets (`Perfect Einstein Ring`, `Einstein Cross`, `JWST Giant Cluster Arcs`, `Fold Caustic Merger`, `Microlensing Flash`, `Caustic & Fermat Bench`).
+  - Integrated `lens-cluster` into unified metadata (`shared/sims.json`, `desktop/src/sims/registry.rs`, `home/catalogData.js`), `home/previews/lens-cluster.webp`, `shared/shaders/postConfig.js`, and CI/QA harnesses (`physics_check.mjs`, `physics_parity.rs`, `headless_render.rs`).
+- **Canonical App Icon & Multi-Platform Desktop Branding**:
+  - Designed the vector Observatory app icon (`shared/assets/app-icon.svg`) and added `scripts/generate-icons.mjs` to derive `shared/assets/app-icon-256.png`, `favicon.ico`, `desktop/assets/app-icon.ico`, and `desktop/assets/AppIcon.icns`.
+  - Wired icons across web (`index.html`), native Windows PE resources (`desktop/build.rs`), macOS `.app` bundle (`desktop/build-macos.sh`), and Linux Wayland/X11 + `hicolor`/`.desktop` integration (`desktop/src/assets/icon.rs`, `desktop/src/main.rs`), and added `shared/tests/shared_check.mjs` + CI workflow path coverage.
+- **Observatory Switcher & Topbar Polish**:
+  - Updated the shared web switcher (`shared/ui/simSwitcher.js`, `shared/ui/base.css`) and native desktop topbar (`desktop/src/ui/hud/topbar.rs`), and bumped web and native desktop versions to `0.1.4.1 beta`.
+
 ## [v0.1.4.0-beta] - 2026-11-28
 
 - **Full-Lifecycle Supernova Overhaul (WebGL2, WebGPU & Native Rust Desktop)**:

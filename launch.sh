@@ -30,6 +30,7 @@ Simulation Options:
   --supernova, --snr    Open Supernova Remnant & Nebula Simulator
   --pulsar, --magnetar  Open Magnetar & Millisecond Pulsar Simulator
   --starflight, --sf    Open Relativistic Starflight Simulator
+  --lens-cluster, --lens Open Gravitational Lensing Observatory
   --sim <name>          Select target: home | any canonical ID or alias in shared/sims.json
 
 Backend Options:

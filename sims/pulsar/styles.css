@@ -32,8 +32,8 @@
   --section-divider: rgba(148, 197, 255, 0.1);
   --telemetry-divider: rgba(148, 197, 255, 0.12);
 
-  --hud-top-left-max-w: min(680px, calc(100dvw - 720px));
-  --hud-top-left-max-w-1520: min(640px, calc(100dvw - 690px));
-  --hud-top-left-max-w-1380: min(460px, calc(100dvw - 680px));
+  --hud-top-left-max-w: min(680px, calc(100dvw - 460px));
+  --hud-top-left-max-w-1520: min(640px, calc(100dvw - 460px));
+  --hud-top-left-max-w-1380: min(520px, calc(100dvw - 450px));
   --hud-hint-bottom: calc(var(--hud-pad) + 58px);
 }

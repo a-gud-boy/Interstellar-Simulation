@@ -91,6 +91,21 @@ impl PostTuning {
             ana_weight: 0.14,
         }
     }
+
+    pub fn lens_cluster() -> Self {
+        Self {
+            bloom_threshold: 1.20,
+            bloom_knee: 0.45,
+            bloom_clamp: 15.0,
+            ana_threshold: 2.10,
+            ana_inner_tint: [1.05, 0.96, 0.90],
+            ana_edge_start: 0.17,
+            ana_outer_tint: [0.78, 0.88, 1.18],
+            ana_mix_weight: 0.40,
+            bloom_weight: 0.095,
+            ana_weight: 0.18,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

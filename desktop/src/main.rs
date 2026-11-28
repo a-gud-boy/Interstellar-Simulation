@@ -16,7 +16,7 @@ use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use interstellar_desktop::APP_VERSION;
-use interstellar_desktop::assets::sky;
+use interstellar_desktop::assets::{icon, sky};
 use interstellar_desktop::renderer::post::{MAX_PROGRESSIVE_SAMPLES, MAX_RENDER_DPR, PostPipeline};
 use interstellar_desktop::renderer::{
     SharedGpuAssets, format_adapter_label, readback_rgba8_texture,
@@ -163,7 +163,7 @@ fn parse_cli_args() -> CliArgs {
                  USAGE:\n  interstellar-desktop [OPTIONS]\n\n\
                  OPTIONS:\n  \
                    --home, --hub           Open Observatory Homepage (default)\n  \
-                   --sim <name>            home | blackhole | wormhole | binary | warp | supernova | pulsar | starflight\n  \
+                   --sim <name>            home | blackhole | wormhole | binary | warp | supernova | pulsar | starflight | lens-cluster\n  \
                    --width <px>            Initial window width (default: 1280)\n  \
                    --height <px>           Initial window height (default: 720)\n  \
                    --vsync <on|off>        Initial VSync mode (default: on)\n  \
@@ -533,6 +533,9 @@ impl RuntimeState {
         self.input.clear();
         self.hud.hud_hidden = false;
         self.hud.drawer_open = false;
+        self.hud.switcher_open = false;
+        self.hud.switcher_query.clear();
+        self.hud.switcher_focus_search = false;
         self.window.set_title(&formatted_home_title());
         self.needs_redraw = true;
         self.next_repaint_at = None;
@@ -622,6 +625,9 @@ impl RuntimeState {
         self.home.inspect_sim = None;
         self.hud.hud_hidden = false;
         self.hud.drawer_open = false;
+        self.hud.switcher_open = false;
+        self.hud.switcher_query.clear();
+        self.hud.switcher_focus_search = false;
         self.hud.invalidate_metadata();
         self.input.clear();
         self.drag_settle_until = None;
@@ -732,12 +738,27 @@ impl RuntimeState {
                     return;
                 }
                 HudAction::SwitchSim(next_id) => {
+                    self.hud.switcher_open = false;
+                    self.hud.switcher_query.clear();
+                    self.hud.switcher_focus_search = false;
                     if self
                         .sim_rt
                         .as_ref()
                         .is_some_and(|sr| sr.sim.id() != next_id)
                     {
                         self.enter_sim(next_id, None);
+                    }
+                }
+                HudAction::ToggleSwitcher => {
+                    self.hud.switcher_open = !self.hud.switcher_open;
+                    if self.hud.switcher_open {
+                        self.hud.drawer_open = false;
+                        self.hud.switcher_query.clear();
+                        self.hud.switcher_focus_search = true;
+                        self.hud.switcher_just_opened = true;
+                    } else {
+                        self.hud.switcher_query.clear();
+                        self.hud.switcher_focus_search = false;
                     }
                 }
                 HudAction::SelectPreset(idx) => {
@@ -773,9 +794,19 @@ impl RuntimeState {
                 }
                 HudAction::ToggleHud => {
                     self.hud.hud_hidden = !self.hud.hud_hidden;
+                    if self.hud.hud_hidden {
+                        self.hud.switcher_open = false;
+                        self.hud.switcher_query.clear();
+                        self.hud.switcher_focus_search = false;
+                    }
                 }
                 HudAction::ToggleDrawer => {
                     self.hud.drawer_open = !self.hud.drawer_open;
+                    if self.hud.drawer_open {
+                        self.hud.switcher_open = false;
+                        self.hud.switcher_query.clear();
+                        self.hud.switcher_focus_search = false;
+                    }
                 }
                 HudAction::SetVsync(v) => {
                     self.apply_vsync(v);
@@ -841,6 +872,14 @@ impl RuntimeState {
                     self.enter_sim(self.home.spotlight, None);
                 }
             }
+            return;
+        }
+
+        if code == KeyCode::Escape && self.hud.switcher_open {
+            self.hud.switcher_open = false;
+            self.hud.switcher_query.clear();
+            self.hud.switcher_focus_search = false;
+            self.needs_redraw = true;
             return;
         }
 
@@ -1347,10 +1386,28 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
             .start_sim
             .map(formatted_window_title)
             .unwrap_or_else(formatted_home_title);
-        let attrs = Window::default_attributes()
+        let mut attrs = Window::default_attributes()
             .with_title(initial_title)
             .with_inner_size(LogicalSize::new(self.cli.width, self.cli.height))
             .with_min_inner_size(LogicalSize::new(640, 420));
+        if let Some(window_icon) = icon::load_window_icon() {
+            attrs = attrs.with_window_icon(Some(window_icon));
+        }
+        #[cfg(target_os = "linux")]
+        {
+            use winit::platform::wayland::WindowAttributesExtWayland;
+            use winit::platform::x11::WindowAttributesExtX11;
+            attrs = WindowAttributesExtWayland::with_name(
+                attrs,
+                icon::LINUX_APP_ID,
+                "interstellar-desktop",
+            );
+            attrs = WindowAttributesExtX11::with_name(
+                attrs,
+                icon::LINUX_APP_ID,
+                "interstellar-desktop",
+            );
+        }
         let window = Arc::new(
             event_loop
                 .create_window(attrs)
@@ -1599,6 +1656,8 @@ mod win_timer {
 fn main() {
     #[cfg(target_os = "windows")]
     let _win_timer = win_timer::TimerPeriodGuard::new();
+    #[cfg(target_os = "linux")]
+    icon::ensure_linux_desktop_integration();
 
     let cli = parse_cli_args();
     let event_loop = EventLoop::<AppEvent>::with_user_event()

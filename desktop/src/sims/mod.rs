@@ -1,5 +1,6 @@
 pub mod binary;
 pub mod blackhole;
+pub mod lens_cluster;
 pub mod pulsar;
 pub mod registry;
 pub mod starflight;
@@ -21,10 +22,11 @@ pub enum SimId {
     Supernova,
     Pulsar,
     Starflight,
+    LensCluster,
 }
 
 impl SimId {
-    pub const ALL: [SimId; 7] = [
+    pub const ALL: [SimId; 8] = [
         SimId::Blackhole,
         SimId::Wormhole,
         SimId::BinaryBh,
@@ -32,6 +34,7 @@ impl SimId {
         SimId::Supernova,
         SimId::Pulsar,
         SimId::Starflight,
+        SimId::LensCluster,
     ];
 
     pub fn switch_label(self) -> &'static str {
@@ -177,6 +180,25 @@ impl SimTheme {
                 accent_bright: Color32::from_rgb(0x7d, 0xd3, 0xfc),
                 accent_soft: Color32::from_rgba_unmultiplied(56, 189, 248, 46),
                 accent_border: Color32::from_rgba_unmultiplied(56, 189, 248, 143),
+                warm: Some((
+                    Color32::from_rgb(0xfb, 0xbf, 0x24),
+                    Color32::from_rgba_unmultiplied(251, 191, 36, 41),
+                    Color32::from_rgba_unmultiplied(251, 191, 36, 122),
+                )),
+                slider_track: Color32::from_rgba_unmultiplied(255, 255, 255, 56),
+            },
+            SimId::LensCluster => Self {
+                glass_bg: Color32::from_rgba_unmultiplied(8, 10, 18, 158),
+                glass_bg_elevated: Color32::from_rgba_unmultiplied(10, 12, 22, 219),
+                glass_border: Color32::from_rgba_unmultiplied(244, 182, 214, 36),
+                glass_border_strong: Color32::from_rgba_unmultiplied(244, 182, 214, 64),
+                text_primary: Color32::from_rgb(0xf2, 0xee, 0xf8),
+                text_secondary: Color32::from_rgb(0xb4, 0xac, 0xc8),
+                text_muted: Color32::from_rgba_unmultiplied(216, 206, 236, 173),
+                accent: Color32::from_rgb(0xf4, 0x72, 0xb6),
+                accent_bright: Color32::from_rgb(0xf9, 0xa8, 0xd4),
+                accent_soft: Color32::from_rgba_unmultiplied(244, 114, 182, 46),
+                accent_border: Color32::from_rgba_unmultiplied(244, 114, 182, 138),
                 warm: Some((
                     Color32::from_rgb(0xfb, 0xbf, 0x24),
                     Color32::from_rgba_unmultiplied(251, 191, 36, 41),
@@ -361,6 +383,7 @@ pub fn create_simulation(id: SimId, assets: &mut SharedGpuAssets) -> Box<dyn Sim
         SimId::Supernova => Box::new(supernova::SupernovaSim::new(assets)),
         SimId::Pulsar => Box::new(pulsar::PulsarSim::new(assets)),
         SimId::Starflight => Box::new(starflight::StarflightSim::new(assets)),
+        SimId::LensCluster => Box::new(lens_cluster::LensClusterSim::new(assets)),
     }
 }
 

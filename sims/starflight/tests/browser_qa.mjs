@@ -255,14 +255,15 @@ async function main() {
     };
 
     const pressKey = async (key, code, keyCode) => {
-      await cdp.send('Input.dispatchKeyEvent', {
+      const payload = {
         type: 'keyDown',
         key,
         code,
         windowsVirtualKeyCode: keyCode,
         nativeVirtualKeyCode: keyCode,
-        text: key,
-      });
+      };
+      if (key.length === 1) payload.text = key;
+      await cdp.send('Input.dispatchKeyEvent', payload);
       await cdp.send('Input.dispatchKeyEvent', {
         type: 'keyUp',
         key,
@@ -290,43 +291,74 @@ async function main() {
       return !!drawer && drawer.getAttribute('aria-hidden') === 'true' && drawer.inert === true && !drawer.classList.contains('is-open');
     })()`);
 
-    // Check HUD top-right 7-sim switcher layout at 1440px (zero overlap, single row)
-    const hudLayoutCheck = await evalJS(`(() => {
-      const nav = document.querySelector('nav[aria-label="Simulation switcher"]');
-      const items = Array.from(nav?.querySelectorAll('a') || []);
-      const ctrlBtn = document.getElementById('controls-toggle');
-      const hideBtn = document.getElementById('btn-hide-ui');
-      const header = document.querySelector('.hud-top-left');
-      const navRect = nav?.getBoundingClientRect();
-      const hdrRect = header?.getBoundingClientRect();
-      const ctrlRect = ctrlBtn?.getBoundingClientRect();
-      const hideRect = hideBtn?.getBoundingClientRect();
-      const itemRects = items.map(a => {
-        const r = a.getBoundingClientRect();
-        return { id: a.id, left: r.left, right: r.right, top: r.top, bottom: r.bottom };
-      });
-      let overlap = false;
-      for (let i = 0; i < itemRects.length; i++) {
-        for (let j = i + 1; j < itemRects.length; j++) {
-          const a = itemRects[i], b = itemRects[j];
-          const horiz = a.left < b.right - 1 && b.left < a.right - 1;
-          const vert = a.top < b.bottom - 1 && b.top < a.bottom - 1;
-          if (horiz && vert) overlap = true;
+    // Check HUD top-right compact switcher trigger + categorized dropdown popover at 1440px
+    const hudLayoutCheck = await (async () => {
+      const closedState = await evalJS(`(() => {
+        const nav = document.querySelector('nav[aria-label="Simulation switcher"]');
+        const trigger = document.getElementById('sim-switch-trigger');
+        const popover = document.getElementById('sim-switch-popover');
+        const ctrlBtn = document.getElementById('controls-toggle');
+        const hideBtn = document.getElementById('btn-hide-ui');
+        const header = document.querySelector('.hud-top-left');
+        const navRect = nav?.getBoundingClientRect();
+        const hdrRect = header?.getBoundingClientRect();
+        const ctrlRect = ctrlBtn?.getBoundingClientRect();
+        const hideRect = hideBtn?.getBoundingClientRect();
+        const rectsOverlap = (a, b, pad = 2) => Boolean(a && b && a.left < b.right + pad && b.left < a.right + pad && a.top < b.bottom + pad && b.top < a.bottom + pad);
+        return {
+          hasTrigger: Boolean(trigger),
+          hasPopover: Boolean(popover),
+          initiallyClosed: trigger?.getAttribute('aria-expanded') === 'false' && popover?.getAttribute('aria-hidden') === 'true',
+          navHeight: Math.round(navRect?.height ?? 0),
+          navWidth: Math.round(navRect?.width ?? 0),
+          hdrNavOverlap: rectsOverlap(hdrRect, navRect, 4),
+          ctrlOverlap: rectsOverlap(navRect, ctrlRect, 1) || rectsOverlap(navRect, hideRect, 1) || rectsOverlap(hdrRect, ctrlRect, 2),
+        };
+      })()`);
+
+      await evalJS(`document.getElementById('sim-switch-trigger')?.click()`);
+      await sleep(240);
+
+      const openState = await evalJS(`(() => {
+        const trigger = document.getElementById('sim-switch-trigger');
+        const popover = document.getElementById('sim-switch-popover');
+        const search = document.getElementById('sim-switch-search');
+        const groups = Array.from(popover?.querySelectorAll('.sim-switch-group') || []);
+        const items = Array.from(popover?.querySelectorAll('a[data-sim-href]') || []);
+        const itemRects = items.map(a => {
+          const r = a.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+        });
+        let overlap = false;
+        for (let i = 1; i < itemRects.length; i++) {
+          if (itemRects[i].top < itemRects[i - 1].bottom - 1) overlap = true;
         }
-      }
-      const singleRow = itemRects.length > 0 && itemRects.every(r => Math.abs(r.top - itemRects[0].top) < 8);
-      const rectsOverlap = (a, b, pad = 2) => Boolean(a && b && a.left < b.right + pad && b.left < a.right + pad && a.top < b.bottom + pad && b.top < a.bottom + pad);
-      const hdrNavOverlap = rectsOverlap(hdrRect, navRect, 4);
-      const ctrlOverlap = rectsOverlap(navRect, ctrlRect, 1) || rectsOverlap(navRect, hideRect, 1) || rectsOverlap(hdrRect, ctrlRect, 2);
-      return {
-        pillCount: items.length,
-        overlap,
-        singleRow,
-        hdrNavOverlap,
-        navHeight: Math.round(navRect?.height ?? 0),
-        ctrlOverlap,
-      };
-    })()`);
+        let filteredCount = -1;
+        if (search) {
+          search.value = 'pulsar';
+          search.dispatchEvent(new Event('input', { bubbles: true }));
+          filteredCount = items.filter(a => !a.classList.contains('is-filtered-out')).length;
+        }
+        return {
+          opened: trigger?.getAttribute('aria-expanded') === 'true' && popover?.getAttribute('aria-hidden') === 'false',
+          groupCount: groups.length,
+          pillCount: items.length,
+          overlap,
+          filteredCount,
+        };
+      })()`);
+
+      await pressKey('Escape', 'Escape', 27);
+      await sleep(220);
+
+      const closedAfterEsc = await evalJS(`(() => {
+        const trigger = document.getElementById('sim-switch-trigger');
+        const popover = document.getElementById('sim-switch-popover');
+        return trigger?.getAttribute('aria-expanded') === 'false' && popover?.getAttribute('aria-hidden') === 'true';
+      })()`);
+
+      return { ...closedState, ...openState, closedAfterEsc };
+    })();
 
     const s1 = await captureShot('01_webgl2_default_hud.png');
     const statsWebGLInit = await analyzePng(s1.base64);
@@ -758,12 +790,20 @@ async function main() {
     check(liveFpsWebGL >= 20, 'WebGL2 runs smoothly (>= 20 FPS)', `fps=${liveFpsWebGL}`);
     check(drawerClosedInitially === true, 'Controls drawer starts collapsed');
     check(
-      hudLayoutCheck?.pillCount === 7 &&
-        !hudLayoutCheck?.overlap &&
-        hudLayoutCheck?.singleRow &&
+      hudLayoutCheck?.hasTrigger &&
+        hudLayoutCheck?.hasPopover &&
+        hudLayoutCheck?.initiallyClosed &&
+        hudLayoutCheck?.navHeight <= 42 &&
+        hudLayoutCheck?.navWidth <= 260 &&
         !hudLayoutCheck?.hdrNavOverlap &&
-        !hudLayoutCheck?.ctrlOverlap,
-      '7-sim switcher HUD layout fits cleanly on a single row without overlapping pills or controls',
+        !hudLayoutCheck?.ctrlOverlap &&
+        hudLayoutCheck?.opened &&
+        hudLayoutCheck?.groupCount === 4 &&
+        hudLayoutCheck?.pillCount >= 8 &&
+        !hudLayoutCheck?.overlap &&
+        hudLayoutCheck?.filteredCount === 1 &&
+        hudLayoutCheck?.closedAfterEsc,
+      'Compact switcher trigger + categorized dropdown popover fit cleanly, filter live, and close on Escape',
       JSON.stringify(hudLayoutCheck)
     );
     check(
@@ -895,7 +935,7 @@ async function main() {
     );
     check(
       switcherCheck?.hasNav &&
-        switcherCheck?.count === 7 &&
+        switcherCheck?.count >= 8 &&
         switcherCheck?.noTabRole &&
         switcherCheck?.currentId === 'sim-switch-starflight' &&
         switcherCheck?.bhHref?.includes('?backend=webgpu') &&

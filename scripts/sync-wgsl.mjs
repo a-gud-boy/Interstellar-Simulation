@@ -184,6 +184,15 @@ const TARGETS = [
         exportName: 'STARFLIGHT_WGSL',
       }),
   },
+  {
+    target: 'sims/lens-cluster/src/shaders/lens-cluster.wgsl.js',
+    render: () =>
+      renderSingleExport({
+        target: 'sims/lens-cluster/src/shaders/lens-cluster.wgsl.js',
+        source: 'sims/lens-cluster/src/shaders/lens-cluster.wgsl',
+        exportName: 'LENS_CLUSTER_WGSL',
+      }),
+  },
 ];
 
 function summarizeFirstDiff(expected, actual) {

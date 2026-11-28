@@ -75,7 +75,7 @@ pub(super) fn draw_dossier_modal(
                             ui.set_max_width(inner_w - 40.0);
                             ui.label(tracked_job(
                                 &format!(
-                                    "{} / 07 · {} · {}",
+                                    "{} / 08 · {} · {}",
                                     entry.index,
                                     entry.category_label.to_uppercase(),
                                     entry.metric_name.to_uppercase()

@@ -1,6 +1,6 @@
 [package]
 name = "interstellar-desktop"
-version = "0.1.4-beta.0"
+version = "0.1.4-beta.1"
 edition = "2024"
 description = "Native Linux (cross-platform ready) 1:1 Rust + wgpu clone of the Interstellar Relativistic Simulation Suite"
 

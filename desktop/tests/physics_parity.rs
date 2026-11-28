@@ -4,6 +4,10 @@ use interstellar_desktop::sims::binary::{
     OrbitState, compute_binary_state, eggleton_roche_radius, peters_mathews_rate, step_binary_orbit,
 };
 use interstellar_desktop::sims::blackhole::compute_kerr_telemetry;
+use interstellar_desktop::sims::lens_cluster::{
+    compute_lens_telemetry, eval_fermat_potential, eval_lens_field, eval_nfw_functions,
+    eval_point_mass_exact, solve_lensed_images,
+};
 use interstellar_desktop::sims::pulsar::{
     compute_apparent_radius, compute_max_visible_angle, compute_pulsar_telemetry,
     compute_surface_redshift, compute_visible_surface_fraction,
@@ -163,4 +167,81 @@ fn starflight_cancellation_free_sr_parity() {
     let tel = compute_starflight_telemetry(0, 1.472219, 1.0, 0.0, 1, 1.0);
     assert!((tel.true_beta - 1.472219_f64.tanh()).abs() < 1e-7);
     assert!(tel.cmb_peak_temp_k > 2.7255);
+}
+
+#[test]
+fn lens_cluster_gravitational_lensing_parity() {
+    let pm = eval_lens_field(2.1, 0.0, 0, 2.1, 0.0, 0.0, 0.0, 0.0, 0.0);
+    assert!(pm.lambda_t.abs() < 2e-3 && pm.det_a.abs() < 2e-3);
+
+    let ex = eval_point_mass_exact(0.35, 2.1);
+    let solved = solve_lensed_images(0, 2.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.35 * 2.1, 0.0);
+    assert_eq!(solved.images.len(), 2);
+    assert!((solved.total_mag - ex.mu_tot).abs() < 0.05);
+    assert!((solved.time_delay_days - ex.time_delay_days).abs() < 0.35);
+
+    let cross = compute_lens_telemetry(1, 1.85, 0.34, 0.08, 18.0, -28.0, 0.0, 0.07, 0.05);
+    assert!(cross.multiplicity_label.contains("Quad"));
+    assert!(cross.total_magnification > 8.0);
+
+    let nfw_1 = eval_nfw_functions(1.0);
+    assert!((nfw_1.f - (1.0 / 3.0)).abs() < 1e-12);
+    assert!((nfw_1.g - (1.0 - std::f64::consts::LN_2)).abs() < 1e-12);
+
+    let fermat_bench = solve_lensed_images(1, 2.20, 0.38, 0.12, 24.0, -35.0, 0.0, 0.10, 0.05);
+    assert!(fermat_bench.images.len() >= 4);
+    let h = 1e-5;
+    for im in &fermat_bench.images {
+        let gx = (eval_fermat_potential(
+            im.x + h,
+            im.y,
+            0.10,
+            0.05,
+            1,
+            2.20,
+            0.38,
+            0.12,
+            24.0,
+            -35.0,
+            0.0,
+        ) - eval_fermat_potential(
+            im.x - h,
+            im.y,
+            0.10,
+            0.05,
+            1,
+            2.20,
+            0.38,
+            0.12,
+            24.0,
+            -35.0,
+            0.0,
+        )) / (2.0 * h);
+        let gy = (eval_fermat_potential(
+            im.x,
+            im.y + h,
+            0.10,
+            0.05,
+            1,
+            2.20,
+            0.38,
+            0.12,
+            24.0,
+            -35.0,
+            0.0,
+        ) - eval_fermat_potential(
+            im.x,
+            im.y - h,
+            0.10,
+            0.05,
+            1,
+            2.20,
+            0.38,
+            0.12,
+            24.0,
+            -35.0,
+            0.0,
+        )) / (2.0 * h);
+        assert!(gx.hypot(gy) < 5e-4);
+    }
 }

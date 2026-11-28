@@ -10,6 +10,24 @@ pub enum SimCategory {
     SpecialRelativity,
 }
 
+impl SimCategory {
+    pub const ALL: [SimCategory; 4] = [
+        SimCategory::GeneralRelativity,
+        SimCategory::ExoticMetrics,
+        SimCategory::Astrophysics,
+        SimCategory::SpecialRelativity,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            SimCategory::GeneralRelativity => "General Relativity",
+            SimCategory::ExoticMetrics => "Exotic Metrics",
+            SimCategory::Astrophysics => "Astrophysics",
+            SimCategory::SpecialRelativity => "Special Relativity",
+        }
+    }
+}
+
 pub struct SimRegistryEntry {
     pub id: SimId,
     pub index: &'static str,
@@ -33,7 +51,7 @@ pub struct SimRegistryEntry {
     pub presets: [(&'static str, &'static str); 6],
 }
 
-pub const SIM_REGISTRY: [SimRegistryEntry; 7] = [
+pub const SIM_REGISTRY: [SimRegistryEntry; 8] = [
     SimRegistryEntry {
         id: SimId::Blackhole,
         index: "01",
@@ -419,6 +437,68 @@ pub const SIM_REGISTRY: [SimRegistryEntry; 7] = [
             ),
         ],
     },
+    SimRegistryEntry {
+        id: SimId::LensCluster,
+        index: "08",
+        cli_name: "lens-cluster",
+        switch_label: "Lens Cluster",
+        window_title: "Gravitational Lensing Observatory — Einstein Rings & Galaxy Cluster",
+        aliases: &[
+            "lens-cluster",
+            "lens",
+            "lensing",
+            "cluster",
+            "einstein-ring",
+            "einstein",
+        ],
+        category: SimCategory::GeneralRelativity,
+        category_label: "General Relativity",
+        title: "Gravitational Lensing Observatory — Einstein Rings & Cluster",
+        short_title: "Lens Cluster",
+        tagline: "Einstein rings, quad crosses, NFW cluster arcs & caustics",
+        description: "JWST deep-field gravitational lensing observatory with exact Point-Mass, SIE elliptical, and NFW dark-matter cluster halos, analytical magnification caustics, Fermat arrival-time contours, and interactive source-plane dragging.",
+        equation: "β = θ − α(θ) · det A = 1/|μ| · τ = ½|θ − β|² − ψ(θ)",
+        metric_name: "Thin-Lens GR & Fermat Optics",
+        accent_rgb: [0xf4, 0x72, 0xb6],
+        accent_bright_rgb: [0xf9, 0xa8, 0xd4],
+        special_control: "T toggles Drag Source ↔ Orbit View; Shift+Drag moves background galaxy",
+        highlights: [
+            "Point · SIE · NFW+Subhalos",
+            "Caustics & Fermat Contours",
+            "Draggable Source Plane",
+        ],
+        specs: [
+            ("Lens Models", "Point · SIE · NFW"),
+            ("Jacobian", "Exact Analytical A_ij"),
+            ("Overlays", "Caustics & Fermat τ"),
+        ],
+        presets: [
+            (
+                "Perfect Einstein Ring",
+                "On-axis Point-Mass Schwarzschild lens mapping a single background spiral into a closed luminous 360° ring.",
+            ),
+            (
+                "Einstein Cross (Quad)",
+                "Singular Isothermal Ellipsoid + shear splitting a quasar core into four inverted-parity quadruplet images.",
+            ),
+            (
+                "JWST Giant Cluster Arcs",
+                "Elliptical NFW dark-matter halo plus six 3D elliptical member galaxies warping deep-field spirals into giant concentric arcs.",
+            ),
+            (
+                "Fold Caustic Merger",
+                "Background galaxy skimming the diamond fold caustic with cyan critical curves and magenta source caustics enabled.",
+            ),
+            (
+                "Microlensing Flash",
+                "Compact star + external shear crossing the Chang–Refsdal diamond caustic to trigger high-magnification flaring.",
+            ),
+            (
+                "Caustic & Fermat Bench",
+                "Analytical SIE lens displaying stationary arrival-time extrema, saddle lemniscate contours, and critical caustics.",
+            ),
+        ],
+    },
 ];
 
 pub const fn registry_entry(id: SimId) -> &'static SimRegistryEntry {
@@ -430,6 +510,7 @@ pub const fn registry_entry(id: SimId) -> &'static SimRegistryEntry {
         SimId::Supernova => &SIM_REGISTRY[4],
         SimId::Pulsar => &SIM_REGISTRY[5],
         SimId::Starflight => &SIM_REGISTRY[6],
+        SimId::LensCluster => &SIM_REGISTRY[7],
     }
 }
 
